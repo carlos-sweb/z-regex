@@ -309,10 +309,11 @@ test "integration: email regex" {
 - `advanced.zig` - Advanced features (lookahead, etc.)
 - `cinterop.zig` - Using from C code
 
-**Each example is runnable**:
+**Each example is runnable** (no dedicated build step exists yet; compile manually):
 ```bash
-zig build examples
-./zig-out/bin/basic
+cd examples
+zig build-exe basic_usage.zig --dep zregexp --mod zregexp:../src/main.zig
+./basic_usage
 ```
 
 ## Main Entry Point (`src/main.zig`)
@@ -341,14 +342,13 @@ test {
 ## Build System (`build.zig`)
 
 Defines build targets:
-- `zig build` - Build library
-- `zig build test` - Run unit tests
-- `zig build test-integration` - Run integration tests
-- `zig build test-all` - Run all tests
-- `zig build bench` - Run benchmarks
-- `zig build examples` - Build examples
-- `zig build docs` - Generate documentation
-- `zig build fmt` - Check formatting
+- `zig build` - Build the static and shared libraries and install headers
+- `zig build test` - Run all tests (unit + integration)
+- `zig build test-unit` - Run unit tests only
+- `zig build test-integration` - Run integration tests only
+- `zig build lib` - Build all libraries and install headers
+- `zig build static` - Build the static library only
+- `zig build shared` - Build the shared library only
 
 ## Module Dependencies
 

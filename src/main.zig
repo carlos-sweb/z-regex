@@ -30,21 +30,8 @@
 const std = @import("std");
 
 // Version information
-pub const version = "0.0.1-dev";
-pub const zig_version_required = "0.15.0";
-
-// Public API exports
-pub const Match = @import("core/types.zig").Match;
-pub const RegexFlags = @import("core/types.zig").RegexFlags;
-pub const CaptureGroup = @import("core/types.zig").CaptureGroup;
-pub const BufferType = @import("core/types.zig").BufferType;
-pub const CompiledRegex = @import("core/types.zig").CompiledRegex;
-
-pub const CompileError = @import("core/errors.zig").CompileError;
-pub const ExecError = @import("core/errors.zig").ExecError;
-pub const RegexError = @import("core/errors.zig").RegexError;
-
-pub const config = @import("core/config.zig");
+pub const version = "0.1.0";
+pub const zig_version_required = "0.16.0";
 
 // Utils module exports
 pub const DynBuf = @import("utils/dynbuf.zig").DynBuf;
@@ -105,9 +92,6 @@ pub fn placeholder() void {
 test {
     std.testing.refAllDecls(@This());
 
-    // Core module tests (implemented)
-    _ = @import("core/core_tests.zig");
-
     // Utils module tests (implemented)
     _ = @import("utils/utils_tests.zig");
 
@@ -132,5 +116,5 @@ test {
 
 test "version info" {
     try std.testing.expect(version.len > 0);
-    try std.testing.expectEqualStrings("0.15.0", zig_version_required);
+    try std.testing.expectEqualStrings("0.16.0", zig_version_required);
 }

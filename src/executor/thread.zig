@@ -100,7 +100,7 @@ pub const ThreadQueue = struct {
     /// Initialize thread queue
     pub fn init(allocator: Allocator) Self {
         return .{
-            .threads = .{},
+            .threads = .empty,
             .allocator = allocator,
         };
     }

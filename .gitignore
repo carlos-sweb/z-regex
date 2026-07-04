@@ -8,6 +8,9 @@ build/
 out/
 dist/
 
+# Compiled example binaries (built from examples/*.cpp, *.zig)
+examples/cpp_example
+
 # Editor and IDE files
 .vscode/
 .idea/

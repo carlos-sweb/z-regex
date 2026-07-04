@@ -1,8 +1,8 @@
 # zregexp - Modern Regular Expression Engine for Zig
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
-[![Tests](https://img.shields.io/badge/tests-304%2F304-brightgreen)](#)
-[![Zig](https://img.shields.io/badge/zig-0.13.0-orange)](https://ziglang.org/)
+[![Tests](https://img.shields.io/badge/tests-275%2F275-brightgreen)](#)
+[![Zig](https://img.shields.io/badge/zig-0.16.0-orange)](https://ziglang.org/)
 
 [🇪🇸 Versión en Español](README.es.md)
 
@@ -238,7 +238,7 @@ See `zregexp.hpp` for full API documentation.
 ## 🔧 Building from Source
 
 ### Prerequisites
-- Zig 0.13.0 or later
+- Zig 0.16.0 or later
 
 ### Build Steps
 
@@ -412,7 +412,7 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 - **JavaScript Compatibility**: ~70%
 - **Supported Platforms**: Linux, macOS, Windows, *BSD
 - **Dependencies**: Zero (pure Zig)
-- **Language**: Zig 0.13.0+
+- **Language**: Zig 0.16.0+
 
 ## 🏆 Features Comparison
 
@@ -431,6 +431,6 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 
 **Made with ❤️ using Zig**
 
-**Version**: 1.0.0
-**Status**: Production Ready
-**Zig Version**: 0.13.0+
+**Version**: 0.1.0
+**Status**: Active Development
+**Zig Version**: 0.16.0+

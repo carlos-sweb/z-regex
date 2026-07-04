@@ -390,13 +390,12 @@ test "Node: print simple" {
     defer node.deinit();
 
     const allocator = std.testing.allocator;
-    var buf = std.ArrayListUnmanaged(u8){};
-    defer buf.deinit(allocator);
+    var aw: std.Io.Writer.Allocating = .init(allocator);
+    defer aw.deinit();
 
-    const writer = buf.writer(allocator);
-    try node.print(writer, 0);
+    try node.print(&aw.writer, 0);
 
-    const output = buf.items;
+    const output = aw.written();
     try std.testing.expect(std.mem.indexOf(u8, output, "char") != null);
     try std.testing.expect(std.mem.indexOf(u8, output, "'a'") != null);
 }
@@ -412,13 +411,12 @@ test "Node: print tree" {
     try seq.appendChild(b);
 
     const allocator = std.testing.allocator;
-    var buf = std.ArrayListUnmanaged(u8){};
-    defer buf.deinit(allocator);
+    var aw: std.Io.Writer.Allocating = .init(allocator);
+    defer aw.deinit();
 
-    const writer = buf.writer(allocator);
-    try seq.print(writer, 0);
+    try seq.print(&aw.writer, 0);
 
-    const output = buf.items;
+    const output = aw.written();
     try std.testing.expect(std.mem.indexOf(u8, output, "sequence") != null);
     try std.testing.expect(std.mem.indexOf(u8, output, "char") != null);
 }

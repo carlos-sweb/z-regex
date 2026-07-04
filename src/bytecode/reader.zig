@@ -259,13 +259,12 @@ test "disassemble: simple program" {
     };
 
     const allocator = std.testing.allocator;
-    var buf = std.ArrayListUnmanaged(u8){};
-    defer buf.deinit(allocator);
+    var aw: std.Io.Writer.Allocating = .init(allocator);
+    defer aw.deinit();
 
-    const writer = buf.writer(allocator);
-    try disassemble(&bytecode, writer);
+    try disassemble(&bytecode, &aw.writer);
 
-    const output = buf.items;
+    const output = aw.written();
 
     // Check output contains opcode names
     try std.testing.expect(std.mem.indexOf(u8, output, "CHAR32") != null);
@@ -282,14 +281,13 @@ test "disassemble: with jumps" {
     bytecode[5] = 0x10; // MATCH at offset 5
 
     const allocator = std.testing.allocator;
-    var buf = std.ArrayListUnmanaged(u8){};
-    defer buf.deinit(allocator);
+    var aw: std.Io.Writer.Allocating = .init(allocator);
+    defer aw.deinit();
 
-    const writer = buf.writer(allocator);
     const bytecode_slice = bytecode[0..6];
-    try disassemble(bytecode_slice, writer);
+    try disassemble(bytecode_slice, &aw.writer);
 
-    const output = buf.items;
+    const output = aw.written();
 
     // Should show jump target
     try std.testing.expect(std.mem.indexOf(u8, output, "GOTO") != null);
@@ -303,13 +301,12 @@ test "disassemble: character representation" {
     bytecode[5] = 0x10; // MATCH
 
     const allocator = std.testing.allocator;
-    var buf = std.ArrayListUnmanaged(u8){};
-    defer buf.deinit(allocator);
+    var aw: std.Io.Writer.Allocating = .init(allocator);
+    defer aw.deinit();
 
-    const writer = buf.writer(allocator);
-    try disassemble(&bytecode, writer);
+    try disassemble(&bytecode, &aw.writer);
 
-    const output = buf.items;
+    const output = aw.written();
 
     // Should print as character
     try std.testing.expect(std.mem.indexOf(u8, output, "'A'") != null);

@@ -10,7 +10,7 @@ We are committed to providing a welcoming and inclusive environment. Be respectf
 
 ### Prerequisites
 
-- **Zig 0.15.0** or later ([download](https://ziglang.org/download/))
+- **Zig 0.16.0** or later ([download](https://ziglang.org/download/))
 - **Git** for version control
 - A code editor with Zig support (VSCode + ZLS recommended)
 
@@ -22,7 +22,7 @@ git clone https://github.com/yourusername/zregexp.git
 cd zregexp
 
 # Verify Zig installation
-zig version  # Should be 0.15.0 or later
+zig version  # Should be 0.16.0 or later
 
 # Run tests to ensure everything works
 zig build test
@@ -71,7 +71,7 @@ Before creating a bug report:
 ## Bug: Case-insensitive matching fails for Unicode
 
 **Environment**:
-- Zig version: 0.15.0
+- Zig version: 0.16.0
 - OS: Ubuntu 22.04
 
 **Reproduction**:
@@ -135,11 +135,11 @@ Could be added in 2.0 as extension
 
 3. **Test thoroughly**:
    ```bash
-   # Run all tests
-   zig build test-all
+   # Run all tests (unit + integration)
+   zig build test
 
    # Check formatting
-   zig build fmt
+   zig fmt --check src/
 
    # Run specific module tests
    zig build test -- --filter "my test name"
@@ -176,7 +176,7 @@ Could be added in 2.0 as extension
 #### PR Checklist
 
 - [ ] Code follows project style
-- [ ] All tests pass (`zig build test-all`)
+- [ ] All tests pass (`zig build test`)
 - [ ] New tests added for new functionality
 - [ ] Documentation updated (if applicable)
 - [ ] No merge conflicts with main

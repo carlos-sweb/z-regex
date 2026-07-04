@@ -22,7 +22,7 @@ pub fn Pool(comptime T: type) type {
         /// Initialize an empty pool
         pub fn init(allocator: Allocator) Self {
             return .{
-                .free_list = .{},
+                .free_list = .empty,
                 .allocator = allocator,
                 .total_allocated = 0,
                 .total_acquired = 0,

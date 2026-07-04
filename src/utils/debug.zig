@@ -132,13 +132,13 @@ pub fn dumpBytecode(writer: anytype, bytecode: []const u8) !void {
 
 /// Print a tree-like structure
 pub const TreePrinter = struct {
-    writer: std.io.AnyWriter,
+    writer: *std.Io.Writer,
     indent_level: usize,
     use_unicode: bool,
 
     const Self = @This();
 
-    pub fn init(writer: std.io.AnyWriter, use_unicode: bool) Self {
+    pub fn init(writer: *std.Io.Writer, use_unicode: bool) Self {
         return .{
             .writer = writer,
             .indent_level = 0,
@@ -222,13 +222,12 @@ test "hexDump: basic output" {
     const data = "Hello, World!\x00\x01\x02";
     const allocator = std.testing.allocator;
 
-    var buf = std.ArrayListUnmanaged(u8){};
-    defer buf.deinit(allocator);
+    var aw: std.Io.Writer.Allocating = .init(allocator);
+    defer aw.deinit();
 
-    const writer = buf.writer(allocator);
-    try hexDump(writer, data, 0);
+    try hexDump(&aw.writer, data, 0);
 
-    const output = buf.items;
+    const output = aw.written();
 
     // Should contain hex offset
     try std.testing.expect(std.mem.indexOf(u8, output, "00000000:") != null);
@@ -244,49 +243,45 @@ test "hexDumpCompact: single line" {
     const data = "\x01\x02\x03\x04";
     const allocator = std.testing.allocator;
 
-    var buf = std.ArrayListUnmanaged(u8){};
-    defer buf.deinit(allocator);
+    var aw: std.Io.Writer.Allocating = .init(allocator);
+    defer aw.deinit();
 
-    const writer = buf.writer(allocator);
-    try hexDumpCompact(writer, data);
+    try hexDumpCompact(&aw.writer, data);
 
-    const output = buf.items;
+    const output = aw.written();
     try std.testing.expectEqualStrings("01 02 03 04", output);
 }
 
 test "printDivider" {
     const allocator = std.testing.allocator;
-    var buf = std.ArrayListUnmanaged(u8){};
-    defer buf.deinit(allocator);
+    var aw: std.Io.Writer.Allocating = .init(allocator);
+    defer aw.deinit();
 
-    const writer = buf.writer(allocator);
-    try printDivider(writer, 10);
+    try printDivider(&aw.writer, 10);
 
-    try std.testing.expectEqualStrings("----------\n", buf.items);
+    try std.testing.expectEqualStrings("----------\n", aw.written());
 }
 
 test "printSection" {
     const allocator = std.testing.allocator;
-    var buf = std.ArrayListUnmanaged(u8){};
-    defer buf.deinit(allocator);
+    var aw: std.Io.Writer.Allocating = .init(allocator);
+    defer aw.deinit();
 
-    const writer = buf.writer(allocator);
-    try printSection(writer, "Test Section");
+    try printSection(&aw.writer, "Test Section");
 
-    const output = buf.items;
+    const output = aw.written();
     try std.testing.expect(std.mem.indexOf(u8, output, "Test Section") != null);
     try std.testing.expect(std.mem.indexOf(u8, output, "---") != null);
 }
 
 test "printProgress" {
     const allocator = std.testing.allocator;
-    var buf = std.ArrayListUnmanaged(u8){};
-    defer buf.deinit(allocator);
+    var aw: std.Io.Writer.Allocating = .init(allocator);
+    defer aw.deinit();
 
-    const writer = buf.writer(allocator);
-    try printProgress(writer, 50, 100, 20);
+    try printProgress(&aw.writer, 50, 100, 20);
 
-    const output = buf.items;
+    const output = aw.written();
     try std.testing.expect(std.mem.indexOf(u8, output, "[") != null);
     try std.testing.expect(std.mem.indexOf(u8, output, "]") != null);
     try std.testing.expect(std.mem.indexOf(u8, output, "50.0%") != null);
@@ -294,11 +289,10 @@ test "printProgress" {
 
 test "TreePrinter: basic usage" {
     const allocator = std.testing.allocator;
-    var buf = std.ArrayListUnmanaged(u8){};
-    defer buf.deinit(allocator);
+    var aw: std.Io.Writer.Allocating = .init(allocator);
+    defer aw.deinit();
 
-    const writer = buf.writer(allocator).any();
-    var printer = TreePrinter.init(writer, false);
+    var printer = TreePrinter.init(&aw.writer, false);
 
     try printer.node("Root", .{});
     printer.push();
@@ -306,7 +300,7 @@ test "TreePrinter: basic usage" {
     try printer.lastNode("Child 2", .{});
     printer.pop();
 
-    const output = buf.items;
+    const output = aw.written();
     try std.testing.expect(std.mem.indexOf(u8, output, "+-- Root") != null);
     try std.testing.expect(std.mem.indexOf(u8, output, "Child 1") != null);
     try std.testing.expect(std.mem.indexOf(u8, output, "Child 2") != null);
@@ -314,29 +308,27 @@ test "TreePrinter: basic usage" {
 
 test "TreePrinter: unicode" {
     const allocator = std.testing.allocator;
-    var buf = std.ArrayListUnmanaged(u8){};
-    defer buf.deinit(allocator);
+    var aw: std.Io.Writer.Allocating = .init(allocator);
+    defer aw.deinit();
 
-    const writer = buf.writer(allocator).any();
-    var printer = TreePrinter.init(writer, true);
+    var printer = TreePrinter.init(&aw.writer, true);
 
     try printer.node("Root", .{});
     printer.push();
     try printer.lastNode("Child", .{});
     printer.pop();
 
-    const output = buf.items;
+    const output = aw.written();
     try std.testing.expect(std.mem.indexOf(u8, output, "├── Root") != null);
     try std.testing.expect(std.mem.indexOf(u8, output, "└── Child") != null);
 }
 
 test "TreePrinter: nested levels" {
     const allocator = std.testing.allocator;
-    var buf = std.ArrayListUnmanaged(u8){};
-    defer buf.deinit(allocator);
+    var aw: std.Io.Writer.Allocating = .init(allocator);
+    defer aw.deinit();
 
-    const writer = buf.writer(allocator).any();
-    var printer = TreePrinter.init(writer, false);
+    var printer = TreePrinter.init(&aw.writer, false);
 
     try printer.node("Level 1", .{});
     printer.push();
@@ -346,7 +338,7 @@ test "TreePrinter: nested levels" {
     printer.pop();
     printer.pop();
 
-    const output = buf.items;
+    const output = aw.written();
     try std.testing.expect(output.len > 0);
 }
 
@@ -383,13 +375,12 @@ test "assertMsg: compiles" {
 
 test "dumpBytecode: placeholder" {
     const allocator = std.testing.allocator;
-    var buf = std.ArrayListUnmanaged(u8){};
-    defer buf.deinit(allocator);
+    var aw: std.Io.Writer.Allocating = .init(allocator);
+    defer aw.deinit();
 
     const bytecode = "\x01\x02\x03\x04";
-    const writer = buf.writer(allocator);
-    try dumpBytecode(writer, bytecode);
+    try dumpBytecode(&aw.writer, bytecode);
 
-    const output = buf.items;
+    const output = aw.written();
     try std.testing.expect(std.mem.indexOf(u8, output, "Bytecode dump") != null);
 }
