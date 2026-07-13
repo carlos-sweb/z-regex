@@ -39,10 +39,6 @@ Specifies the intermediate representation for compiled regex patterns.
 - `reader.zig` - Bytecode reader
 - `bytecode_tests.zig` - Test aggregation
 
-## Dependencies
-
-- `core` - Basic types
-
 ## Status
 
-🚧 **Not yet implemented** - Phase 2 (Week 4)
+✅ Implemented.

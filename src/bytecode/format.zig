@@ -7,6 +7,16 @@ const std = @import("std");
 const opcodes = @import("opcodes.zig");
 const Opcode = opcodes.Opcode;
 
+/// A named capturing group's name and numeric group index. Capture groups
+/// are always tracked by index at the bytecode/executor level; this is a
+/// compile-time-only side table for resolving a name back to its index
+/// (shared between the compiler, which produces it, and the high-level
+/// matching API, which uses it to answer `getNamedCapture` lookups).
+pub const NamedGroup = struct {
+    name: []const u8,
+    index: u8,
+};
+
 /// Instruction represents a decoded bytecode instruction
 pub const Instruction = struct {
     /// The opcode
@@ -68,12 +78,12 @@ pub fn decodeInstruction(bytecode: []const u8, offset: usize) !Instruction {
     // Decode operands based on opcode
     switch (opcode) {
         // No operands
-        .CHAR, .MATCH, .LINE_START, .LINE_END, .WORD_BOUNDARY, .NOT_WORD_BOUNDARY,
+        .CHAR, .CHAR_ANY, .MATCH, .LINE_START, .LINE_END, .WORD_BOUNDARY, .NOT_WORD_BOUNDARY,
         .STRING_START, .STRING_END, .LOOKAHEAD_END, .LOOKBEHIND_END,
         .PUSH_POS, .CHECK_POS => {},
 
         // 1 byte operand
-        .SAVE_START, .SAVE_END, .BACK_REF, .BACK_REF_I => {
+        .SAVE_START, .SAVE_END, .BACK_REF, .BACK_REF_I, .CLEAR_CAPTURE, .UNICODE_PROPERTY, .UNICODE_PROPERTY_INV, .UNICODE_SCRIPT, .UNICODE_SCRIPT_INV, .UNICODE_SCRIPT_EXTENSIONS, .UNICODE_SCRIPT_EXTENSIONS_INV => {
             inst.operands[0] = bytecode[offset + 1];
             inst.operand_count = 1;
         },
@@ -82,6 +92,25 @@ pub fn decodeInstruction(bytecode: []const u8, offset: usize) !Instruction {
         // Table data starts at offset + 1, executor reads it directly from bytecode
         .CHAR_CLASS, .CHAR_CLASS_INV => {
             // No operands to decode - executor will read table from bytecode
+            inst.operand_count = 0;
+        },
+
+        // CHAR_CLASS_RANGES(_INV): count byte + fixed-size range table.
+        // Executor reads both directly from bytecode.
+        .CHAR_CLASS_RANGES, .CHAR_CLASS_RANGES_INV => {
+            inst.operand_count = 0;
+        },
+
+        // CHAR_CLASS_UNICODE(_INV): range table + property-test table, both
+        // fixed-size. Executor reads everything directly from bytecode, same
+        // as CHAR_CLASS_RANGES(_INV).
+        .CHAR_CLASS_UNICODE, .CHAR_CLASS_UNICODE_INV => {
+            inst.operand_count = 0;
+        },
+
+        // CHAR_CLASS_SET_OP: op/result_negated bytes + two fixed-size
+        // operand blocks. Executor reads everything directly from bytecode.
+        .CHAR_CLASS_SET_OP => {
             inst.operand_count = 0;
         },
 
@@ -142,12 +171,12 @@ pub fn encodeInstruction(inst: Instruction, buffer: []u8) !usize {
     // Encode operands based on opcode
     switch (inst.opcode) {
         // No operands
-        .CHAR, .MATCH, .LINE_START, .LINE_END, .WORD_BOUNDARY, .NOT_WORD_BOUNDARY,
+        .CHAR, .CHAR_ANY, .MATCH, .LINE_START, .LINE_END, .WORD_BOUNDARY, .NOT_WORD_BOUNDARY,
         .STRING_START, .STRING_END, .LOOKAHEAD_END, .LOOKBEHIND_END,
-        .PUSH_POS, .CHECK_POS => {},
+        .PUSH_POS, .CHECK_POS, .CHAR_CLASS_RANGES, .CHAR_CLASS_RANGES_INV, .CHAR_CLASS_UNICODE, .CHAR_CLASS_UNICODE_INV, .CHAR_CLASS_SET_OP => {},
 
         // 1 byte operand
-        .SAVE_START, .SAVE_END, .BACK_REF, .BACK_REF_I => {
+        .SAVE_START, .SAVE_END, .BACK_REF, .BACK_REF_I, .CLEAR_CAPTURE, .UNICODE_PROPERTY, .UNICODE_PROPERTY_INV, .UNICODE_SCRIPT, .UNICODE_SCRIPT_INV, .UNICODE_SCRIPT_EXTENSIONS, .UNICODE_SCRIPT_EXTENSIONS_INV => {
             buffer[pos] = @intCast(inst.operands[0]);
             pos += 1;
         },

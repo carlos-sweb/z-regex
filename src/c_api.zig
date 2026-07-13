@@ -61,6 +61,11 @@ pub const ZRegexError = enum(c_int) {
 
 pub const ZRegexOptions = extern struct {
     case_insensitive: bool,
+    multiline: bool,
+    dot_all: bool,
+    sticky: bool,
+    unicode: bool,
+    v: bool,
     max_recursion_depth: u32,
     max_steps: u64,
     reserved: [4]u32,
@@ -118,6 +123,11 @@ export fn zregexp_version() [*:0]const u8 {
 export fn zregexp_default_options() ZRegexOptions {
     return .{
         .case_insensitive = false,
+        .multiline = false,
+        .dot_all = false,
+        .sticky = false,
+        .unicode = false,
+        .v = false,
         .max_recursion_depth = 1000,
         .max_steps = 1000000,
         .reserved = [_]u32{0} ** 4,
@@ -139,6 +149,11 @@ export fn zregexp_compile(pattern: [*:0]const u8, options: ?*const ZRegexOptions
     const re = if (options) |opts| blk: {
         const compile_opts = @import("codegen/compiler.zig").CompileOptions{
             .case_insensitive = opts.case_insensitive,
+            .multiline = opts.multiline,
+            .dot_all = opts.dot_all,
+            .sticky = opts.sticky,
+            .unicode = opts.unicode,
+            .v = opts.v,
         };
         break :blk Regex.compileWithOptions(allocator, pattern_slice, compile_opts) catch |err| {
             setError(zigErrorToC(err));
@@ -170,8 +185,60 @@ export fn zregexp_free(re: ?*ZRegex) void {
 }
 
 // =============================================================================
+// Named Groups
+// =============================================================================
+
+export fn zregexp_named_group_count(re: *ZRegex) usize {
+    return re.compiled.named_groups.len;
+}
+
+export fn zregexp_named_group_name(re: *ZRegex, index: usize) ?[*:0]u8 {
+    clearError();
+
+    if (index >= re.compiled.named_groups.len) return null;
+
+    const buf = sliceToCString(re.compiled.named_groups[index].name) catch {
+        setError(.ZREGEXP_ERROR_OUT_OF_MEMORY);
+        return null;
+    };
+
+    // Caller must free with zregexp_string_free()
+    return @ptrCast(@constCast(buf.ptr));
+}
+
+export fn zregexp_named_group_index(re: *ZRegex, index: usize) u8 {
+    if (index >= re.compiled.named_groups.len) return 0;
+    return re.compiled.named_groups[index].index;
+}
+
+// =============================================================================
 // Matching Functions
 // =============================================================================
+
+/// Wrap a matched `MatchResult` (and a duplicate of the input it matched
+/// against) in a heap-allocated `ZMatch`, or clean up and report an error.
+/// Shared by `zregexp_find` and `zregexp_find_at`.
+fn wrapMatch(input_slice: []const u8, match: MatchResult) ?*ZMatch {
+    const input_dup = allocator.dupe(u8, input_slice) catch {
+        match.deinit();
+        setError(.ZREGEXP_ERROR_OUT_OF_MEMORY);
+        return null;
+    };
+
+    const heap_match = allocator.create(ZMatch) catch {
+        allocator.free(input_dup);
+        match.deinit();
+        setError(.ZREGEXP_ERROR_OUT_OF_MEMORY);
+        return null;
+    };
+
+    heap_match.* = .{
+        .result = match,
+        .input = input_dup,
+    };
+
+    return heap_match;
+}
 
 export fn zregexp_find(re: *ZRegex, input: [*:0]const u8) ?*ZMatch {
     clearError();
@@ -183,29 +250,21 @@ export fn zregexp_find(re: *ZRegex, input: [*:0]const u8) ?*ZMatch {
         return null;
     };
 
-    if (result) |match| {
-        // Duplicate input string for storage
-        const input_dup = allocator.dupe(u8, input_slice) catch {
-            match.deinit();
-            setError(.ZREGEXP_ERROR_OUT_OF_MEMORY);
-            return null;
-        };
+    if (result) |match| return wrapMatch(input_slice, match);
+    return null;
+}
 
-        const heap_match = allocator.create(ZMatch) catch {
-            allocator.free(input_dup);
-            match.deinit();
-            setError(.ZREGEXP_ERROR_OUT_OF_MEMORY);
-            return null;
-        };
+export fn zregexp_find_at(re: *ZRegex, input: [*:0]const u8, start_byte_offset: usize) ?*ZMatch {
+    clearError();
 
-        heap_match.* = .{
-            .result = match,
-            .input = input_dup,
-        };
+    const input_slice = cStringToSlice(input);
 
-        return heap_match;
-    }
+    const result = re.findAt(input_slice, start_byte_offset) catch |err| {
+        setError(zigErrorToC(err));
+        return null;
+    };
 
+    if (result) |match| return wrapMatch(input_slice, match);
     return null;
 }
 
@@ -298,6 +357,17 @@ export fn zregexp_match_end(match: *ZMatch) usize {
 }
 
 export fn zregexp_match_group(match: *ZMatch, group_index: u8) ?[*:0]u8 {
+    // Group 0 is the full match; it isn't stored in the internal captures
+    // array (which is 1-indexed by capture group number), so it needs its
+    // own path rather than going through `MatchResult.getCapture`.
+    if (group_index == 0) {
+        const buf = sliceToCString(match.result.group(match.input)) catch {
+            setError(.ZREGEXP_ERROR_OUT_OF_MEMORY);
+            return null;
+        };
+        return @ptrCast(@constCast(buf.ptr));
+    }
+
     if (group_index >= 10) {
         setError(.ZREGEXP_ERROR_INVALID_GROUP);
         return null;
@@ -312,6 +382,34 @@ export fn zregexp_match_group(match: *ZMatch, group_index: u8) ?[*:0]u8 {
 
     // Caller must free with zregexp_string_free()
     return @ptrCast(@constCast(buf.ptr));
+}
+
+/// Sentinel for "group doesn't exist or didn't participate" -- matches
+/// `ZREGEXP_NO_CAPTURE` in zregexp.h.
+const NO_CAPTURE: usize = std.math.maxInt(usize);
+
+export fn zregexp_match_capture_start(match: *ZMatch, group_index: u8) usize {
+    // See the comment in zregexp_match_group: group 0 (the full match)
+    // isn't in the internal captures array and needs its own path.
+    if (group_index == 0) return match.result.start;
+    const idx = match.result.getCaptureIndices(group_index) orelse return NO_CAPTURE;
+    return idx.start;
+}
+
+export fn zregexp_match_capture_end(match: *ZMatch, group_index: u8) usize {
+    if (group_index == 0) return match.result.end;
+    const idx = match.result.getCaptureIndices(group_index) orelse return NO_CAPTURE;
+    return idx.end;
+}
+
+export fn zregexp_match_named_capture_start(match: *ZMatch, name: [*:0]const u8) usize {
+    const idx = match.result.getNamedCaptureIndices(cStringToSlice(name)) orelse return NO_CAPTURE;
+    return idx.start;
+}
+
+export fn zregexp_match_named_capture_end(match: *ZMatch, name: [*:0]const u8) usize {
+    const idx = match.result.getNamedCaptureIndices(cStringToSlice(name)) orelse return NO_CAPTURE;
+    return idx.end;
 }
 
 export fn zregexp_match_free(match: ?*ZMatch) void {
@@ -364,55 +462,33 @@ export fn zregexp_replace(re: *ZRegex, input: [*:0]const u8, replacement: [*:0]c
     const input_slice = cStringToSlice(input);
     const replacement_slice = cStringToSlice(replacement);
 
-    // Find all matches
-    var matches_unmanaged = re.findAll(input_slice) catch |err| {
+    const result = re.replace(allocator, input_slice, replacement_slice) catch |err| {
         setError(zigErrorToC(err));
         return null;
     };
-    defer {
-        for (matches_unmanaged.items) |m| m.deinit();
-        matches_unmanaged.deinit(allocator);
-    }
+    defer allocator.free(result);
 
-    if (matches_unmanaged.items.len == 0) {
-        // No matches, return copy of input
-        const buf = sliceToCString(input_slice) catch {
-            setError(.ZREGEXP_ERROR_OUT_OF_MEMORY);
-            return null;
-        };
-        return @ptrCast(@constCast(buf.ptr));
-    }
-
-    // Build result string
-    var result: std.ArrayList(u8) = .empty;
-    defer result.deinit(allocator);
-
-    var last_end: usize = 0;
-
-    for (matches_unmanaged.items) |match| {
-        // Append text before match
-        result.appendSlice(allocator, input_slice[last_end..match.start]) catch {
-            setError(.ZREGEXP_ERROR_OUT_OF_MEMORY);
-            return null;
-        };
-
-        // Append replacement
-        result.appendSlice(allocator, replacement_slice) catch {
-            setError(.ZREGEXP_ERROR_OUT_OF_MEMORY);
-            return null;
-        };
-
-        last_end = match.end;
-    }
-
-    // Append remaining text
-    result.appendSlice(allocator, input_slice[last_end..]) catch {
+    const buf = sliceToCString(result) catch {
         setError(.ZREGEXP_ERROR_OUT_OF_MEMORY);
         return null;
     };
 
-    // Convert to C string
-    const buf = sliceToCString(result.items) catch {
+    return @ptrCast(@constCast(buf.ptr));
+}
+
+export fn zregexp_replace_all(re: *ZRegex, input: [*:0]const u8, replacement: [*:0]const u8) ?[*:0]u8 {
+    clearError();
+
+    const input_slice = cStringToSlice(input);
+    const replacement_slice = cStringToSlice(replacement);
+
+    const result = re.replaceAll(allocator, input_slice, replacement_slice) catch |err| {
+        setError(zigErrorToC(err));
+        return null;
+    };
+    defer allocator.free(result);
+
+    const buf = sliceToCString(result) catch {
         setError(.ZREGEXP_ERROR_OUT_OF_MEMORY);
         return null;
     };

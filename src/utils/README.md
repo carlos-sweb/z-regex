@@ -17,13 +17,10 @@ Provides common utilities used across multiple modules.
 
 - `dynbuf.zig` - Dynamic buffer
 - `bitset.zig` - Bit set implementation
+- `bittable.zig` - Fixed-size bit table (used for character class opcodes)
 - `pool.zig` - Object pool
 - `debug.zig` - Debug utilities
 - `utils_tests.zig` - Test aggregation
-
-## Dependencies
-
-- `core` - Basic types
 
 ## Usage
 
@@ -44,4 +41,4 @@ const has_a = bitset.isSet('a');
 
 ## Status
 
-🚧 **Not yet implemented** - Phase 1 (Week 3)
+✅ Implemented.

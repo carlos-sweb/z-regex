@@ -4,39 +4,30 @@ Interprets bytecode and finds pattern matches.
 
 ## Purpose
 
-Executes compiled regex bytecode against input strings using backtracking.
+Executes compiled regex bytecode against input strings using recursive backtracking.
 
-## Components
+## Files
 
-- **VM**: Virtual machine core execution loop
-- **Backtracking**: Backtracking state management
-- **Stack**: Execution stack (backtrack points, captures)
-- **Captures**: Capture group extraction
-- **Matcher**: High-level matching API
+- `matcher.zig` - High-level matching interface (`find`, `findAll`, `matchFull`); used by
+  `Regex` in `src/regex.zig`
+- `recursive_matcher.zig` - The actual matching engine: a recursive backtracker (chosen
+  over an earlier Pike-VM/thread-based design, which had an infinite-loop bug in
+  alternation and has been removed)
+- `thread.zig` - `Capture` (capture group start/end positions), shared by the matcher
+- `executor_tests.zig` - Test aggregation
 
 ## Execution Model
 
 ```
-Bytecode + Input → VM → Backtracking → Match Result
-                    ↓
-                 Captures
+Bytecode + Input → RecursiveMatcher (backtracking) → Match Result
+                              ↓
+                          Captures
 ```
-
-## Files
-
-- `vm.zig` - Virtual machine
-- `backtrack.zig` - Backtracking engine
-- `stack.zig` - Stack management
-- `captures.zig` - Capture handling
-- `matcher.zig` - Matching interface
-- `executor_tests.zig` - Test aggregation
 
 ## Dependencies
 
-- `core` - Types and errors
 - `bytecode` - Opcode definitions
-- `unicode` - Character operations
 
 ## Status
 
-🚧 **Not yet implemented** - Phase 3 (Weeks 7-9)
+✅ Implemented.

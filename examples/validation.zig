@@ -11,7 +11,7 @@ const std = @import("std");
 const zregexp = @import("zregexp");
 
 pub fn main() !void {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa = std.heap.DebugAllocator(.{}){};
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
 
@@ -27,12 +27,12 @@ pub fn main() !void {
 
         const inputs = [_][]const u8{ "yes", "no", "Yes", "yes ", " yes" };
 
-        std.debug.print("Pattern: '{}' (must be exactly 'yes')\n", .{std.zig.fmtEscapes(re.getPattern())});
+        std.debug.print("Pattern: '{f}' (must be exactly 'yes')\n", .{std.zig.fmtString(re.getPattern())});
 
         for (inputs) |input| {
             const valid = try re.test_(input);
-            std.debug.print("  '{}' -> {s}\n", .{
-                std.zig.fmtEscapes(input),
+            std.debug.print("  '{f}' -> {s}\n", .{
+                std.zig.fmtString(input),
                 if (valid) "VALID" else "INVALID",
             });
         }
@@ -49,12 +49,12 @@ pub fn main() !void {
 
         const inputs = [_][]const u8{ "a", "aa", "aaa", "aaaa", "aaaaa", "aaaaaa" };
 
-        std.debug.print("Pattern: '{}' (3 to 5 'a's)\n", .{std.zig.fmtEscapes(re.getPattern())});
+        std.debug.print("Pattern: '{f}' (3 to 5 'a's)\n", .{std.zig.fmtString(re.getPattern())});
 
         for (inputs) |input| {
             const valid = try re.test_(input);
-            std.debug.print("  '{}' ({} chars) -> {s}\n", .{
-                std.zig.fmtEscapes(input),
+            std.debug.print("  '{f}' ({} chars) -> {s}\n", .{
+                std.zig.fmtString(input),
                 input.len,
                 if (valid) "VALID" else "INVALID",
             });
@@ -72,12 +72,12 @@ pub fn main() !void {
 
         const inputs = [_][]const u8{ "red", "green", "blue", "yellow", "Red" };
 
-        std.debug.print("Pattern: '{}' (valid colors)\n", .{std.zig.fmtEscapes(re.getPattern())});
+        std.debug.print("Pattern: '{f}' (valid colors)\n", .{std.zig.fmtString(re.getPattern())});
 
         for (inputs) |input| {
             const valid = try re.test_(input);
-            std.debug.print("  '{}' -> {s}\n", .{
-                std.zig.fmtEscapes(input),
+            std.debug.print("  '{f}' -> {s}\n", .{
+                std.zig.fmtString(input),
                 if (valid) "VALID" else "INVALID",
             });
         }
@@ -94,12 +94,12 @@ pub fn main() !void {
 
         const inputs = [_][]const u8{ "hello", "hello world", "hello there", "hello  world" };
 
-        std.debug.print("Pattern: '{}' (optional ' world')\n", .{std.zig.fmtEscapes(re.getPattern())});
+        std.debug.print("Pattern: '{f}' (optional ' world')\n", .{std.zig.fmtString(re.getPattern())});
 
         for (inputs) |input| {
             const valid = try re.test_(input);
-            std.debug.print("  '{}' -> {s}\n", .{
-                std.zig.fmtEscapes(input),
+            std.debug.print("  '{f}' -> {s}\n", .{
+                std.zig.fmtString(input),
                 if (valid) "VALID" else "INVALID",
             });
         }
@@ -123,12 +123,12 @@ pub fn main() !void {
             "cmd_.txt",
         };
 
-        std.debug.print("Pattern: '{}' (must start with 'cmd_' and end with '.txt')\n", .{std.zig.fmtEscapes(re.getPattern())});
+        std.debug.print("Pattern: '{f}' (must start with 'cmd_' and end with '.txt')\n", .{std.zig.fmtString(re.getPattern())});
 
         for (inputs) |input| {
             const valid = try re.test_(input);
-            std.debug.print("  '{}' -> {s}\n", .{
-                std.zig.fmtEscapes(input),
+            std.debug.print("  '{f}' -> {s}\n", .{
+                std.zig.fmtString(input),
                 if (valid) "VALID" else "INVALID",
             });
         }
@@ -154,9 +154,11 @@ pub fn main() !void {
         std.debug.print("Validator: Commands must be 3-10 lowercase letters\n", .{});
 
         for (commands) |cmd| {
-            // Note: Character classes not fully implemented yet
-            // This is a demonstration of the pattern
-            std.debug.print("  Command '{}' would be validated\n", .{std.zig.fmtEscapes(cmd)});
+            const valid = try Validator.validateCommand(allocator, cmd);
+            std.debug.print("  Command '{f}' -> {s}\n", .{
+                std.zig.fmtString(cmd),
+                if (valid) "VALID" else "INVALID",
+            });
         }
         std.debug.print("\n", .{});
     }
@@ -177,16 +179,16 @@ pub fn main() !void {
             "utils.zig",
         };
 
-        std.debug.print("Pattern: '{}' (find test files)\n", .{std.zig.fmtEscapes(re.getPattern())});
+        std.debug.print("Pattern: '{f}' (find test files)\n", .{std.zig.fmtString(re.getPattern())});
 
         var valid_count: usize = 0;
         for (files) |file| {
             const valid = try re.test_(file);
             if (valid) {
                 valid_count += 1;
-                std.debug.print("  ✓ {}\n", .{std.zig.fmtEscapes(file)});
+                std.debug.print("  ✓ {f}\n", .{std.zig.fmtString(file)});
             } else {
-                std.debug.print("  ✗ {}\n", .{std.zig.fmtEscapes(file)});
+                std.debug.print("  ✗ {f}\n", .{std.zig.fmtString(file)});
             }
         }
 

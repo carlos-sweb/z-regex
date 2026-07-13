@@ -13,6 +13,10 @@ pub const NodeType = enum {
     char_range, // Character range [a-z]
     char_class, // Character class [abc]
     dot, // Any character
+    unicode_property, // \p{...} / \P{...} (Unicode General_Category or binary property)
+    unicode_script, // \p{Script=...} / \p{sc=...} / \P{Script=...}
+    unicode_script_extensions, // \p{Script_Extensions=...} / \p{scx=...} / \P{Script_Extensions=...}
+    class_set_op, // `v`-mode class set operation: [A--B] / [A&&B]
 
     // Quantifiers (greedy)
     star, // Zero or more (greedy)
@@ -54,6 +58,9 @@ pub const NodeType = enum {
     lookbehind, // (?<=...)
     negative_lookbehind, // (?<!...)
 };
+
+/// A `v`-mode class set operation kind -- see `Node.createClassSetOp`.
+pub const ClassSetOp = enum(u32) { difference = 0, intersection = 1 };
 
 /// AST Node
 pub const Node = struct {
@@ -121,6 +128,73 @@ pub const Node = struct {
         node.* = .{
             .type = .dot,
             .allocator = allocator,
+        };
+        return node;
+    }
+
+    /// Create a Unicode property node (`\p{Name}` / `\P{Name}`). `category`
+    /// is a `unicode/properties.zig::UnicodeProperty` value, stored as a
+    /// plain integer so this foundational AST module doesn't need to depend
+    /// on the unicode module -- callers (parser, codegen) interpret it.
+    pub fn createUnicodeProperty(allocator: Allocator, category: u8, negated: bool) !*Node {
+        const node = try allocator.create(Node);
+        node.* = .{
+            .type = .unicode_property,
+            .allocator = allocator,
+            .char_value = category,
+            .inverted = negated,
+        };
+        return node;
+    }
+
+    /// Create a Unicode Script node (`\p{Script=Name}` / `\p{sc=Name}`).
+    /// `script_index` is an index into `unicode/properties.zig`/`tables.zig`'s
+    /// generated `SCRIPT_NAMES`/`SCRIPT_RANGES` arrays (not the
+    /// `UnicodeProperty` enum used by `createUnicodeProperty` -- there are
+    /// too many scripts (~170) for a hand-maintained enum, see
+    /// `scripts/gen_unicode_tables.py`).
+    pub fn createUnicodeScript(allocator: Allocator, script_index: u8, negated: bool) !*Node {
+        const node = try allocator.create(Node);
+        node.* = .{
+            .type = .unicode_script,
+            .allocator = allocator,
+            .char_value = script_index,
+            .inverted = negated,
+        };
+        return node;
+    }
+
+    /// Create a Unicode Script_Extensions node (`\p{Script_Extensions=Name}`
+    /// / `\p{scx=Name}`). Same `script_index` space as `createUnicodeScript`
+    /// -- a script's identity doesn't change between the two properties,
+    /// only which codepoints count as using it.
+    pub fn createUnicodeScriptExtensions(allocator: Allocator, script_index: u8, negated: bool) !*Node {
+        const node = try allocator.create(Node);
+        node.* = .{
+            .type = .unicode_script_extensions,
+            .allocator = allocator,
+            .char_value = script_index,
+            .inverted = negated,
+        };
+        return node;
+    }
+
+    /// Create a `v`-mode class set operation node (`[A--B]` / `[A&&B]`).
+    /// `op` is `0` for difference (matches `A` but not `B`) or `1` for
+    /// intersection (matches both); `children[0]`/`children[1]` are the two
+    /// operand nodes (each a `char_class` node, for an ordinary or nested
+    /// `[...]` operand, or a `unicode_property`/`unicode_script`/
+    /// `unicode_script_extensions` node for a bare `\p{...}`/`\P{...}`
+    /// operand) -- append both via `appendChild` after calling this.
+    /// `negated` is this whole operation's own `[^...]` negation (distinct
+    /// from either operand's own negation, if it's a `[^...]` nested class).
+    pub fn createClassSetOp(allocator: Allocator, op: ClassSetOp, negated: bool) !*Node {
+        const node = try allocator.create(Node);
+        node.* = .{
+            .type = .class_set_op,
+            .allocator = allocator,
+            .char_value = @intFromEnum(op),
+            .inverted = negated,
         };
         return node;
     }

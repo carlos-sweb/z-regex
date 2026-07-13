@@ -11,7 +11,7 @@ const std = @import("std");
 const zregexp = @import("zregexp");
 
 pub fn main() !void {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa = std.heap.DebugAllocator(.{}){};
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
 
@@ -26,8 +26,8 @@ pub fn main() !void {
         defer re.deinit();
 
         const text = "banana";
-        std.debug.print("Pattern: '{}'\n", .{std.zig.fmtEscapes(re.getPattern())});
-        std.debug.print("Text: '{}'\n", .{std.zig.fmtEscapes(text)});
+        std.debug.print("Pattern: '{f}'\n", .{std.zig.fmtString(re.getPattern())});
+        std.debug.print("Text: '{f}'\n", .{std.zig.fmtString(text)});
 
         var matches = try re.findAll(text);
         defer {
@@ -39,11 +39,11 @@ pub fn main() !void {
 
         std.debug.print("Found {} matches:\n", .{matches.items.len});
         for (matches.items, 0..) |match, i| {
-            std.debug.print("  Match {}: position {}-{}, text: '{}'\n", .{
+            std.debug.print("  Match {}: position {}-{}, text: '{f}'\n", .{
                 i + 1,
                 match.start,
                 match.end,
-                std.zig.fmtEscapes(match.group(text)),
+                std.zig.fmtString(match.group(text)),
             });
         }
         std.debug.print("\n", .{});
@@ -58,8 +58,8 @@ pub fn main() !void {
         defer re.deinit();
 
         const text = "foooobar boo zoo";
-        std.debug.print("Pattern: '{}'\n", .{std.zig.fmtEscapes(re.getPattern())});
-        std.debug.print("Text: '{}'\n", .{std.zig.fmtEscapes(text)});
+        std.debug.print("Pattern: '{f}'\n", .{std.zig.fmtString(re.getPattern())});
+        std.debug.print("Text: '{f}'\n", .{std.zig.fmtString(text)});
 
         var matches = try re.findAll(text);
         defer {
@@ -71,9 +71,9 @@ pub fn main() !void {
 
         std.debug.print("Found {} matches:\n", .{matches.items.len});
         for (matches.items, 0..) |match, i| {
-            std.debug.print("  Match {}: '{}' at position {}-{}\n", .{
+            std.debug.print("  Match {}: '{f}' at position {}-{}\n", .{
                 i + 1,
-                std.zig.fmtEscapes(match.group(text)),
+                std.zig.fmtString(match.group(text)),
                 match.start,
                 match.end,
             });
@@ -90,8 +90,8 @@ pub fn main() !void {
         defer re.deinit();
 
         const text = "the quick brown fox jumps over the lazy dog near the river";
-        std.debug.print("Pattern: '{}'\n", .{std.zig.fmtEscapes(re.getPattern())});
-        std.debug.print("Text: '{}'\n", .{std.zig.fmtEscapes(text)});
+        std.debug.print("Pattern: '{f}'\n", .{std.zig.fmtString(re.getPattern())});
+        std.debug.print("Text: '{f}'\n", .{std.zig.fmtString(text)});
 
         var matches = try re.findAll(text);
         defer {
@@ -113,8 +113,8 @@ pub fn main() !void {
         defer re.deinit();
 
         const text = "I have a cat and a dog, but no bird";
-        std.debug.print("Pattern: '{}'\n", .{std.zig.fmtEscapes(re.getPattern())});
-        std.debug.print("Text: '{}'\n", .{std.zig.fmtEscapes(text)});
+        std.debug.print("Pattern: '{f}'\n", .{std.zig.fmtString(re.getPattern())});
+        std.debug.print("Text: '{f}'\n", .{std.zig.fmtString(text)});
 
         var matches = try re.findAll(text);
         defer {
@@ -126,9 +126,9 @@ pub fn main() !void {
 
         std.debug.print("Found {} animals:\n", .{matches.items.len});
         for (matches.items, 0..) |match, i| {
-            std.debug.print("  Animal {}: '{}'\n", .{
+            std.debug.print("  Animal {}: '{f}'\n", .{
                 i + 1,
-                std.zig.fmtEscapes(match.group(text)),
+                std.zig.fmtString(match.group(text)),
             });
         }
         std.debug.print("\n", .{});
@@ -142,8 +142,8 @@ pub fn main() !void {
         const pattern = "e";
         const text = "hello everyone";
 
-        std.debug.print("Pattern: '{}'\n", .{std.zig.fmtEscapes(pattern)});
-        std.debug.print("Text: '{}'\n", .{std.zig.fmtEscapes(text)});
+        std.debug.print("Pattern: '{f}'\n", .{std.zig.fmtString(pattern)});
+        std.debug.print("Text: '{f}'\n", .{std.zig.fmtString(text)});
 
         var matches = try zregexp.findAll(allocator, pattern, text);
         defer {
@@ -171,8 +171,8 @@ pub fn main() !void {
         defer re.deinit();
 
         const text = "hello world";
-        std.debug.print("Pattern: '{}'\n", .{std.zig.fmtEscapes(re.getPattern())});
-        std.debug.print("Text: '{}'\n", .{std.zig.fmtEscapes(text)});
+        std.debug.print("Pattern: '{f}'\n", .{std.zig.fmtString(re.getPattern())});
+        std.debug.print("Text: '{f}'\n", .{std.zig.fmtString(text)});
 
         var matches = try re.findAll(text);
         defer matches.deinit(allocator);

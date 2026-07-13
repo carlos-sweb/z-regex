@@ -8,20 +8,21 @@
 //! const regex = @import("zregexp");
 //!
 //! pub fn main() !void {
-//!     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+//!     var gpa = std.heap.DebugAllocator(.{}){};
 //!     defer _ = gpa.deinit();
 //!     const allocator = gpa.allocator();
 //!
-//!     // Compile and reuse
+//!     // Compile and reuse (test_ requires the whole input to match)
 //!     var re = try regex.Regex.compile(allocator, "hello");
 //!     defer re.deinit();
 //!
-//!     if (try re.test_("hello world")) {
+//!     if (try re.test_("hello")) {
 //!         std.debug.print("Match found!\n", .{});
 //!     }
 //!
-//!     // One-shot matching
-//!     if (try regex.test_(allocator, "\\d+", "Price: 42")) {
+//!     // One-shot substring search
+//!     if (try regex.find(allocator, "\\d+", "Price: 42")) |match| {
+//!         defer match.deinit();
 //!         std.debug.print("Contains numbers!\n", .{});
 //!     }
 //! }
@@ -66,15 +67,13 @@ pub const compile = @import("codegen/compiler.zig").compile;
 pub const compileSimple = @import("codegen/compiler.zig").compileSimple;
 pub const CompileOptions = @import("codegen/compiler.zig").CompileOptions;
 pub const CompileResult = @import("codegen/compiler.zig").CompileResult;
+pub const NamedGroup = @import("codegen/compiler.zig").NamedGroup;
 
 // Executor module exports
-pub const Thread = @import("executor/thread.zig").Thread;
-pub const ThreadQueue = @import("executor/thread.zig").ThreadQueue;
 pub const Capture = @import("executor/thread.zig").Capture;
-pub const VM = @import("executor/vm.zig").VM;
-pub const ExecResult = @import("executor/vm.zig").ExecResult;
 pub const Matcher = @import("executor/matcher.zig").Matcher;
 pub const MatchResult = @import("executor/matcher.zig").MatchResult;
+pub const CaptureIndices = @import("executor/matcher.zig").CaptureIndices;
 
 // High-level Regex API
 pub const Regex = @import("regex.zig").Regex;
@@ -110,8 +109,8 @@ test {
     // Regex API tests (implemented)
     _ = @import("regex.zig");
 
-    // To be implemented:
-    // _ = @import("unicode/unicode_tests.zig");
+    // Unicode module tests (General_Category properties + simple case folding)
+    _ = @import("unicode/unicode_tests.zig");
 }
 
 test "version info" {

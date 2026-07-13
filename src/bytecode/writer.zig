@@ -110,6 +110,112 @@ pub const BytecodeWriter = struct {
         try self.code.appendSlice(table);
     }
 
+    /// Emit CHAR_CLASS_RANGES or CHAR_CLASS_RANGES_INV: a count byte followed
+    /// by a fixed `opcodes.MAX_CLASS_RANGES`-slot table of (start, end) code
+    /// point pairs (unused trailing slots are zero-filled; `count` says how
+    /// many are valid). Caller must ensure `ranges.len <= MAX_CLASS_RANGES`.
+    pub fn emitCharClassRanges(self: *Self, opcode: Opcode, ranges: []const [2]u32) !void {
+        std.debug.assert(ranges.len <= opcodes.MAX_CLASS_RANGES);
+        try self.code.append(@intFromEnum(opcode));
+        try self.code.append(@intCast(ranges.len));
+        for (0..opcodes.MAX_CLASS_RANGES) |i| {
+            const range = if (i < ranges.len) ranges[i] else [2]u32{ 0, 0 };
+            var buf: [4]u8 = undefined;
+            std.mem.writeInt(u32, &buf, range[0], .little);
+            try self.code.appendSlice(&buf);
+            std.mem.writeInt(u32, &buf, range[1], .little);
+            try self.code.appendSlice(&buf);
+        }
+    }
+
+    /// Emit CHAR_CLASS_UNICODE or CHAR_CLASS_UNICODE_INV: a range table
+    /// (same layout as `emitCharClassRanges`) followed by a count byte and a
+    /// fixed `opcodes.MAX_CLASS_PROPERTIES`-slot table of
+    /// `opcodes.ClassPropertyTest` entries (unused trailing slots are
+    /// zero-filled; `properties.len` says how many are valid). Caller must
+    /// ensure both slices fit their respective caps.
+    pub fn emitCharClassUnicode(
+        self: *Self,
+        opcode: Opcode,
+        ranges: []const [2]u32,
+        properties: []const opcodes.ClassPropertyTest,
+    ) !void {
+        std.debug.assert(ranges.len <= opcodes.MAX_CLASS_RANGES);
+        std.debug.assert(properties.len <= opcodes.MAX_CLASS_PROPERTIES);
+        try self.code.append(@intFromEnum(opcode));
+        try self.code.append(@intCast(ranges.len));
+        for (0..opcodes.MAX_CLASS_RANGES) |i| {
+            const range = if (i < ranges.len) ranges[i] else [2]u32{ 0, 0 };
+            var buf: [4]u8 = undefined;
+            std.mem.writeInt(u32, &buf, range[0], .little);
+            try self.code.appendSlice(&buf);
+            std.mem.writeInt(u32, &buf, range[1], .little);
+            try self.code.appendSlice(&buf);
+        }
+        try self.code.append(@intCast(properties.len));
+        for (0..opcodes.MAX_CLASS_PROPERTIES) |i| {
+            const prop = if (i < properties.len) properties[i] else opcodes.ClassPropertyTest{ .kind = .unicode_property, .negated = false, .value = 0 };
+            try self.code.append(@intFromEnum(prop.kind));
+            try self.code.append(if (prop.negated) 1 else 0);
+            try self.code.append(prop.value);
+        }
+    }
+
+    /// One operand of a `v`-mode class set operation (`[A--B]`/`[A&&B]`) --
+    /// the input to `emitCharClassSetOp`, mirroring
+    /// `opcodes.ClassPropertyTest`'s "generator-side plain struct, opcode
+    /// module owns the wire format" split.
+    pub const ClassSetOperand = struct {
+        /// This operand's own `[^...]` negation (only meaningful when it's
+        /// a nested class; a bare `\p{...}` operand's negation is already
+        /// folded into its one `ClassPropertyTest.negated` entry).
+        negated: bool = false,
+        ranges: []const [2]u32,
+        properties: []const opcodes.ClassPropertyTest,
+    };
+
+    /// Write one `opcodes.CLASS_SET_OPERAND_SIZE`-byte operand block:
+    /// negated:u8 followed by the same range-table + property-table layout
+    /// `emitCharClassUnicode` writes.
+    fn emitClassSetOperand(self: *Self, operand: ClassSetOperand) !void {
+        std.debug.assert(operand.ranges.len <= opcodes.MAX_CLASS_RANGES);
+        std.debug.assert(operand.properties.len <= opcodes.MAX_CLASS_PROPERTIES);
+        try self.code.append(if (operand.negated) 1 else 0);
+        try self.code.append(@intCast(operand.ranges.len));
+        for (0..opcodes.MAX_CLASS_RANGES) |i| {
+            const range = if (i < operand.ranges.len) operand.ranges[i] else [2]u32{ 0, 0 };
+            var buf: [4]u8 = undefined;
+            std.mem.writeInt(u32, &buf, range[0], .little);
+            try self.code.appendSlice(&buf);
+            std.mem.writeInt(u32, &buf, range[1], .little);
+            try self.code.appendSlice(&buf);
+        }
+        try self.code.append(@intCast(operand.properties.len));
+        for (0..opcodes.MAX_CLASS_PROPERTIES) |i| {
+            const prop = if (i < operand.properties.len) operand.properties[i] else opcodes.ClassPropertyTest{ .kind = .unicode_property, .negated = false, .value = 0 };
+            try self.code.append(@intFromEnum(prop.kind));
+            try self.code.append(if (prop.negated) 1 else 0);
+            try self.code.append(prop.value);
+        }
+    }
+
+    /// Emit CHAR_CLASS_SET_OP: op:u8, result_negated:u8, then `left` and
+    /// `right`'s operand blocks (see `ClassSetOperand`/
+    /// `opcodes.CHAR_CLASS_SET_OP`'s doc comment for the full layout).
+    pub fn emitCharClassSetOp(
+        self: *Self,
+        op: enum { difference, intersection },
+        result_negated: bool,
+        left: ClassSetOperand,
+        right: ClassSetOperand,
+    ) !void {
+        try self.code.append(@intFromEnum(Opcode.CHAR_CLASS_SET_OP));
+        try self.code.append(if (op == .intersection) 1 else 0);
+        try self.code.append(if (result_negated) 1 else 0);
+        try self.emitClassSetOperand(left);
+        try self.emitClassSetOperand(right);
+    }
+
     /// Emit a jump to a label
     pub fn emitJump(self: *Self, opcode: Opcode, target: Label) !void {
         const current_pos = self.code.len();

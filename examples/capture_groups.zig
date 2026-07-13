@@ -11,7 +11,7 @@ const std = @import("std");
 const zregexp = @import("zregexp");
 
 pub fn main() !void {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa = std.heap.DebugAllocator(.{}){};
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
 
@@ -26,16 +26,16 @@ pub fn main() !void {
         defer re.deinit();
 
         const text = "hello world";
-        std.debug.print("Pattern: '{}'\n", .{std.zig.fmtEscapes(re.getPattern())});
-        std.debug.print("Text: '{}'\n", .{std.zig.fmtEscapes(text)});
+        std.debug.print("Pattern: '{f}'\n", .{std.zig.fmtString(re.getPattern())});
+        std.debug.print("Text: '{f}'\n", .{std.zig.fmtString(text)});
 
         if (try re.find(text)) |match| {
             defer match.deinit();
 
-            std.debug.print("Full match: '{}'\n", .{std.zig.fmtEscapes(match.group(text))});
+            std.debug.print("Full match: '{f}'\n", .{std.zig.fmtString(match.group(text))});
 
             if (match.getCapture(1, text)) |captured| {
-                std.debug.print("Capture group 1: '{}'\n", .{std.zig.fmtEscapes(captured)});
+                std.debug.print("Capture group 1: '{f}'\n", .{std.zig.fmtString(captured)});
             }
         }
         std.debug.print("\n", .{});
@@ -50,18 +50,18 @@ pub fn main() !void {
         defer re.deinit();
 
         const text = "abc";
-        std.debug.print("Pattern: '{}'\n", .{std.zig.fmtEscapes(re.getPattern())});
-        std.debug.print("Text: '{}'\n", .{std.zig.fmtEscapes(text)});
+        std.debug.print("Pattern: '{f}'\n", .{std.zig.fmtString(re.getPattern())});
+        std.debug.print("Text: '{f}'\n", .{std.zig.fmtString(text)});
 
         if (try re.find(text)) |match| {
             defer match.deinit();
 
-            std.debug.print("Full match: '{}'\n", .{std.zig.fmtEscapes(match.group(text))});
+            std.debug.print("Full match: '{f}'\n", .{std.zig.fmtString(match.group(text))});
 
             var i: usize = 1;
             while (i <= 3) : (i += 1) {
                 if (match.getCapture(i, text)) |captured| {
-                    std.debug.print("Capture group {}: '{}'\n", .{ i, std.zig.fmtEscapes(captured) });
+                    std.debug.print("Capture group {}: '{f}'\n", .{ i, std.zig.fmtString(captured) });
                 }
             }
         }
@@ -77,15 +77,15 @@ pub fn main() !void {
         defer re.deinit();
 
         const text = "abc";
-        std.debug.print("Pattern: '{}'\n", .{std.zig.fmtEscapes(re.getPattern())});
-        std.debug.print("Text: '{}'\n", .{std.zig.fmtEscapes(text)});
+        std.debug.print("Pattern: '{f}'\n", .{std.zig.fmtString(re.getPattern())});
+        std.debug.print("Text: '{f}'\n", .{std.zig.fmtString(text)});
 
         if (try re.find(text)) |match| {
             defer match.deinit();
 
-            std.debug.print("Full match: '{}'\n", .{std.zig.fmtEscapes(match.group(text))});
-            std.debug.print("Capture group 1 (outer): '{}'\n", .{std.zig.fmtEscapes(match.getCapture(1, text).?)});
-            std.debug.print("Capture group 2 (inner): '{}'\n", .{std.zig.fmtEscapes(match.getCapture(2, text).?)});
+            std.debug.print("Full match: '{f}'\n", .{std.zig.fmtString(match.group(text))});
+            std.debug.print("Capture group 1 (outer): '{f}'\n", .{std.zig.fmtString(match.getCapture(1, text).?)});
+            std.debug.print("Capture group 2 (inner): '{f}'\n", .{std.zig.fmtString(match.getCapture(2, text).?)});
         }
         std.debug.print("\n", .{});
     }
@@ -101,17 +101,17 @@ pub fn main() !void {
         defer re.deinit();
 
         const text = "User: Alice, Age: 30";
-        std.debug.print("Pattern: '{}'\n", .{std.zig.fmtEscapes(re.getPattern())});
-        std.debug.print("Text: '{}'\n", .{std.zig.fmtEscapes(text)});
+        std.debug.print("Pattern: '{f}'\n", .{std.zig.fmtString(re.getPattern())});
+        std.debug.print("Text: '{f}'\n", .{std.zig.fmtString(text)});
 
         if (try re.find(text)) |match| {
             defer match.deinit();
 
             if (match.getCapture(1, text)) |name| {
-                std.debug.print("Name: '{}'\n", .{std.zig.fmtEscapes(name)});
+                std.debug.print("Name: '{f}'\n", .{std.zig.fmtString(name)});
             }
             if (match.getCapture(2, text)) |age| {
-                std.debug.print("Age: '{}'\n", .{std.zig.fmtEscapes(age)});
+                std.debug.print("Age: '{f}'\n", .{std.zig.fmtString(age)});
             }
         }
         std.debug.print("\n", .{});
@@ -127,18 +127,18 @@ pub fn main() !void {
 
         const texts = [_][]const u8{ "ad", "abcd" };
 
-        std.debug.print("Pattern: '{}'\n", .{std.zig.fmtEscapes(re.getPattern())});
+        std.debug.print("Pattern: '{f}'\n", .{std.zig.fmtString(re.getPattern())});
 
         for (texts) |text| {
-            std.debug.print("\nText: '{}'\n", .{std.zig.fmtEscapes(text)});
+            std.debug.print("\nText: '{f}'\n", .{std.zig.fmtString(text)});
 
             if (try re.find(text)) |match| {
                 defer match.deinit();
 
-                std.debug.print("Full match: '{}'\n", .{std.zig.fmtEscapes(match.group(text))});
+                std.debug.print("Full match: '{f}'\n", .{std.zig.fmtString(match.group(text))});
 
                 if (match.getCapture(1, text)) |captured| {
-                    std.debug.print("Capture group 1: '{}'\n", .{std.zig.fmtEscapes(captured)});
+                    std.debug.print("Capture group 1: '{f}'\n", .{std.zig.fmtString(captured)});
                 } else {
                     std.debug.print("Capture group 1: (not captured)\n", .{});
                 }

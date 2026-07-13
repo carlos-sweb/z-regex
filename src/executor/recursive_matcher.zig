@@ -13,6 +13,7 @@ const std = @import("std");
 const Allocator = std.mem.Allocator;
 const opcodes = @import("../bytecode/opcodes.zig");
 const format = @import("../bytecode/format.zig");
+const properties = @import("../unicode/properties.zig");
 
 const Opcode = opcodes.Opcode;
 const Instruction = format.Instruction;
@@ -154,11 +155,13 @@ pub const RecursiveMatcher = struct {
             },
 
             .CHAR => {
-                // Match any character (dot)
-                if (pos >= self.input.len) {
-                    return MatchResult{ .matched = false, .end_pos = pos };
-                }
-                return self.matchFrom(pc + inst.size, pos + 1);
+                // Match any Unicode scalar value except newline (dot without /s)
+                return self.matchAnyChar(pc, pos, true, inst.size);
+            },
+
+            .CHAR_ANY => {
+                // Match any Unicode scalar value, including newline (dot with /s)
+                return self.matchAnyChar(pc, pos, false, inst.size);
             },
 
             .CHAR_RANGE => {
@@ -189,6 +192,72 @@ pub const RecursiveMatcher = struct {
                 if (pc + 33 > self.bytecode.len) return error.UnexpectedEndOfBytecode;
                 const table = self.bytecode[pc + 1 ..][0..32];
                 return self.matchCharClassInv(pc, pos, table, inst.size);
+            },
+
+            .CHAR_CLASS_RANGES => {
+                const r = try self.checkCharClassRanges(pc, pos, false);
+                if (!r.matched) return MatchResult{ .matched = false, .end_pos = pos };
+                return self.matchFrom(pc + inst.size, r.end_pos);
+            },
+
+            .CHAR_CLASS_RANGES_INV => {
+                const r = try self.checkCharClassRanges(pc, pos, true);
+                if (!r.matched) return MatchResult{ .matched = false, .end_pos = pos };
+                return self.matchFrom(pc + inst.size, r.end_pos);
+            },
+
+            .CHAR_CLASS_UNICODE => {
+                const r = try self.checkCharClassUnicode(pc, pos, false);
+                if (!r.matched) return MatchResult{ .matched = false, .end_pos = pos };
+                return self.matchFrom(pc + inst.size, r.end_pos);
+            },
+
+            .CHAR_CLASS_UNICODE_INV => {
+                const r = try self.checkCharClassUnicode(pc, pos, true);
+                if (!r.matched) return MatchResult{ .matched = false, .end_pos = pos };
+                return self.matchFrom(pc + inst.size, r.end_pos);
+            },
+
+            .CHAR_CLASS_SET_OP => {
+                const r = try self.checkCharClassSetOp(pc, pos);
+                if (!r.matched) return MatchResult{ .matched = false, .end_pos = pos };
+                return self.matchFrom(pc + inst.size, r.end_pos);
+            },
+
+            .UNICODE_PROPERTY => {
+                const r = try self.checkUnicodeProperty(pc, pos, false);
+                if (!r.matched) return MatchResult{ .matched = false, .end_pos = pos };
+                return self.matchFrom(pc + inst.size, r.end_pos);
+            },
+
+            .UNICODE_PROPERTY_INV => {
+                const r = try self.checkUnicodeProperty(pc, pos, true);
+                if (!r.matched) return MatchResult{ .matched = false, .end_pos = pos };
+                return self.matchFrom(pc + inst.size, r.end_pos);
+            },
+
+            .UNICODE_SCRIPT => {
+                const r = try self.checkUnicodeScript(pc, pos, false);
+                if (!r.matched) return MatchResult{ .matched = false, .end_pos = pos };
+                return self.matchFrom(pc + inst.size, r.end_pos);
+            },
+
+            .UNICODE_SCRIPT_INV => {
+                const r = try self.checkUnicodeScript(pc, pos, true);
+                if (!r.matched) return MatchResult{ .matched = false, .end_pos = pos };
+                return self.matchFrom(pc + inst.size, r.end_pos);
+            },
+
+            .UNICODE_SCRIPT_EXTENSIONS => {
+                const r = try self.checkUnicodeScriptExtensions(pc, pos, false);
+                if (!r.matched) return MatchResult{ .matched = false, .end_pos = pos };
+                return self.matchFrom(pc + inst.size, r.end_pos);
+            },
+
+            .UNICODE_SCRIPT_EXTENSIONS_INV => {
+                const r = try self.checkUnicodeScriptExtensions(pc, pos, true);
+                if (!r.matched) return MatchResult{ .matched = false, .end_pos = pos };
+                return self.matchFrom(pc + inst.size, r.end_pos);
             },
 
             .GOTO => {
@@ -236,69 +305,84 @@ pub const RecursiveMatcher = struct {
                         return self.matchStar(pc_consume, pc_skip, pos, greedy);
                     }
                 } else {
-                    // Check if it's a question quantifier
-                    const is_question = try self.isQuestionQuantifier(pc1, pc2);
-
-                    if (is_possessive) {
-                        // Possessive: try greedy path once, no backtracking
-                        const result1 = try self.matchFrom(pc1, pos);
-                        if (result1.matched) {
-                            return result1;
-                        }
-                        // Only try second path if first failed
-                        return self.matchFrom(pc2, pos);
-                    } else if (is_question) {
-                        // Question quantifier: try both paths and prefer longer match
-                        const greedy = (inst.opcode != .SPLIT_LAZY);
-
-                        const result1 = try self.matchFrom(pc1, pos);
-                        const result2 = try self.matchFrom(pc2, pos);
-
-                        // Both failed
-                        if (!result1.matched and !result2.matched) {
-                            return MatchResult{ .matched = false, .end_pos = pos };
-                        }
-
-                        // Only one succeeded
-                        if (result1.matched and !result2.matched) return result1;
-                        if (result2.matched and !result1.matched) return result2;
-
-                        // Both succeeded: prefer based on greediness
-                        if (greedy) {
-                            // Greedy: prefer longer match
-                            return if (result2.end_pos > result1.end_pos) result2 else result1;
-                        } else {
-                            // Lazy: prefer shorter match
-                            return if (result1.end_pos < result2.end_pos) result1 else result2;
-                        }
-                    } else {
-                        // Regular alternation: try first path, backtrack to second if needed
-                        // This prevents infinite loops by using proper backtracking
-                        const result1 = try self.matchFrom(pc1, pos);
-                        if (result1.matched) {
-                            return result1;
-                        }
-
-                        // First path failed, try second path
-                        return self.matchFrom(pc2, pos);
+                    // Alternation (`a|b`) and `e?`/`e??` all reduce to the
+                    // same priority-order backtracking here: try pc1, and
+                    // only fall back to pc2 if pc1's entire continuation
+                    // fails. This is correct for `|` (explicit priority
+                    // order) and for `?`/`??` as long as codegen puts the
+                    // preferred branch first -- `generateQuestion` emits
+                    // SPLIT_GREEDY(consume, skip) and `generateLazyQuestion`
+                    // emits SPLIT_LAZY(skip, consume), so "try pc1 first" is
+                    // already greedy-correct or lazy-correct respectively,
+                    // regardless of how complex the quantified atom is (a
+                    // previous "try both and compare end_pos" approach here
+                    // only worked for atoms simple enough for
+                    // `isQuestionQuantifier` to recognize, silently fell
+                    // back to being backwards for anything else, e.g. a
+                    // capturing group, and separately corrupted the shared
+                    // `self.captures` array by always evaluating the
+                    // discarded branch too).
+                    //
+                    // Note this also covers `?+`/`*+`-shaped SPLIT_POSSESSIVE
+                    // that reach here (not recognized as a star loop): the
+                    // atom either matches (commit to pc1) or it didn't apply
+                    // at all, in which case falling through to pc2 is still
+                    // correct (there's nothing to "give back").
+                    const result1 = try self.matchFrom(pc1, pos);
+                    if (result1.matched) {
+                        return result1;
                     }
+                    return self.matchFrom(pc2, pos);
                 }
             },
 
             .SAVE_START => {
-                // Save capture group start
+                // Save capture group start. If the continuation ultimately
+                // fails (e.g. a quantified group backtracks off one more,
+                // failed, attempted repetition), this mutation must not
+                // leak: restore the pre-attempt value so the capture still
+                // reflects the last *successful* repetition, not a
+                // half-completed failed one. `self.captures` is shared,
+                // mutable matcher state with no other snapshot/rollback
+                // mechanism, so this has to happen at the point of mutation.
                 const group = @as(usize, @intCast(inst.operands[0]));
                 if (group < MAX_CAPTURE_GROUPS) {
+                    const prev = self.captures[group];
                     self.captures[group].start = pos;
+                    const result = try self.matchFrom(pc + inst.size, pos);
+                    if (!result.matched) self.captures[group] = prev;
+                    return result;
                 }
                 return self.matchFrom(pc + inst.size, pos);
             },
 
             .SAVE_END => {
-                // Save capture group end
+                // Save capture group end (see SAVE_START for why this must
+                // roll back on failure too).
                 const group = @as(usize, @intCast(inst.operands[0]));
                 if (group < MAX_CAPTURE_GROUPS) {
+                    const prev = self.captures[group];
                     self.captures[group].end = pos;
+                    const result = try self.matchFrom(pc + inst.size, pos);
+                    if (!result.matched) self.captures[group] = prev;
+                    return result;
+                }
+                return self.matchFrom(pc + inst.size, pos);
+            },
+
+            .CLEAR_CAPTURE => {
+                // Reset a capture group to unset on the "skip" path of an
+                // optional atom (see opcodes.zig for why), rolling back to
+                // whatever it was before if the continuation fails --
+                // consistent with SAVE_START/SAVE_END, so backtracking back
+                // out of this skip choice restores the prior state.
+                const group = @as(usize, @intCast(inst.operands[0]));
+                if (group < MAX_CAPTURE_GROUPS) {
+                    const prev = self.captures[group];
+                    self.captures[group] = .{};
+                    const result = try self.matchFrom(pc + inst.size, pos);
+                    if (!result.matched) self.captures[group] = prev;
+                    return result;
                 }
                 return self.matchFrom(pc + inst.size, pos);
             },
@@ -354,17 +438,37 @@ pub const RecursiveMatcher = struct {
                 };
             },
 
-            .LINE_START => {
-                // Assert start of line
+            .STRING_START => {
+                // Assert absolute start of input (used for ^ without multiline)
                 if (pos != 0) {
                     return MatchResult{ .matched = false, .end_pos = pos };
                 }
                 return self.matchFrom(pc + inst.size, pos);
             },
 
-            .LINE_END => {
-                // Assert end of line
+            .STRING_END => {
+                // Assert absolute end of input (used for $ without multiline)
                 if (pos != self.input.len) {
+                    return MatchResult{ .matched = false, .end_pos = pos };
+                }
+                return self.matchFrom(pc + inst.size, pos);
+            },
+
+            .LINE_START => {
+                // Assert start of line (used for ^ with multiline): absolute
+                // start of input, or immediately after a '\n'
+                const at_line_start = pos == 0 or self.input[pos - 1] == '\n';
+                if (!at_line_start) {
+                    return MatchResult{ .matched = false, .end_pos = pos };
+                }
+                return self.matchFrom(pc + inst.size, pos);
+            },
+
+            .LINE_END => {
+                // Assert end of line (used for $ with multiline): absolute
+                // end of input, or immediately before a '\n'
+                const at_line_end = pos == self.input.len or self.input[pos] == '\n';
+                if (!at_line_end) {
                     return MatchResult{ .matched = false, .end_pos = pos };
                 }
                 return self.matchFrom(pc + inst.size, pos);
@@ -405,6 +509,33 @@ pub const RecursiveMatcher = struct {
         return self.matchFrom(pc + inst_size, pos + 1);
     }
 
+    /// Length in bytes of the UTF-8 sequence starting at `input[pos]` (1-4),
+    /// or 1 if it isn't the start of a valid sequence, or the sequence would
+    /// run past the end of input, or the bytes there don't decode validly.
+    /// This keeps matching binary-safe: malformed/non-UTF-8 input degrades to
+    /// byte-at-a-time matching instead of erroring.
+    fn utf8SeqLenAt(input: []const u8, pos: usize) usize {
+        if (pos >= input.len) return 1;
+        const len = std.unicode.utf8ByteSequenceLength(input[pos]) catch return 1;
+        if (pos + len > input.len) return 1;
+        _ = std.unicode.utf8Decode(input[pos..][0..len]) catch return 1;
+        return len;
+    }
+
+    /// Match any Unicode scalar value (dot). `exclude_newline` is true for
+    /// plain `.` (no /s flag), false for dot_all. Consumes the full UTF-8
+    /// sequence at `pos`, not just one byte.
+    fn matchAnyChar(self: *Self, pc: usize, pos: usize, exclude_newline: bool, inst_size: usize) MatchError!MatchResult {
+        if (pos >= self.input.len) {
+            return MatchResult{ .matched = false, .end_pos = pos };
+        }
+        if (exclude_newline and self.input[pos] == '\n') {
+            return MatchResult{ .matched = false, .end_pos = pos };
+        }
+        const seq_len = utf8SeqLenAt(self.input, pos);
+        return self.matchFrom(pc + inst_size, pos + seq_len);
+    }
+
     /// Match character in range
     fn matchCharRange(self: *Self, pc: usize, pos: usize, min: u8, max: u8, inst_size: usize) MatchError!MatchResult {
         if (pos >= self.input.len) {
@@ -417,7 +548,10 @@ pub const RecursiveMatcher = struct {
         return self.matchFrom(pc + inst_size, pos + 1);
     }
 
-    /// Match character NOT in range (inverted)
+    /// Match character NOT in range (inverted). Since the range only covers
+    /// byte values 0-255, a match here means "any Unicode scalar value other
+    /// than this byte range" — so like `.`, it consumes the full UTF-8
+    /// sequence at `pos`, not just one byte.
     fn matchCharRangeInv(self: *Self, pc: usize, pos: usize, min: u8, max: u8, inst_size: usize) MatchError!MatchResult {
         if (pos >= self.input.len) {
             return MatchResult{ .matched = false, .end_pos = pos };
@@ -427,7 +561,8 @@ pub const RecursiveMatcher = struct {
         if (c >= min and c <= max) {
             return MatchResult{ .matched = false, .end_pos = pos };
         }
-        return self.matchFrom(pc + inst_size, pos + 1);
+        const seq_len = utf8SeqLenAt(self.input, pos);
+        return self.matchFrom(pc + inst_size, pos + seq_len);
     }
 
     /// Match character in class (using bit table)
@@ -449,7 +584,8 @@ pub const RecursiveMatcher = struct {
         }
     }
 
-    /// Match character NOT in class (using bit table)
+    /// Match character NOT in class (using bit table). Same UTF-8 sequence
+    /// consumption as matchCharRangeInv, and for the same reason.
     fn matchCharClassInv(self: *Self, pc: usize, pos: usize, table: *const [32]u8, inst_size: usize) MatchError!MatchResult {
         if (pos >= self.input.len) {
             return MatchResult{ .matched = false, .end_pos = pos };
@@ -463,10 +599,237 @@ pub const RecursiveMatcher = struct {
 
         // Inverted logic: match if NOT in class
         if (!is_in_class) {
-            return self.matchFrom(pc + inst_size, pos + 1);
+            const seq_len = utf8SeqLenAt(self.input, pos);
+            return self.matchFrom(pc + inst_size, pos + seq_len);
         } else {
             return MatchResult{ .matched = false, .end_pos = pos };
         }
+    }
+
+    /// Decode the Unicode scalar value at `input[pos]` along with how many
+    /// bytes it occupies (see utf8SeqLenAt for the binary-safe fallback
+    /// policy this relies on).
+    fn decodeCodepointAt(input: []const u8, pos: usize) struct { codepoint: u32, len: usize } {
+        const len = utf8SeqLenAt(input, pos);
+        if (len == 1) {
+            return .{ .codepoint = input[pos], .len = 1 };
+        }
+        // utf8SeqLenAt only returns >1 after already validating the decode.
+        const cp = std.unicode.utf8Decode(input[pos..][0..len]) catch unreachable;
+        return .{ .codepoint = cp, .len = len };
+    }
+
+    /// Shared range-matching logic for CHAR_CLASS_RANGES(_INV), used by both
+    /// the main recursive matcher and the star-loop fast path
+    /// (matchSingleInstruction). Decodes the code point at `pos` and checks
+    /// it against the instruction's inline range table.
+    fn checkCharClassRanges(self: *Self, pc: usize, pos: usize, inverted: bool) MatchError!struct { matched: bool, end_pos: usize } {
+        if (pos >= self.input.len) return .{ .matched = false, .end_pos = pos };
+        if (pc + 2 > self.bytecode.len) return error.UnexpectedEndOfBytecode;
+
+        const count = self.bytecode[pc + 1];
+        const ranges_start = pc + 2;
+        if (ranges_start + @as(usize, count) * 8 > self.bytecode.len) return error.UnexpectedEndOfBytecode;
+
+        const decoded = decodeCodepointAt(self.input, pos);
+
+        var in_range = false;
+        var i: usize = 0;
+        while (i < count) : (i += 1) {
+            const offset = ranges_start + i * 8;
+            const start = std.mem.readInt(u32, self.bytecode[offset..][0..4], .little);
+            const end = std.mem.readInt(u32, self.bytecode[offset + 4 ..][0..4], .little);
+            if (decoded.codepoint >= start and decoded.codepoint <= end) {
+                in_range = true;
+                break;
+            }
+        }
+
+        const matched = if (inverted) !in_range else in_range;
+        return .{ .matched = matched, .end_pos = if (matched) pos + decoded.len else pos };
+    }
+
+    /// Shared matching logic for CHAR_CLASS_UNICODE(_INV), used by both the
+    /// main recursive matcher and the star-loop fast path
+    /// (matchSingleInstruction). Decodes the code point at `pos` and checks
+    /// it against the instruction's inline range table (same layout as
+    /// CHAR_CLASS_RANGES) OR any of its property/script/script-extensions
+    /// tests (each with its own `negated` bit, independent of this
+    /// function's `inverted` parameter -- which applies once, to the whole
+    /// union, matching the opcode's _INV form -- see CHAR_CLASS_UNICODE's
+    /// doc comment in opcodes.zig for why those are different things).
+    fn checkCharClassUnicode(self: *Self, pc: usize, pos: usize, inverted: bool) MatchError!struct { matched: bool, end_pos: usize } {
+        if (pos >= self.input.len) return .{ .matched = false, .end_pos = pos };
+
+        const ranges_start = pc + 2;
+        const props_count_offset = ranges_start + opcodes.MAX_CLASS_RANGES * 8;
+        const props_start = props_count_offset + 1;
+        const total_size = props_start + opcodes.MAX_CLASS_PROPERTIES * 3;
+        if (pc + 2 > self.bytecode.len or total_size > self.bytecode.len) return error.UnexpectedEndOfBytecode;
+
+        const range_count = self.bytecode[pc + 1];
+        const prop_count = self.bytecode[props_count_offset];
+        const decoded = decodeCodepointAt(self.input, pos);
+
+        var matched_any = false;
+
+        var i: usize = 0;
+        while (i < range_count) : (i += 1) {
+            const offset = ranges_start + i * 8;
+            const start = std.mem.readInt(u32, self.bytecode[offset..][0..4], .little);
+            const end = std.mem.readInt(u32, self.bytecode[offset + 4 ..][0..4], .little);
+            if (decoded.codepoint >= start and decoded.codepoint <= end) {
+                matched_any = true;
+                break;
+            }
+        }
+
+        if (!matched_any) {
+            var j: usize = 0;
+            while (j < prop_count) : (j += 1) {
+                const offset = props_start + j * 3;
+                const kind: opcodes.ClassPropertyKind = @enumFromInt(self.bytecode[offset]);
+                const negated = self.bytecode[offset + 1] != 0;
+                const value = self.bytecode[offset + 2];
+                const in_prop = switch (kind) {
+                    .unicode_property => properties.isInCategory(decoded.codepoint, @enumFromInt(value)),
+                    .script => properties.isInScript(decoded.codepoint, value),
+                    .script_extensions => properties.isInScriptExtensions(decoded.codepoint, value),
+                };
+                const prop_matched = if (negated) !in_prop else in_prop;
+                if (prop_matched) {
+                    matched_any = true;
+                    break;
+                }
+            }
+        }
+
+        const matched = if (inverted) !matched_any else matched_any;
+        return .{ .matched = matched, .end_pos = if (matched) pos + decoded.len else pos };
+    }
+
+    /// Evaluate one CHAR_CLASS_SET_OP operand block (see the opcode's doc
+    /// comment for the byte layout -- identical range/property-table shape
+    /// `checkCharClassUnicode` uses, prefixed with this operand's own
+    /// `negated` byte) against an already-decoded code point. Shared by
+    /// `checkCharClassSetOp`'s two operands.
+    fn evalClassSetOperand(self: *Self, offset: usize, cp: u32) bool {
+        const negated = self.bytecode[offset] != 0;
+        const range_count = self.bytecode[offset + 1];
+        const ranges_start = offset + 2;
+        var matched = false;
+
+        var i: usize = 0;
+        while (i < range_count) : (i += 1) {
+            const roff = ranges_start + i * 8;
+            const start = std.mem.readInt(u32, self.bytecode[roff..][0..4], .little);
+            const end = std.mem.readInt(u32, self.bytecode[roff + 4 ..][0..4], .little);
+            if (cp >= start and cp <= end) {
+                matched = true;
+                break;
+            }
+        }
+
+        if (!matched) {
+            const props_count_offset = ranges_start + opcodes.MAX_CLASS_RANGES * 8;
+            const props_start = props_count_offset + 1;
+            const prop_count = self.bytecode[props_count_offset];
+            var j: usize = 0;
+            while (j < prop_count) : (j += 1) {
+                const poff = props_start + j * 3;
+                const kind: opcodes.ClassPropertyKind = @enumFromInt(self.bytecode[poff]);
+                const pnegated = self.bytecode[poff + 1] != 0;
+                const value = self.bytecode[poff + 2];
+                const in_prop = switch (kind) {
+                    .unicode_property => properties.isInCategory(cp, @enumFromInt(value)),
+                    .script => properties.isInScript(cp, value),
+                    .script_extensions => properties.isInScriptExtensions(cp, value),
+                };
+                const prop_matched = if (pnegated) !in_prop else in_prop;
+                if (prop_matched) {
+                    matched = true;
+                    break;
+                }
+            }
+        }
+
+        return if (negated) !matched else matched;
+    }
+
+    /// Shared matching logic for CHAR_CLASS_SET_OP, used by both the main
+    /// recursive matcher and the star-loop fast path (matchSingleInstruction).
+    /// Decodes the code point at `pos` once and evaluates it against both
+    /// operand blocks (see `evalClassSetOperand`), combining with AND
+    /// (intersection, `op=1`) or AND-NOT (difference, `op=0`), then applies
+    /// `result_negated` (the whole operation's own `[^...]`, a third,
+    /// independent negation layer -- see CHAR_CLASS_SET_OP's doc comment in
+    /// opcodes.zig).
+    fn checkCharClassSetOp(self: *Self, pc: usize, pos: usize) MatchError!struct { matched: bool, end_pos: usize } {
+        if (pos >= self.input.len) return .{ .matched = false, .end_pos = pos };
+
+        const op = self.bytecode[pc + 1];
+        const result_negated = self.bytecode[pc + 2] != 0;
+        const left_offset = pc + 3;
+        const right_offset = left_offset + opcodes.CLASS_SET_OPERAND_SIZE;
+        const total_size = right_offset + opcodes.CLASS_SET_OPERAND_SIZE;
+        if (total_size > self.bytecode.len) return error.UnexpectedEndOfBytecode;
+
+        const decoded = decodeCodepointAt(self.input, pos);
+        const left_matched = self.evalClassSetOperand(left_offset, decoded.codepoint);
+        const right_matched = self.evalClassSetOperand(right_offset, decoded.codepoint);
+
+        const combined = if (op == 1) (left_matched and right_matched) else (left_matched and !right_matched);
+        const matched = if (result_negated) !combined else combined;
+
+        return .{ .matched = matched, .end_pos = if (matched) pos + decoded.len else pos };
+    }
+
+    /// Shared matching logic for UNICODE_PROPERTY(_INV), used by both the
+    /// main recursive matcher and the star-loop fast path
+    /// (matchSingleInstruction). Decodes the code point at `pos` and checks
+    /// it against the instruction's General_Category operand.
+    fn checkUnicodeProperty(self: *Self, pc: usize, pos: usize, inverted: bool) MatchError!struct { matched: bool, end_pos: usize } {
+        if (pos >= self.input.len) return .{ .matched = false, .end_pos = pos };
+        if (pc + 2 > self.bytecode.len) return error.UnexpectedEndOfBytecode;
+
+        const category: properties.UnicodeProperty = @enumFromInt(self.bytecode[pc + 1]);
+        const decoded = decodeCodepointAt(self.input, pos);
+        const in_category = properties.isInCategory(decoded.codepoint, category);
+
+        const matched = if (inverted) !in_category else in_category;
+        return .{ .matched = matched, .end_pos = if (matched) pos + decoded.len else pos };
+    }
+
+    /// Shared matching logic for UNICODE_SCRIPT(_INV), used by both the main
+    /// recursive matcher and the star-loop fast path (matchSingleInstruction).
+    /// Decodes the code point at `pos` and checks it against the
+    /// instruction's script-index operand.
+    fn checkUnicodeScript(self: *Self, pc: usize, pos: usize, inverted: bool) MatchError!struct { matched: bool, end_pos: usize } {
+        if (pos >= self.input.len) return .{ .matched = false, .end_pos = pos };
+        if (pc + 2 > self.bytecode.len) return error.UnexpectedEndOfBytecode;
+
+        const script_index = self.bytecode[pc + 1];
+        const decoded = decodeCodepointAt(self.input, pos);
+        const in_script = properties.isInScript(decoded.codepoint, script_index);
+
+        const matched = if (inverted) !in_script else in_script;
+        return .{ .matched = matched, .end_pos = if (matched) pos + decoded.len else pos };
+    }
+
+    /// Shared matching logic for UNICODE_SCRIPT_EXTENSIONS(_INV), used by
+    /// both the main recursive matcher and the star-loop fast path
+    /// (matchSingleInstruction). Same shape as `checkUnicodeScript`, but
+    /// checks `properties.isInScriptExtensions` instead of `isInScript`.
+    fn checkUnicodeScriptExtensions(self: *Self, pc: usize, pos: usize, inverted: bool) MatchError!struct { matched: bool, end_pos: usize } {
+        if (pos >= self.input.len) return .{ .matched = false, .end_pos = pos };
+        if (pc + 2 > self.bytecode.len) return error.UnexpectedEndOfBytecode;
+
+        const script_index = self.bytecode[pc + 1];
+        const decoded = decodeCodepointAt(self.input, pos);
+        const in_script = properties.isInScriptExtensions(decoded.codepoint, script_index);
+
+        const matched = if (inverted) !in_script else in_script;
+        return .{ .matched = matched, .end_pos = if (matched) pos + decoded.len else pos };
     }
 
     /// Detect if SPLIT is part of star quantifier pattern
@@ -482,29 +845,20 @@ pub const RecursiveMatcher = struct {
         return false;
     }
 
-    /// Detect if SPLIT represents a question quantifier (e?)
-    /// Question pattern: SPLIT skip, consume; CHAR; (fall-through, no GOTO loop)
-    fn isQuestionQuantifier(self: *Self, pc1: usize, pc2: usize) MatchError!bool {
-        // Check if pc2 points to a char-consuming instruction
-        if (pc2 >= self.bytecode.len) return false;
-
-        const inst = try format.decodeInstruction(self.bytecode, pc2);
-        const consumes_char = switch (inst.opcode) {
-            .CHAR, .CHAR32, .CHAR_RANGE, .CHAR_RANGE_INV, .CHAR_CLASS, .CHAR2 => true,
+    /// Every opcode that can be the quantified atom of `e?`/`e*`/`e+` and
+    /// consumes (or, for BACK_REF, potentially doesn't consume -- see
+    /// checkBackRef) input on success. Used by isStarConsumePath so it can't
+    /// silently drift out of sync with the set of opcodes the codegen
+    /// actually quantifies: a quantifiable opcode missing from this list
+    /// previously caused `\1+`-style patterns to fall through to plain
+    /// recursive alternation with no zero-width-progress guard, crashing on
+    /// a stack overflow instead of matching correctly or hitting the depth
+    /// limit (found via test262-derived conformance testing).
+    fn isQuantifiableAtomOpcode(opcode: Opcode) bool {
+        return switch (opcode) {
+            .CHAR, .CHAR_ANY, .CHAR32, .CHAR2, .CHAR_RANGE, .CHAR_RANGE_INV, .CHAR_CLASS, .CHAR_CLASS_INV, .CHAR_CLASS_RANGES, .CHAR_CLASS_RANGES_INV, .CHAR_CLASS_UNICODE, .CHAR_CLASS_UNICODE_INV, .CHAR_CLASS_SET_OP, .UNICODE_PROPERTY, .UNICODE_PROPERTY_INV, .UNICODE_SCRIPT, .UNICODE_SCRIPT_INV, .UNICODE_SCRIPT_EXTENSIONS, .UNICODE_SCRIPT_EXTENSIONS_INV, .BACK_REF, .BACK_REF_I => true,
             else => false,
         };
-        if (!consumes_char) return false;
-
-        // Check that next instruction is NOT a GOTO (which would make it a loop/star)
-        const next_pc = pc2 + inst.size;
-        if (next_pc >= self.bytecode.len) return true; // Char followed by end
-
-        const next_inst = try format.decodeInstruction(self.bytecode, next_pc);
-        if (next_inst.opcode == .GOTO) return false; // It's a loop, not a question
-
-        // pc1 should point near or after the char instruction (the skip path)
-        // For greedy ?, pc1 typically points to after the char
-        return pc1 >= next_pc or pc1 == next_pc;
     }
 
     /// Check if a given PC is the consume path of a star quantifier
@@ -513,20 +867,26 @@ pub const RecursiveMatcher = struct {
         if (consume_pc >= self.bytecode.len) return false;
 
         const inst1 = try format.decodeInstruction(self.bytecode, consume_pc);
-        const consumes_char = switch (inst1.opcode) {
-            .CHAR, .CHAR32, .CHAR_RANGE, .CHAR_RANGE_INV => true,
-            else => false,
-        };
+        const consumes_char = isQuantifiableAtomOpcode(inst1.opcode);
         if (!consumes_char) return false;
 
-        // Check if next instruction after char is GOTO
         const next_pc = consume_pc + inst1.size;
+
+        // Plus-shape loop (`generatePlus`): `consume_pc: X; SPLIT_GREEDY
+        // consume_pc, end;` -- X directly precedes the split with no
+        // intervening GOTO, and looping happens via the split branching
+        // straight back to consume_pc (which is already known to be one of
+        // its two targets, since isStarQuantifier calls this with pc1/pc2).
+        if (next_pc == split_pc) return true;
+
+        // Star-shape loop (`generateStar`/`generateRepeat`'s unbounded
+        // case): `split_pc: SPLIT end, consume_pc; consume_pc: X; GOTO
+        // split_pc; end: ...` -- X is followed by an explicit GOTO back.
         if (next_pc >= self.bytecode.len) return false;
 
         const inst2 = try format.decodeInstruction(self.bytecode, next_pc);
         if (inst2.opcode != .GOTO) return false;
 
-        // Check if GOTO jumps back to SPLIT (loop pattern)
         const goto_offset = @as(i32, @bitCast(inst2.operands[0]));
         const goto_target: i32 = @intCast(next_pc);
         const target_pc = goto_target + goto_offset;
@@ -605,6 +965,14 @@ pub const RecursiveMatcher = struct {
             const matched = try self.matchSingleInstruction(char_inst, pc_char, current_pos);
             if (!matched.matched) break;
 
+            // Prevent infinite loop if the atom matched but consumed no
+            // input (e.g. a zero-width backreference). Must compare against
+            // the pre-update position: comparing after `current_pos` is
+            // already overwritten below is trivially always true, which
+            // previously made this loop stop after exactly one iteration
+            // regardless of whether real progress was made.
+            if (matched.end_pos == current_pos) break;
+
             current_pos = matched.end_pos;
 
             // Try rest again
@@ -612,9 +980,6 @@ pub const RecursiveMatcher = struct {
             if (rest_result2.matched) {
                 return rest_result2;
             }
-
-            // Prevent infinite loop
-            if (matched.end_pos == current_pos) break;
         }
 
         return MatchResult{ .matched = false, .end_pos = pos };
@@ -659,11 +1024,19 @@ pub const RecursiveMatcher = struct {
             },
 
             .CHAR => {
-                // Match any character (dot)
+                // Match any Unicode scalar value except newline (dot without /s)
+                if (pos >= self.input.len or self.input[pos] == '\n') {
+                    return .{ .matched = false, .end_pos = pos };
+                }
+                return .{ .matched = true, .end_pos = pos + utf8SeqLenAt(self.input, pos) };
+            },
+
+            .CHAR_ANY => {
+                // Match any Unicode scalar value, including newline (dot with /s)
                 if (pos >= self.input.len) {
                     return .{ .matched = false, .end_pos = pos };
                 }
-                return .{ .matched = true, .end_pos = pos + 1 };
+                return .{ .matched = true, .end_pos = pos + utf8SeqLenAt(self.input, pos) };
             },
 
             .CHAR_RANGE => {
@@ -681,7 +1054,8 @@ pub const RecursiveMatcher = struct {
             },
 
             .CHAR_RANGE_INV => {
-                // Match character NOT in range
+                // Match character NOT in range (consumes a full UTF-8
+                // sequence, like CHAR — see matchCharRangeInv)
                 const min = @as(u8, @intCast(inst.operands[0]));
                 const max = @as(u8, @intCast(inst.operands[1]));
                 if (pos >= self.input.len) {
@@ -692,7 +1066,7 @@ pub const RecursiveMatcher = struct {
                 if (c >= min and c <= max) {
                     return .{ .matched = false, .end_pos = pos };
                 }
-                return .{ .matched = true, .end_pos = pos + 1 };
+                return .{ .matched = true, .end_pos = pos + utf8SeqLenAt(self.input, pos) };
             },
 
             .CHAR_CLASS => {
@@ -715,7 +1089,8 @@ pub const RecursiveMatcher = struct {
             },
 
             .CHAR_CLASS_INV => {
-                // Match character NOT in class (bit table)
+                // Match character NOT in class (consumes a full UTF-8
+                // sequence, like CHAR — see matchCharClassInv)
                 if (pos >= self.input.len) {
                     return .{ .matched = false, .end_pos = pos };
                 }
@@ -731,7 +1106,74 @@ pub const RecursiveMatcher = struct {
                 if (is_in_class) {
                     return .{ .matched = false, .end_pos = pos };
                 }
-                return .{ .matched = true, .end_pos = pos + 1 };
+                return .{ .matched = true, .end_pos = pos + utf8SeqLenAt(self.input, pos) };
+            },
+
+            .CHAR_CLASS_RANGES => {
+                const r = try self.checkCharClassRanges(pc, pos, false);
+                return .{ .matched = r.matched, .end_pos = r.end_pos };
+            },
+
+            .CHAR_CLASS_RANGES_INV => {
+                const r = try self.checkCharClassRanges(pc, pos, true);
+                return .{ .matched = r.matched, .end_pos = r.end_pos };
+            },
+
+            .CHAR_CLASS_UNICODE => {
+                const r = try self.checkCharClassUnicode(pc, pos, false);
+                return .{ .matched = r.matched, .end_pos = r.end_pos };
+            },
+
+            .CHAR_CLASS_UNICODE_INV => {
+                const r = try self.checkCharClassUnicode(pc, pos, true);
+                return .{ .matched = r.matched, .end_pos = r.end_pos };
+            },
+
+            .CHAR_CLASS_SET_OP => {
+                const r = try self.checkCharClassSetOp(pc, pos);
+                return .{ .matched = r.matched, .end_pos = r.end_pos };
+            },
+
+            .UNICODE_PROPERTY => {
+                const r = try self.checkUnicodeProperty(pc, pos, false);
+                return .{ .matched = r.matched, .end_pos = r.end_pos };
+            },
+
+            .UNICODE_PROPERTY_INV => {
+                const r = try self.checkUnicodeProperty(pc, pos, true);
+                return .{ .matched = r.matched, .end_pos = r.end_pos };
+            },
+
+            .UNICODE_SCRIPT => {
+                const r = try self.checkUnicodeScript(pc, pos, false);
+                return .{ .matched = r.matched, .end_pos = r.end_pos };
+            },
+
+            .UNICODE_SCRIPT_INV => {
+                const r = try self.checkUnicodeScript(pc, pos, true);
+                return .{ .matched = r.matched, .end_pos = r.end_pos };
+            },
+
+            .UNICODE_SCRIPT_EXTENSIONS => {
+                const r = try self.checkUnicodeScriptExtensions(pc, pos, false);
+                return .{ .matched = r.matched, .end_pos = r.end_pos };
+            },
+
+            .UNICODE_SCRIPT_EXTENSIONS_INV => {
+                const r = try self.checkUnicodeScriptExtensions(pc, pos, true);
+                return .{ .matched = r.matched, .end_pos = r.end_pos };
+            },
+
+            .BACK_REF => {
+                const group = @as(usize, @intCast(inst.operands[0]));
+                const r = self.checkBackRef(pos, group, false);
+                return .{ .matched = r.matched, .end_pos = r.end_pos };
+            },
+
+            .BACK_REF_I => {
+                const group = @as(usize, @intCast(inst.operands[0]));
+                const r = self.checkBackRef(pos, group, true);
+                return .{ .matched = r.matched, .end_pos = r.end_pos };
             },
 
             else => {
@@ -746,6 +1188,23 @@ pub const RecursiveMatcher = struct {
         // Find the end of the lookahead body (LOOKAHEAD_END opcode)
         const lookahead_end_pc = try self.findLookaheadEnd(pc + inst_size);
 
+        // Snapshot captures before probing the lookahead body: per the
+        // ECMAScript spec, a lookahead's inner match attempt only commits
+        // its capture mutations to the surrounding match when it's a
+        // *positive* lookahead that *succeeds* (that's the documented
+        // "lookahead captures leak out" behavior, e.g.
+        // `/(?=(a))/.exec("a")` capturing "a"). In every other outcome
+        // (positive-fails, negative-succeeds, negative-fails) the inner
+        // attempt's captures must not be observable afterward. Per-SAVE
+        // rollback (see SAVE_START/SAVE_END) only undoes a mutation when
+        // its own immediate continuation fails, which isn't enough here:
+        // a negative lookahead's inner pattern can genuinely *succeed* as a
+        // raw match (setting captures along the way) and it's this
+        // function, not any SAVE instruction, that turns that success into
+        // the assertion's failure -- so only a full snapshot/restore at
+        // this boundary catches it.
+        const captures_snapshot = self.captures;
+
         // Execute the lookahead pattern starting after the LOOKAHEAD opcode
         // This is a zero-width assertion, so we test at current position
         const result = try self.matchFrom(pc + inst_size, pos);
@@ -753,21 +1212,27 @@ pub const RecursiveMatcher = struct {
         if (negative) {
             // Negative lookahead: succeed if pattern did NOT match
             if (!result.matched) {
-                // Pattern didn't match, so negative lookahead succeeds
-                // Continue after LOOKAHEAD_END without consuming input
+                // Pattern didn't match, so negative lookahead succeeds.
+                // Discard any partial captures from the failed attempt,
+                // then continue after LOOKAHEAD_END without consuming input.
+                self.captures = captures_snapshot;
                 return self.matchFrom(lookahead_end_pc + 1, pos);
             } else {
-                // Pattern matched, so negative lookahead fails
+                // Pattern matched, so negative lookahead fails. Discard its
+                // captures too -- this whole path is being abandoned.
+                self.captures = captures_snapshot;
                 return MatchResult{ .matched = false, .end_pos = pos };
             }
         } else {
             // Positive lookahead: succeed if pattern DID match
             if (result.matched) {
-                // Pattern matched, so positive lookahead succeeds
-                // Continue after LOOKAHEAD_END without consuming input
+                // Pattern matched, so positive lookahead succeeds; its
+                // captures are intentionally left in place (spec'd leak).
+                // Continue after LOOKAHEAD_END without consuming input.
                 return self.matchFrom(lookahead_end_pc + 1, pos);
             } else {
-                // Pattern didn't match, so positive lookahead fails
+                // Pattern didn't match, so positive lookahead fails.
+                self.captures = captures_snapshot;
                 return MatchResult{ .matched = false, .end_pos = pos };
             }
         }
@@ -905,50 +1370,54 @@ pub const RecursiveMatcher = struct {
 
     /// Match backreference to capture group
     fn matchBackRef(self: *Self, pc: usize, pos: usize, group: usize, case_insensitive: bool, inst_size: usize) MatchError!MatchResult {
-        // Check if group index is valid
+        const r = self.checkBackRef(pos, group, case_insensitive);
+        if (!r.matched) return MatchResult{ .matched = false, .end_pos = pos };
+        return self.matchFrom(pc + inst_size, r.end_pos);
+    }
+
+    /// Shared backreference-matching logic for BACK_REF(_I), used by both
+    /// the main recursive matcher and the star-loop fast path
+    /// (matchSingleInstruction). A backreference to a group that captured
+    /// zero characters matches zero characters here too (`end_pos == pos`)
+    /// -- callers that loop on this (e.g. `\1+`) must have their own
+    /// zero-width-progress guard, same as any other quantified atom.
+    fn checkBackRef(self: *Self, pos: usize, group: usize, case_insensitive: bool) struct { matched: bool, end_pos: usize } {
         if (group >= MAX_CAPTURE_GROUPS) {
-            return MatchResult{ .matched = false, .end_pos = pos };
+            return .{ .matched = false, .end_pos = pos };
         }
 
-        // Get the captured text
         const capture = self.captures[group];
         if (!capture.isValid()) {
-            // Reference to uncaptured group fails
-            return MatchResult{ .matched = false, .end_pos = pos };
+            // Per the ECMAScript spec, a backreference to a group that
+            // hasn't participated in the match (e.g. an alternation branch
+            // not taken, or a negative lookahead's own group -- see
+            // matchLookahead) always succeeds, matching the empty string.
+            // It must NOT fail outright: `/(a)?\1b/.exec("b")` matches in
+            // JS with capture 1 left undefined.
+            return .{ .matched = true, .end_pos = pos };
         }
 
         const cap_start = capture.start.?;
         const cap_end = capture.end.?;
         const cap_len = cap_end - cap_start;
 
-        // Check if we have enough input left
         if (pos + cap_len > self.input.len) {
-            return MatchResult{ .matched = false, .end_pos = pos };
+            return .{ .matched = false, .end_pos = pos };
         }
 
-        // Compare captured text with current position
         const captured_text = self.input[cap_start..cap_end];
         const current_text = self.input[pos .. pos + cap_len];
 
-        // Match character by character
         for (captured_text, 0..) |cap_char, i| {
             const cur_char = current_text[i];
-
-            if (case_insensitive) {
-                // Case-insensitive comparison
-                if (std.ascii.toLower(cap_char) != std.ascii.toLower(cur_char)) {
-                    return MatchResult{ .matched = false, .end_pos = pos };
-                }
-            } else {
-                // Case-sensitive comparison
-                if (cap_char != cur_char) {
-                    return MatchResult{ .matched = false, .end_pos = pos };
-                }
-            }
+            const eq = if (case_insensitive)
+                std.ascii.toLower(cap_char) == std.ascii.toLower(cur_char)
+            else
+                cap_char == cur_char;
+            if (!eq) return .{ .matched = false, .end_pos = pos };
         }
 
-        // Success: advance past the matched backreference
-        return self.matchFrom(pc + inst_size, pos + cap_len);
+        return .{ .matched = true, .end_pos = pos + cap_len };
     }
 
     /// Check if position is at word boundary
@@ -1035,10 +1504,43 @@ test "RecursiveMatcher: ReDoS protection - step limit" {
     try std.testing.expectError(error.StepLimitExceeded, exec_result);
 }
 
+test "RecursiveMatcher: quantified backreference to an empty capture doesn't crash" {
+    // Regression test for a real crash found via test262-derived conformance
+    // testing (see docs/ECMASCRIPT_COMPATIBILITY_PLAN.md Phase 6): `\1+`
+    // where group 1 can capture zero characters used to segfault (stack
+    // overflow) with the DEFAULT recursion limit, because isStarConsumePath
+    // didn't recognize BACK_REF as a quantifiable atom, so the loop fell
+    // through to plain recursive alternation with no zero-width-progress
+    // guard. Uses the real default ExecOptions (matching what every public
+    // Regex.find/test_ call actually uses) -- previous versions of this
+    // exact call crashed the whole test binary, not just failed a `try`.
+    const compiler = @import("../codegen/compiler.zig");
+    const result = try compiler.compileSimple(std.testing.allocator, "(a*)b\\1+");
+    defer result.deinit();
+
+    var matcher = RecursiveMatcher.init(std.testing.allocator, result.bytecode, "baaac");
+    const exec_result = try matcher.matchFrom(0, 0);
+    try std.testing.expect(exec_result.matched);
+    // Matches "b": group 1 captures "" (no leading 'a' at position 0), \1+
+    // matches that empty capture once (satisfying "+") and stops repeating
+    // since it makes no further progress. This matches real JS semantics --
+    // this exact pattern/input is test262's S15.10.2.9_A1_T5.js, which
+    // expects ["b", ""].
+    try std.testing.expectEqual(@as(usize, 1), exec_result.end_pos);
+}
+
 test "RecursiveMatcher: ReDoS protection - recursion limit" {
     const compiler = @import("../codegen/compiler.zig");
 
-    const result = try compiler.compileSimple(std.testing.allocator, "a+");
+    // NOTE: a bare `a+` no longer exercises this -- isStarConsumePath now
+    // recognizes single-atom `+` loops (see the "quantified backref"
+    // crash fix) and routes them through the iterative matchStarGreedy
+    // path, which doesn't consume recursion depth per repetition. A
+    // group-wrapped repetition `(a)+` isn't eligible for that
+    // optimization (the repeated "atom" is a multi-instruction group, not
+    // a single opcode), so it still recurses once per repetition and is a
+    // faithful test of the recursion-limit mechanism itself.
+    const result = try compiler.compileSimple(std.testing.allocator, "(a)+");
     defer result.deinit();
 
     // Crear matcher con límites muy bajos

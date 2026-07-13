@@ -5,15 +5,21 @@ pub fn build(b: *std.Build) void {
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
 
-    // Create library module for C API (includes regex)
+    // Module for the exported C ABI (src/c_api.zig). This is *not* a supported public
+    // C/C++ API -- no headers or wrapper are shipped for it. It exists solely as the
+    // FFI substrate the test262 conformance harness (docs/ECMASCRIPT_COMPATIBILITY_PLAN.md
+    // Phase 8) drives zregexp through from Node.js. Anyone else wanting to call zregexp
+    // from C/C++ can link against the shared library and write their own bindings
+    // against these exported symbols.
     const c_api_module = b.createModule(.{
         .root_source_file = b.path("src/c_api.zig"),
         .target = target,
         .optimize = optimize,
     });
 
-    // Create library module for main (for compatibility)
-    const lib_module = b.createModule(.{
+    // Public module exposed to downstream consumers via the Zig package manager
+    // (e.g. `b.dependency("zregexp", .{}).module("zregexp")`).
+    const lib_module = b.addModule("zregexp", .{
         .root_source_file = b.path("src/main.zig"),
         .target = target,
         .optimize = optimize,
@@ -23,7 +29,10 @@ pub fn build(b: *std.Build) void {
     // Library Compilation
     // =============================================================================
 
-    // Shared library (.so, .dylib, .dll)
+    // Shared library (.so, .dylib, .dll) -- built purely as the FFI target the
+    // conformance harness loads (see the comment on c_api_module above). No static
+    // library and no headers are installed: there's no supported static-linking or
+    // header-based C/C++ integration path anymore.
     const shared_lib = b.addLibrary(.{
         .name = "zregexp",
         .root_module = c_api_module,
@@ -31,28 +40,6 @@ pub fn build(b: *std.Build) void {
         .linkage = .dynamic,
     });
     b.installArtifact(shared_lib);
-
-    // Static library (.a)
-    const static_lib = b.addLibrary(.{
-        .name = "zregexp",
-        .root_module = c_api_module,
-        .linkage = .static,
-    });
-    b.installArtifact(static_lib);
-
-    // Install headers
-    const install_headers = b.addInstallHeaderFile(
-        b.path("include/zregexp.h"),
-        "zregexp.h",
-    );
-    const install_headers_cpp = b.addInstallHeaderFile(
-        b.path("include/zregexp.hpp"),
-        "zregexp.hpp",
-    );
-
-    // Default build step (builds all libraries and installs headers)
-    b.getInstallStep().dependOn(&install_headers.step);
-    b.getInstallStep().dependOn(&install_headers_cpp.step);
 
     // =============================================================================
     // Testing
@@ -91,19 +78,58 @@ pub fn build(b: *std.Build) void {
     const integration_test_step = b.step("test-integration", "Run integration tests only");
     integration_test_step.dependOn(&run_integration_tests.step);
 
+    // Conformance sample against test262-derived cases (see
+    // docs/ECMASCRIPT_COMPATIBILITY_PLAN.md Phase 6). Kept out of the
+    // default `test` step deliberately: it's an informational pass-rate
+    // report, not a pass/fail gate on 100% JS conformance.
+    const conformance_module = b.createModule(.{
+        .root_source_file = b.path("tests/test262_conformance.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    conformance_module.addImport("zregexp", lib_module);
+
+    const conformance_tests = b.addTest(.{
+        .root_module = conformance_module,
+    });
+    const run_conformance_tests = b.addRunArtifact(conformance_tests);
+    run_conformance_tests.has_side_effects = true; // always show the pass-rate summary
+
+    const conformance_step = b.step("test-conformance", "Run test262-derived conformance sample");
+    conformance_step.dependOn(&run_conformance_tests.step);
+
     // =============================================================================
     // Library-specific build steps
     // =============================================================================
 
-    const lib_step = b.step("lib", "Build all libraries");
-    lib_step.dependOn(&static_lib.step);
-    lib_step.dependOn(&shared_lib.step);
-    lib_step.dependOn(&install_headers.step);
-    lib_step.dependOn(&install_headers_cpp.step);
-
-    const static_step = b.step("static", "Build static library only");
-    static_step.dependOn(&static_lib.step);
-
-    const shared_step = b.step("shared", "Build shared library only");
+    const shared_step = b.step("shared", "Build the shared library (FFI target for the conformance harness)");
     shared_step.dependOn(&shared_lib.step);
+
+    // =============================================================================
+    // Examples
+    // =============================================================================
+    // Wired into the build graph so a stale example (e.g. removed stdlib API)
+    // fails `zig build examples` instead of rotting unnoticed.
+
+    const examples_step = b.step("examples", "Build all examples");
+    const example_names = [_][]const u8{
+        "basic_usage",
+        "capture_groups",
+        "find_all",
+        "validation",
+    };
+    for (example_names) |name| {
+        const example_module = b.createModule(.{
+            .root_source_file = b.path(b.fmt("examples/{s}.zig", .{name})),
+            .target = target,
+            .optimize = optimize,
+        });
+        example_module.addImport("zregexp", lib_module);
+
+        const example_exe = b.addExecutable(.{
+            .name = name,
+            .root_module = example_module,
+        });
+        examples_step.dependOn(&b.addInstallArtifact(example_exe, .{}).step);
+    }
 }

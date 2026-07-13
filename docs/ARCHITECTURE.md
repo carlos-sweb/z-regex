@@ -1,5 +1,15 @@
 # Architecture Overview
 
+> **Accuracy note**: this document was originally written before implementation began, as
+> a design plan. The Module Breakdown (Core, Parser/Codegen, Bytecode, Executor, Unicode,
+> Utils) and Error Hierarchy sections below have been corrected against the current
+> source tree (2026-07-04). Sections further down (memory/ownership details, testing
+> strategy, future enhancements) have not all been individually re-verified and may still
+> describe original design intent rather than exact current code — treat type/field names
+> there as illustrative, and check `src/` directly when precision matters. See
+> [PROJECT_STRUCTURE.md](PROJECT_STRUCTURE.md) for the verified directory layout and
+> [KNOWN_LIMITATIONS.md](KNOWN_LIMITATIONS.md) for verified current behavior.
+
 ## Philosophy
 
 zregexp follows these core principles:
@@ -57,81 +67,55 @@ zregexp follows these core principles:
 
 ### 1. Core (`src/core/`)
 
-**Purpose**: Foundation types and utilities used across all modules.
+**Purpose**: Compile-time configuration flags.
 
 **Components**:
-- `types.zig`: Common types (RegexFlags, Match, CaptureGroup)
-- `errors.zig`: All error types and error sets
-- `allocator.zig`: Allocator wrappers and tracking
-- `config.zig`: Compile-time configuration
+- `config.zig`: Two compile-time booleans (`enable_execution_trace`,
+  `panic_on_internal_error`), consumed by `src/utils/debug.zig`.
+
+That's the entire module today. `CompileOptions` (case-insensitivity, multiline, dot_all)
+lives in `src/codegen/compiler.zig` instead, and error sets are defined per-module
+(`ParseError` in `src/parser/parser.zig`, `CodegenError` in `src/codegen/generator.zig`,
+combined into `RegexError` in `src/regex.zig`) rather than centralized here.
 
 **Key Decisions**:
 - All allocations explicit via Allocator parameter
 - Errors as first-class citizens (no error codes)
-- Compile-time configuration for features/optimizations
 
-**Example Types**:
-```zig
-pub const RegexFlags = packed struct {
-    global: bool = false,
-    ignore_case: bool = false,
-    multiline: bool = false,
-    dotall: bool = false,
-    unicode: bool = false,
-    sticky: bool = false,
-    indices: bool = false,
-    unicode_sets: bool = false,
-};
+### 2. Parser + Codegen (`src/parser/`, `src/codegen/`)
 
-pub const CompileError = error{
-    SyntaxError,
-    InvalidEscape,
-    UnterminatedGroup,
-    InvalidQuantifier,
-    TooManyCaptures,
-    OutOfMemory,
-};
-```
-
-### 2. Compiler (`src/compiler/`)
-
-**Purpose**: Parse regex pattern and generate bytecode.
+**Purpose**: Parse the regex pattern and generate bytecode. (Originally planned as one
+`src/compiler/` module — see `PROJECT_STRUCTURE.md` for why it's split this way instead.)
 
 **Components**:
-- `parser.zig`: Recursive descent parser
-- `ast.zig`: Abstract syntax tree nodes
-- `codegen.zig`: Bytecode emission
-- `optimizer.zig`: Bytecode optimization passes
-- `validator.zig`: Semantic validation
+- `parser/lexer.zig`: Tokenizer
+- `parser/ast.zig`: Abstract syntax tree nodes
+- `parser/parser.zig`: Recursive descent parser (tokens → AST)
+- `codegen/generator.zig`: AST → bytecode
+- `codegen/optimizer.zig`: Bytecode optimization passes
+- `codegen/compiler.zig`: Top-level `compile()`/`compileSimple()` and `CompileOptions`
 
 **Pipeline**:
 ```
-Pattern String → Parser → AST → Validator → CodeGen → Bytecode
-                                                ↓
-                                          Optimizer
+Pattern String → Lexer → Parser → AST → Generator → Bytecode
+                                             ↓
+                                        Optimizer
 ```
 
 **Key Algorithms**:
 - **Recursive Descent Parsing**: Clean, maintainable, maps to spec
 - **Single-Pass Code Generation**: No intermediate IR needed
-- **Peephole Optimization**: Local bytecode improvements
 
-**Parsing Strategy**:
+**Parsing Strategy** (`parseAlternation` → `parseSequence` → `parseTerm` → `parseAtom`,
+matching the grammar documented at the top of `parser.zig`):
 ```
-parseDisjunction()
-  ├─ parseAlternative()
-  │   ├─ parseTerm()
-  │   │   ├─ parseAtom()
-  │   │   └─ parseQuantifier()
-  │   └─ parseAssertion()
-  └─ '|' parseAlternative()
+parseAlternation()
+  ├─ parseSequence()
+  │   └─ parseTerm()
+  │       ├─ parseAtom()
+  │       └─ (quantifier, if present)
+  └─ '|' parseSequence()
 ```
-
-**Optimization Examples**:
-- Merge consecutive character matches
-- Constant folding for character classes
-- Dead code elimination
-- Jump threading
 
 ### 3. Bytecode (`src/bytecode/`)
 
@@ -143,113 +127,52 @@ parseDisjunction()
 - `writer.zig`: Bytecode writing utilities
 - `reader.zig`: Bytecode reading utilities
 
-**Bytecode Format**:
-```
-┌──────────────────────────────────────────┐
-│ Header (8 bytes)                         │
-│  [0-1] flags: u16                        │
-│  [2]   capture_count: u8                 │
-│  [3]   stack_size: u8                    │
-│  [4-7] bytecode_len: u32                 │
-├──────────────────────────────────────────┤
-│ Bytecode (variable)                      │
-│  [opcode][operands]...                   │
-├──────────────────────────────────────────┤
-│ Named Groups (optional)                  │
-│  null-terminated UTF-8 strings           │
-└──────────────────────────────────────────┘
-```
+**Bytecode Format**: No fixed header — bytecode produced by `BytecodeWriter.finalize()` is
+just a flat sequence of `[opcode][operands...]` instructions, terminated by a `MATCH`
+opcode. There's no capture count, stack size, or length prefix stored alongside it (the
+caller already knows the pattern's group count from parsing).
 
-**Opcode Categories**:
-1. **Character Matching** (6 opcodes)
-2. **Anchors** (8 opcodes)
-3. **Control Flow** (6 opcodes)
-4. **Captures** (3 opcodes)
-5. **Lookaround** (4 opcodes)
-6. **Backreferences** (4 opcodes)
-7. **Character Classes** (4 opcodes)
-8. **Utilities** (3 opcodes)
-
-**Total**: 38 opcodes (vs libregexp's 33)
-
-**Opcode Design**:
-```zig
-pub const Opcode = enum(u8) {
-    // Character matching
-    char = 0x01,      // Match literal char (16-bit)
-    char32 = 0x02,    // Match Unicode char (32-bit)
-    char_i = 0x03,    // Case-insensitive char
-    char32_i = 0x04,  // Case-insensitive Unicode
-    dot = 0x05,       // Match any (except \n)
-    any = 0x06,       // Match any (including \n)
-
-    // ... etc
-
-    pub fn size(self: Opcode) u8 {
-        return switch (self) {
-            .char, .char_i => 3,
-            .char32, .char32_i => 5,
-            .dot, .any => 1,
-            // ...
-        };
-    }
-};
-```
+**Opcode Categories** (see `src/bytecode/opcodes.zig` for the authoritative, current list
+of all 40 opcodes and their exact byte values): character matching (`CHAR`, `CHAR32`,
+`CHAR2`, `CHAR_RANGE[_INV]`, `CHAR_CLASS[_INV]`, `CHAR_CLASS_RANGES[_INV]`,
+`UNICODE_PROPERTY[_INV]` for `\p{...}`/`\P{...}`), control flow (`GOTO`, the `SPLIT*`
+family), captures (`SAVE_START`/`SAVE_END`/`CLEAR_CAPTURE`), anchors (`LINE_START`/`LINE_END`,
+`STRING_START`/`STRING_END`, word boundaries), lookaround
+(`[NEGATIVE_]LOOKAHEAD[_END]`/`[NEGATIVE_]LOOKBEHIND[_END]`), and backreferences
+(`BACK_REF[_I]`).
 
 ### 4. Executor (`src/executor/`)
 
 **Purpose**: Interpret bytecode and find matches.
 
 **Components**:
-- `vm.zig`: Virtual machine core loop
-- `backtrack.zig`: Backtracking engine
-- `stack.zig`: Execution stack management
-- `captures.zig`: Capture group handling
-- `matcher.zig`: High-level matching interface
+- `recursive_matcher.zig`: The matching engine — a recursive backtracker (an earlier
+  Pike-VM/thread-based design, `vm.zig`, had an infinite-loop bug in alternation and has
+  been removed)
+- `thread.zig`: `Capture` (capture group start/end positions)
+- `matcher.zig`: High-level matching interface (`find`, `findAll`, `matchFull`)
 
-**Execution Model**:
-```
-┌─────────────────────┐
-│  Program Counter    │ ──> Bytecode
-│  Character Pointer  │ ──> Input String
-│  Backtrack Stack    │
-│  Capture Array      │
-│  Aux Stack          │
-└─────────────────────┘
-```
+**Execution Model**: `RecursiveMatcher.matchFrom(pc, pos)` recursively tries to match the
+bytecode starting at `pc` against the input starting at `pos`, returning as soon as it
+finds a match or exhausts the alternatives at that point. There is no explicit backtrack
+stack — Zig's native call stack *is* the backtrack stack, and capture group start/end
+positions are restored implicitly by each recursive call returning its own `MatchResult`
+(see `src/executor/recursive_matcher.zig`). An earlier design used an explicit
+Pike-VM-style thread queue (`vm.zig`) instead of recursion; it had an infinite-loop bug in
+alternation and was replaced.
 
-**Stack Architecture**:
-```zig
-pub const StackElem = union(enum) {
-    backtrack_point: struct {
-        pc: u32,
-        cptr: u32,
-        state: BacktrackState,
-    },
-    saved_capture: struct {
-        index: u8,
-        value: ?u32,
-    },
-    saved_aux: struct {
-        index: u8,
-        value: u32,
-    },
-};
-```
+**ReDoS Protection**: `RecursiveMatcher` counts recursive calls (`step_count`) and tracks
+`recursion_depth`, returning `error.StepLimitExceeded` / `error.RecursionLimitExceeded`
+once `ExecOptions.max_steps` / `max_recursion_depth` are hit (defaults: 1,000,000 steps,
+1,000 depth) — this is what actually protects against catastrophic backtracking, not a
+separate timeout mechanism.
 
-**Backtracking Strategy**:
-1. **Optimistic Execution**: Try first path
-2. **Save Points**: Push backtrack info on splits
-3. **Failure Recovery**: Pop and restore on no-match
-4. **Depth Limiting**: Prevent stack overflow
-5. **Timeout Checks**: Interrupt counter (every 10k ops)
+### 5. Unicode (`src/unicode/`) — ⚠️ design only, not implemented
 
-**Optimizations**:
-- Static stack (32 elements) for common cases
-- Stack reuse across multiple executions
-- Inline hot paths (char matching, etc.)
-
-### 5. Unicode (`src/unicode/`)
+**Status**: `src/unicode/` currently contains only a README describing this design; none
+of the files below exist yet. See [KNOWN_LIMITATIONS.md](KNOWN_LIMITATIONS.md) and
+[ECMASCRIPT_COMPATIBILITY_PLAN.md](ECMASCRIPT_COMPATIBILITY_PLAN.md) (Phases 1/3/4) for the
+current status and build plan. The design below is the intended target, not current state.
 
 **Purpose**: Unicode support and character operations.
 
@@ -448,28 +371,28 @@ const match = try vm.exec(regex, input);
 
 ### Error Hierarchy
 
+Error sets are defined per-module and combined in `src/regex.zig`, rather than through a
+central `CompileError`/`ExecError` split:
+
 ```zig
-// Compile errors
-pub const CompileError = error{
-    SyntaxError,
-    InvalidEscape,
-    UnterminatedGroup,
-    InvalidQuantifier,
-    InvalidBackreference,
-    TooManyCaptures,
-    InvalidUnicodeProperty,
-    OutOfMemory,
+// src/parser/parser.zig
+pub const ParseError = error{
+    UnexpectedToken, UnexpectedEOF, UnmatchedParen, UnmatchedBracket,
+    InvalidCharRange, EmptyCharClass, InvalidQuantifier, EmptyGroup,
+    EmptyAlternation, OutOfMemory, InvalidEscape, InvalidRepeat, UnterminatedRepeat,
 };
 
-// Runtime errors
-pub const ExecError = error{
-    OutOfMemory,
-    Timeout,
-    StackOverflow,
+// src/codegen/generator.zig
+pub const CodegenError = error{
+    UnsupportedNode, InvalidPattern, TooManyGroups, OutOfMemory,
+    BufferTooSmall, UnknownOpcode,
 };
 
-// Combined
-pub const RegexError = CompileError || ExecError;
+// src/regex.zig — the combined, public error set
+pub const RegexError = ParseError || CodegenError || Allocator.Error || error{
+    UnexpectedEndOfBytecode, UnknownOpcode, UnresolvedLabels,
+    BufferTooSmall, RecursionLimitExceeded, StepLimitExceeded,
+};
 ```
 
 ### Error Context
@@ -602,48 +525,25 @@ test "benchmark: email regex" {
 
 ### Memory Layout
 
-```zig
-// Cache-friendly: related fields together
-pub const VM = struct {
-    // Hot: accessed every iteration
-    pc: u32,
-    cptr: u32,
-
-    // Warm: accessed on operations
-    stack: []StackElem,
-    captures: []?u32,
-
-    // Cold: accessed rarely
-    bytecode: []const u8,
-    flags: RegexFlags,
-};
-```
+`RecursiveMatcher` (`src/executor/recursive_matcher.zig`) holds the bytecode slice, the
+input slice, a fixed-size `[MAX_CAPTURE_GROUPS]CaptureGroup` array, and small counters
+(`recursion_depth`, `step_count`) — no separate heap-allocated stack, since Zig's call
+stack fills that role.
 
 ## Future Enhancements
 
-### Phase 2: Performance
+For the JS/ECMAScript compatibility gaps (named groups, Unicode property escapes, atomic
+groups, etc.) and the phased plan to close them, see
+[ECMASCRIPT_COMPATIBILITY_PLAN.md](ECMASCRIPT_COMPATIBILITY_PLAN.md). Possessive
+quantifiers, listed as a future item in an earlier version of this document, are already
+implemented (`*+`, `++`, `?+`).
 
-- JIT compilation (x86_64, aarch64)
-- SIMD for character scanning
-- Lazy DFA for simple patterns
-- Compiled character classes
-
-### Phase 3: Features
-
-- Possessive quantifiers
-- Atomic groups
-- Conditional expressions
-- Subroutine calls
-
-### Phase 4: Tooling
-
-- Regex debugger
-- Pattern analyzer
-- Performance profiler
-- Visual bytecode viewer
+Performance-oriented ideas not yet scheduled in that plan: JIT compilation, SIMD character
+scanning, a lazy DFA for simple patterns.
 
 ---
 
-**Document Version**: 1.0
-**Last Updated**: 2025-11-26
-**Status**: Living Document
+**Last Updated**: 2026-07-04
+**Status**: Living document — corrected against the current source tree for the Executor,
+Unicode, Core, and Parser/Codegen sections above; verify against `src/` directly for
+anything not covered by that pass.

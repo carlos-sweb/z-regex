@@ -1,7 +1,7 @@
 # zregexp - Modern Regular Expression Engine for Zig
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
-[![Tests](https://img.shields.io/badge/tests-275%2F275-brightgreen)](#)
+[![Tests](https://img.shields.io/badge/tests-402%2F402-brightgreen)](#)
 [![Zig](https://img.shields.io/badge/zig-0.16.0-orange)](https://ziglang.org/)
 
 [🇪🇸 Versión en Español](README.es.md)
@@ -12,10 +12,9 @@ A powerful, feature-rich regular expression engine written in Zig with JavaScrip
 
 - **🚀 High Performance**: Bytecode-based virtual machine with optimized execution
 - **🛡️ ReDoS Protection**: Built-in recursion depth and step limits to prevent catastrophic backtracking
-- **📝 JavaScript-Compatible Syntax**: ~70% compatibility with JavaScript RegExp
+- **📝 JavaScript-Compatible Syntax**: 168/168 (100%) pass rate on a heuristically-extracted test262 conformance sample (`zig build test-conformance`) — a real but biased/small measurement, not a full conformance percentage; see [Known Limitations](docs/KNOWN_LIMITATIONS.md) for the verified feature-by-feature breakdown, and the [ECMAScript Compatibility Plan](docs/ECMASCRIPT_COMPATIBILITY_PLAN.md) for the path to 100%
 - **🔧 Zero Dependencies**: Pure Zig implementation
-- **🌐 C/C++ Bindings**: Easy integration with C and C++ projects
-- **✅ Well Tested**: 304 comprehensive tests ensuring reliability
+- **✅ Well Tested**: 402 comprehensive tests ensuring reliability
 
 ## 🎯 Supported Features
 
@@ -29,6 +28,8 @@ A powerful, feature-rich regular expression engine written in Zig with JavaScrip
 - ✅ `(...)` Capturing groups
 - ✅ `(?:...)` Non-capturing groups
 - ✅ `\1` to `\9` Backreferences
+- ✅ `(?<name>...)` Named capturing groups
+- ✅ `\k<name>` Named backreferences
 
 ### Quantifiers (100% JS Compatible + Extensions)
 - ✅ `*`, `+`, `?` Basic quantifiers
@@ -40,10 +41,19 @@ A powerful, feature-rich regular expression engine written in Zig with JavaScrip
 ### Character Classes
 - ✅ `[abc]`, `[^abc]` Character sets
 - ✅ `[a-z]`, `[A-Z0-9]` Character ranges
+- ✅ `[*&$.^+?(){}|]` Regex metacharacters as literals inside a class
+- ✅ `[a-c\d]` Shorthand classes (`\d`/`\w`/`\s`/`\D`/`\W`/`\S`) as class members
+- ✅ `[^]` Negated empty class ("match anything", including newline)
 - ✅ `.` Any character (except newline)
 - ✅ `\d`, `\D` Digits / non-digits
 - ✅ `\w`, `\W` Word characters / non-word
 - ✅ `\s`, `\S` Whitespace / non-whitespace
+- ✅ `\p{L}`, `\p{Lu}`, `\p{Letter}`, `\P{L}`, ... Unicode General_Category property escapes
+- ✅ `\p{White_Space}`, `\p{Alphabetic}`, `\p{Math}`, `\p{Dash}`, `\p{Hex_Digit}`, `\p{ID_Start}`, `\p{Emoji}`, `\p{ASCII}`, `\p{Any}`, `\p{Bidi_Mirrored}`, `\p{Assigned}`, and 39 more (50 total, see [Known Limitations](docs/KNOWN_LIMITATIONS.md)) Unicode binary property escapes
+- ✅ `\p{Script=Greek}`, `\p{sc=Han}`, `\p{Script=Latin}`, `\p{Script=Grek}` (short alias), ... (all 174 Unicode scripts + short aliases) Unicode Script property escapes
+- ✅ `\p{Script_Extensions=Latin}`, `\p{scx=Grek}`, ... Unicode Script_Extensions property escapes (broader per-codepoint membership than plain Script, e.g. combining accents)
+- ✅ `[\p{L}\d]`, `[\P{Alphabetic}a-z]`, `[^\p{L}\d]` `\p{...}`/`\P{...}` as a character-class member (General_Category, binary property, Script, or Script_Extensions; up to 4 per class)
+- ✅ `[A--B]`, `[A&&B]` (with `CompileOptions.v`) Character-class set operations — difference and intersection, one per class (`[\p{L}--[aeiou]]`, `[[a-z]&&[^x]]`)
 
 ### Anchors
 - ✅ `^` Start of string
@@ -76,21 +86,13 @@ const zregexp = b.dependency("zregexp", .{
 exe.root_module.addImport("zregexp", zregexp.module("zregexp"));
 ```
 
-### Using as a C/C++ Library
-
-Download pre-compiled libraries from [Releases](https://github.com/yourusername/zregexp/releases):
-
-**Linux/macOS:**
-- `libzregexp.so` / `libzregexp.dylib` (shared library)
-- `libzregexp.a` (static library)
-- `zregexp.h` (C header)
-- `zregexp.hpp` (C++ header)
-
-**Windows:**
-- `zregexp.dll` (dynamic library)
-- `zregexp.lib` (import library)
-- `zregexp.h` (C header)
-- `zregexp.hpp` (C++ header)
+> **Note on C/C++**: zregexp is a Zig-first library and doesn't ship a supported C/C++
+> API (no headers, no wrapper library, no build artifacts for external linking). It does
+> export a plain C ABI (`src/c_api.zig`, built as a shared library via `zig build shared`)
+> that the project's own tooling drives via FFI — see
+> [`ECMASCRIPT_COMPATIBILITY_PLAN.md`](docs/ECMASCRIPT_COMPATIBILITY_PLAN.md) Phase 8. If
+> you want to call zregexp from C or C++, you're welcome to write your own bindings
+> against those exported symbols; none are provided or maintained here.
 
 ## 🚀 Quick Start
 
@@ -101,79 +103,23 @@ const std = @import("std");
 const regex = @import("zregexp");
 
 pub fn main() !void {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    var gpa = std.heap.DebugAllocator(.{}){};
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
 
     // Compile a regex pattern
-    var re = try regex.Regex.compile(allocator, "hello (\\w+)");
+    var re = try regex.Regex.compile(allocator, "hello (world)");
     defer re.deinit();
 
     // Find a match
-    const result = try re.find("hello world");
+    const text = "hello world";
+    const result = try re.find(text);
     if (result) |match| {
         defer match.deinit();
 
-        std.debug.print("Match: {s}\n", .{match.slice()});
-        std.debug.print("Group 1: {s}\n", .{match.group(1).?});
+        std.debug.print("Match: {s}\n", .{match.group(text)});
+        std.debug.print("Group 1: {s}\n", .{match.getCapture(1, text).?});
     }
-}
-```
-
-### C Example
-
-```c
-#include "zregexp.h"
-#include <stdio.h>
-
-int main(void) {
-    // Compile regex
-    ZRegex* re = zregexp_compile("hello (\\w+)", NULL);
-    if (!re) {
-        fprintf(stderr, "Failed to compile regex\n");
-        return 1;
-    }
-
-    // Find match
-    ZMatch* match = zregexp_find(re, "hello world");
-    if (match) {
-        const char* full_match = zregexp_match_slice(match);
-        const char* group1 = zregexp_match_group(match, 1);
-
-        printf("Match: %s\n", full_match);
-        printf("Group 1: %s\n", group1);
-
-        zregexp_match_free(match);
-    }
-
-    zregexp_free(re);
-    return 0;
-}
-```
-
-### C++ Example
-
-```cpp
-#include "zregexp.hpp"
-#include <iostream>
-
-int main() {
-    try {
-        // Compile regex
-        auto re = zregexp::Regex::compile("hello (\\w+)");
-
-        // Find match
-        auto match = re.find("hello world");
-        if (match) {
-            std::cout << "Match: " << match.slice() << std::endl;
-            std::cout << "Group 1: " << match.group(1) << std::endl;
-        }
-    } catch (const zregexp::RegexError& e) {
-        std::cerr << "Error: " << e.what() << std::endl;
-        return 1;
-    }
-
-    return 0;
 }
 ```
 
@@ -204,36 +150,23 @@ Finds the first match in the input string.
 
 **Returns:** `MatchResult` if found, `null` otherwise
 
-#### `regex.findAll(input) !std.ArrayList(MatchResult)`
+#### `regex.findAll(input) !std.ArrayListUnmanaged(MatchResult)`
 Finds all matches in the input string.
 
-#### `regex.isMatch(input) !bool`
-Tests if the pattern matches the input.
+#### `MatchResult` methods
+- `match.group(input) []const u8` — the full matched substring
+- `match.getCapture(index, input) ?[]const u8` — capture group by number (1-based)
+- `match.getNamedCapture(name, input) ?[]const u8` — capture group by name, for
+  `(?<name>...)` groups; returns `null` for unknown names or patterns with no named groups
 
-#### `regex.replace(input, replacement) ![]const u8`
-Replaces all matches with the replacement string.
+#### `regex.test_(input) !bool`
+Tests whether the pattern matches the **entire** input string (anchored full match, not substring search — use `find`/`findAll` for substring matching).
 
-### C API
+#### `regex.replace(allocator, input, replacement) ![]u8`
+Replaces the first match with `replacement` (like JS `String.prototype.replace` with a non-global regex). Returns a newly allocated string (a copy of `input` if there's no match). `replacement` supports JS's substitution syntax: `$$` (literal `$`), `$&` (whole match), `` $` ``/`$'` (text before/after the match), `$1`-`$99` (numbered capture groups), and `$<name>` (named capture groups). A group that exists in the pattern but didn't participate substitutes as an empty string; a `$N`/`$<name>` with no corresponding group is left as literal text (matching JS exactly).
 
-See `zregexp.h` for full API documentation.
-
-**Key Functions:**
-- `ZRegex* zregexp_compile(const char* pattern, ZRegexOptions* options)`
-- `ZMatch* zregexp_find(ZRegex* regex, const char* input)`
-- `ZMatchList* zregexp_find_all(ZRegex* regex, const char* input)`
-- `bool zregexp_is_match(ZRegex* regex, const char* input)`
-- `char* zregexp_replace(ZRegex* regex, const char* input, const char* replacement)`
-- `void zregexp_free(ZRegex* regex)`
-- `void zregexp_match_free(ZMatch* match)`
-
-### C++ API
-
-See `zregexp.hpp` for full API documentation.
-
-**Key Classes:**
-- `zregexp::Regex` - Main regex class with RAII semantics
-- `zregexp::Match` - Match result with automatic cleanup
-- `zregexp::RegexError` - Exception type for error handling
+#### `regex.replaceAll(allocator, input, replacement) ![]u8`
+Replaces every match with `replacement` (like JS `String.prototype.replaceAll`). Same substitution syntax as `replace`.
 
 ## 🔧 Building from Source
 
@@ -250,7 +183,8 @@ cd zregexp
 # Run tests
 zig build test
 
-# Build all libraries
+# Build (installs the shared library used internally by the conformance harness --
+# see the C/C++ note above; not a supported public build artifact)
 zig build
 
 # Build for specific targets
@@ -259,11 +193,6 @@ zig build -Dtarget=x86_64-windows
 zig build -Dtarget=x86_64-macos
 zig build -Dtarget=aarch64-linux
 ```
-
-The compiled libraries will be in `zig-out/lib/`:
-- `libzregexp.so` / `libzregexp.dylib` (shared)
-- `libzregexp.a` (static)
-- `zregexp.dll` / `zregexp.lib` (Windows)
 
 ## ⚡ Performance
 
@@ -390,11 +319,15 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 - [x] Lookbehind assertions
 - [x] Anchors and word boundaries
 - [x] ReDoS protection
-- [x] C/C++ bindings
+- [x] Named capture groups `(?<name>...)` and `\k<name>` backreferences, including duplicate names across mutually exclusive alternation branches (e.g. `(?<x>a)|(?<x>b)`)
+- [x] `replace()`/`replaceAll()` in the pure Zig API, including `$1`/`$&`/`` $` ``/`$'`/`$<name>` substitution
+- [x] Unicode property escapes `\p{...}`/`\P{...}` (General_Category, e.g. `\p{L}`, `\p{Lu}`, `\p{Letter}`; 50 binary properties, e.g. `\p{Alphabetic}`; all 174 Unicode scripts + short aliases via `\p{Script=...}`/`\p{sc=...}`, e.g. `\p{Script=Grek}`; Script_Extensions via `\p{Script_Extensions=...}`/`\p{scx=...}`; and as a character-class member, e.g. `[\p{L}\d]`)
+- [x] `case_insensitive` folding of a literal non-ASCII character's simple case pair (standalone or as a single character-class member, e.g. `café`/`CAFÉ`, `[é]`/`É`)
+- [x] `v` flag (`CompileOptions.v`): character-class set operations `[A--B]`/`[A&&B]`, one per class, e.g. `[\p{L}--[aeiou]]`, `[[a-z]&&[^x]]`
 
 ### In Progress 🚧
-- [ ] Named capture groups `(?<name>...)`
-- [ ] Unicode property escapes `\p{...}`
+- [ ] `u` flag (`CompileOptions.unicode`): rejects an unrecognized escape as a compile error; malformed `\x`/`\u`/`\c`/`\k`/`\p` and bad backreferences still not strict
+- [ ] `v` flag: chained/nested set operations, `\q{...}` multi-string literals, `v`-only reserved punctuators, full `u` strictness
 - [ ] Full UTF-8/UTF-16 support
 
 ### Future 🔮
@@ -407,9 +340,9 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 ## 📊 Project Stats
 
 - **Lines of Code**: ~11,000
-- **Test Count**: 304 comprehensive tests
+- **Test Count**: 402 comprehensive tests
 - **Test Pass Rate**: 100%
-- **JavaScript Compatibility**: ~70%
+- **JavaScript Compatibility**: 168/168 (100%) on a test262-derived conformance sample (see [Known Limitations](docs/KNOWN_LIMITATIONS.md) for what this measurement does and doesn't cover)
 - **Supported Platforms**: Linux, macOS, Windows, *BSD
 - **Dependencies**: Zero (pure Zig)
 - **Language**: Zig 0.16.0+
