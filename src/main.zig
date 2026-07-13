@@ -81,6 +81,14 @@ pub const test_ = @import("regex.zig").test_;
 pub const find = @import("regex.zig").find;
 pub const findAll = @import("regex.zig").findAll;
 
+// Unicode General_Category lookup, re-exported for reuse outside the regex
+// engine (e.g. z-lexer's ID_Start/ID_Continue identifier classification) --
+// avoids duplicating the ~21k lines of UCD-derived tables in tables.zig.
+pub const unicode = struct {
+    pub const UnicodeProperty = @import("unicode/properties.zig").UnicodeProperty;
+    pub const isInCategory = @import("unicode/properties.zig").isInCategory;
+};
+
 // Placeholder for development
 pub fn placeholder() void {
     std.debug.print("zregexp v{s} - Not yet implemented\n", .{version});
