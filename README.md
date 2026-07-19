@@ -1,4 +1,4 @@
-# zregexp - Modern Regular Expression Engine for Zig
+# zregex - Modern Regular Expression Engine for Zig
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![Tests](https://img.shields.io/badge/tests-402%2F402-brightgreen)](#)
@@ -69,8 +69,8 @@ Add to your `build.zig.zon`:
 
 ```zig
 .dependencies = .{
-    .zregexp = .{
-        .url = "https://github.com/yourusername/zregexp/archive/refs/tags/v1.0.0.tar.gz",
+    .zregex = .{
+        .url = "https://github.com/yourusername/zregex/archive/refs/tags/v1.0.0.tar.gz",
         .hash = "...",
     },
 },
@@ -79,19 +79,19 @@ Add to your `build.zig.zon`:
 In your `build.zig`:
 
 ```zig
-const zregexp = b.dependency("zregexp", .{
+const zregex = b.dependency("zregex", .{
     .target = target,
     .optimize = optimize,
 });
-exe.root_module.addImport("zregexp", zregexp.module("zregexp"));
+exe.root_module.addImport("zregex", zregex.module("zregex"));
 ```
 
-> **Note on C/C++**: zregexp is a Zig-first library and doesn't ship a supported C/C++
+> **Note on C/C++**: zregex is a Zig-first library and doesn't ship a supported C/C++
 > API (no headers, no wrapper library, no build artifacts for external linking). It does
 > export a plain C ABI (`src/c_api.zig`, built as a shared library via `zig build shared`)
 > that the project's own tooling drives via FFI — see
 > [`ECMASCRIPT_COMPATIBILITY_PLAN.md`](docs/ECMASCRIPT_COMPATIBILITY_PLAN.md) Phase 8. If
-> you want to call zregexp from C or C++, you're welcome to write your own bindings
+> you want to call zregex from C or C++, you're welcome to write your own bindings
 > against those exported symbols; none are provided or maintained here.
 
 ## 🚀 Quick Start
@@ -100,7 +100,7 @@ exe.root_module.addImport("zregexp", zregexp.module("zregexp"));
 
 ```zig
 const std = @import("std");
-const regex = @import("zregexp");
+const regex = @import("zregex");
 
 pub fn main() !void {
     var gpa = std.heap.DebugAllocator(.{}){};
@@ -177,8 +177,8 @@ Replaces every match with `replacement` (like JS `String.prototype.replaceAll`).
 
 ```bash
 # Clone the repository
-git clone https://github.com/yourusername/zregexp.git
-cd zregexp
+git clone https://github.com/yourusername/zregex.git
+cd zregex
 
 # Run tests
 zig build test
@@ -196,7 +196,7 @@ zig build -Dtarget=aarch64-linux
 
 ## ⚡ Performance
 
-zregexp uses a bytecode-based virtual machine for efficient pattern matching:
+zregex uses a bytecode-based virtual machine for efficient pattern matching:
 
 - **Fast Compilation**: Patterns are compiled to optimized bytecode
 - **Efficient Execution**: Direct bytecode interpretation with minimal overhead
@@ -219,7 +219,7 @@ Time: ~200ns per match
 
 ### ReDoS Protection
 
-zregexp includes built-in protection against Regular Expression Denial of Service (ReDoS) attacks:
+zregex includes built-in protection against Regular Expression Denial of Service (ReDoS) attacks:
 
 - **Recursion Depth Limit**: Default 1000 (configurable)
 - **Step Limit**: Default 1,000,000 (configurable)
@@ -278,8 +278,8 @@ Contributions are welcome! Please feel free to submit a Pull Request.
 
 ```bash
 # Clone and build
-git clone https://github.com/yourusername/zregexp.git
-cd zregexp
+git clone https://github.com/yourusername/zregex.git
+cd zregex
 zig build test
 
 # Run specific tests
@@ -304,8 +304,8 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 
 ## 📬 Contact
 
-- GitHub Issues: [Report bugs or request features](https://github.com/yourusername/zregexp/issues)
-- Discussions: [Ask questions and share ideas](https://github.com/yourusername/zregexp/discussions)
+- GitHub Issues: [Report bugs or request features](https://github.com/yourusername/zregex/issues)
+- Discussions: [Ask questions and share ideas](https://github.com/yourusername/zregex/discussions)
 
 ## 🗺️ Roadmap
 
@@ -349,7 +349,7 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 
 ## 🏆 Features Comparison
 
-| Feature | zregexp | JavaScript | PCRE2 | RE2 |
+| Feature | zregex | JavaScript | PCRE2 | RE2 |
 |---------|---------|------------|-------|-----|
 | Lookahead | ✅ | ✅ | ✅ | ✅ |
 | Lookbehind | ✅ | ✅ | ✅ | ❌ |

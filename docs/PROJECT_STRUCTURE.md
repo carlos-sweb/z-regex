@@ -1,6 +1,6 @@
 # Project Structure
 
-This document describes the organization of the zregexp codebase.
+This document describes the organization of the zregex codebase.
 
 > **Accuracy note**: this document was originally written before implementation began.
 > The directory tree, module purpose/file lists, dependency diagram, build commands, and
@@ -12,7 +12,7 @@ This document describes the organization of the zregexp codebase.
 ## Directory Overview
 
 ```
-zregexp/
+zregex/
 ├── src/              # Source code
 │   ├── core/         # Compile-time config flags (tiny)
 │   ├── parser/        # Lexer, AST, recursive-descent parser
@@ -206,7 +206,7 @@ each module has a `*_tests.zig` file that re-exports them (e.g. `src/parser/pars
 
 ### Integration Tests (`tests/`)
 
-**Purpose**: Test full end-to-end scenarios through the public `zregexp` module (as
+**Purpose**: Test full end-to-end scenarios through the public `zregex` module (as
 opposed to the inline unit tests, which test internal modules directly).
 
 **Files**:

@@ -1,4 +1,4 @@
-//! Debugging utilities for zregexp
+//! Debugging utilities for zregex
 //!
 //! This module provides debugging helpers including hex dumps,
 //! bytecode dumping, pretty printing, and conditional logging.

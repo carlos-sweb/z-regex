@@ -1,4 +1,4 @@
-//! Bytecode opcodes for zregexp
+//! Bytecode opcodes for zregex
 //!
 //! This module defines all opcodes used in the regex bytecode virtual machine.
 //! Based on QuickJS libregexp with 33 opcodes organized by category.

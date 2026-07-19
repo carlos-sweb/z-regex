@@ -4,11 +4,11 @@
 //! a common real-world use case.
 //!
 //! Build and run:
-//!   zig build-exe validation.zig --dep zregexp --mod zregexp:../src/main.zig
+//!   zig build-exe validation.zig --dep zregex --mod zregex:../src/main.zig
 //!   ./validation
 
 const std = @import("std");
-const zregexp = @import("zregexp");
+const zregex = @import("zregex");
 
 pub fn main() !void {
     var gpa = std.heap.DebugAllocator(.{}){};
@@ -22,7 +22,7 @@ pub fn main() !void {
         std.debug.print("Example 1: Validate Exact Format\n", .{});
         std.debug.print("---------------------------------\n", .{});
 
-        var re = try zregexp.Regex.compile(allocator, "^yes$");
+        var re = try zregex.Regex.compile(allocator, "^yes$");
         defer re.deinit();
 
         const inputs = [_][]const u8{ "yes", "no", "Yes", "yes ", " yes" };
@@ -44,7 +44,7 @@ pub fn main() !void {
         std.debug.print("Example 2: Validate Length\n", .{});
         std.debug.print("--------------------------\n", .{});
 
-        var re = try zregexp.Regex.compile(allocator, "^a{3,5}$");
+        var re = try zregex.Regex.compile(allocator, "^a{3,5}$");
         defer re.deinit();
 
         const inputs = [_][]const u8{ "a", "aa", "aaa", "aaaa", "aaaaa", "aaaaaa" };
@@ -67,7 +67,7 @@ pub fn main() !void {
         std.debug.print("Example 3: Validate Multiple Options\n", .{});
         std.debug.print("-------------------------------------\n", .{});
 
-        var re = try zregexp.Regex.compile(allocator, "^(red|green|blue)$");
+        var re = try zregex.Regex.compile(allocator, "^(red|green|blue)$");
         defer re.deinit();
 
         const inputs = [_][]const u8{ "red", "green", "blue", "yellow", "Red" };
@@ -89,7 +89,7 @@ pub fn main() !void {
         std.debug.print("Example 4: Validate Optional Parts\n", .{});
         std.debug.print("-----------------------------------\n", .{});
 
-        var re = try zregexp.Regex.compile(allocator, "^hello( world)?$");
+        var re = try zregex.Regex.compile(allocator, "^hello( world)?$");
         defer re.deinit();
 
         const inputs = [_][]const u8{ "hello", "hello world", "hello there", "hello  world" };
@@ -112,7 +112,7 @@ pub fn main() !void {
         std.debug.print("--------------------------------------\n", .{});
 
         // Must start with "cmd_" and end with ".txt"
-        var re = try zregexp.Regex.compile(allocator, "^cmd_.*\\.txt$");
+        var re = try zregex.Regex.compile(allocator, "^cmd_.*\\.txt$");
         defer re.deinit();
 
         const inputs = [_][]const u8{
@@ -143,7 +143,7 @@ pub fn main() !void {
         const Validator = struct {
             fn validateCommand(alloc: std.mem.Allocator, cmd: []const u8) !bool {
                 // Command must be 3-10 lowercase letters
-                var re = try zregexp.Regex.compile(alloc, "^[a-z]{3,10}$");
+                var re = try zregex.Regex.compile(alloc, "^[a-z]{3,10}$");
                 defer re.deinit();
                 return try re.test_(cmd);
             }
@@ -168,7 +168,7 @@ pub fn main() !void {
         std.debug.print("Example 7: Batch Validation\n", .{});
         std.debug.print("---------------------------\n", .{});
 
-        var re = try zregexp.Regex.compile(allocator, "^test.*");
+        var re = try zregex.Regex.compile(allocator, "^test.*");
         defer re.deinit();
 
         const files = [_][]const u8{

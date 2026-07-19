@@ -1,12 +1,12 @@
-//! Runs the extracted test262 cases (see test262_data.zig) against zregexp
+//! Runs the extracted test262 cases (see test262_data.zig) against zregex
 //! and reports a pass rate. See docs/ECMASCRIPT_COMPATIBILITY_PLAN.md Phase 6.
 //!
 //! Important semantic note: JS's `.test()`/`.exec()` are UNANCHORED substring
-//! searches, unlike zregexp's `test_()` (which requires a full-string match).
+//! searches, unlike zregex's `test_()` (which requires a full-string match).
 //! So test262 "test" cases are checked via `find() != null`, not `test_()`.
 
 const std = @import("std");
-const regex = @import("zregexp");
+const regex = @import("zregex");
 const data = @import("test262_data.zig");
 
 fn optionsFromFlags(flags: []const u8) regex.CompileOptions {

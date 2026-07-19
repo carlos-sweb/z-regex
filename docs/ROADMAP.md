@@ -1,4 +1,4 @@
-# zregexp Development Roadmap
+# zregex Development Roadmap
 
 ## Vision Statement
 

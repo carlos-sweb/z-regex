@@ -14,7 +14,7 @@ define the target, both used here:
 1. **Syntax completeness**: every construct the ECMAScript spec's `Pattern` grammar
    accepts, this engine also accepts with the same meaning (including both Unicode-mode
    and Annex B legacy-mode grammars).
-2. **Behavioral parity**: for any pattern + flags + input, `zregexp` produces the same
+2. **Behavioral parity**: for any pattern + flags + input, `zregex` produces the same
    match (or same `SyntaxError`) as V8/SpiderMonkey/JavaScriptCore.
 
 (2) is strictly harder than (1) and is, in the strictest sense, unbounded — full parity
@@ -811,7 +811,7 @@ subset," not "100% JS RegExp compatible" — `\p{...}`, case folding, `u`/`v` fl
 `$1`/`$&` replacement substitution are all real, known gaps this sample doesn't exercise.
 
 **Immediate payoff — a real crash bug found and fixed**: the very first extracted case run
-against zregexp (`/(a*)b\1+/.exec("baaac")`, test262's `S15.10.2.9_A1_T5.js`) **segfaulted
+against zregex (`/(a*)b\1+/.exec("baaac")`, test262's `S15.10.2.9_A1_T5.js`) **segfaulted
 the process** instead of returning a result, using the library's real default settings
 (not a contrived stress test). Root cause: `isStarConsumePath` (the heuristic that lets a
 quantifier loop use the iterative, zero-width-progress-guarded `matchStarGreedy` instead of
@@ -834,7 +834,7 @@ return `error.RecursionLimitExceeded`. Fixed in `src/executor/recursive_matcher.
 2. Incidental: `\s`/`\S` were missing `\f`/`\v` from their byte-range tables.
 3. A bug in the *test harness itself*, not the engine: `scripts/extract_test262.py`'s
    JS-string decoder didn't handle `\b`/`\f`/`\v` string escapes, silently corrupting
-   input strings like `"easy\btoride"` before they ever reached zregexp. Fixed the
+   input strings like `"easy\btoride"` before they ever reached zregex. Fixed the
    extractor and regenerated `tests/test262_data.zig` against a fresh test262 checkout.
 4. Six real backtracking-correctness bugs in the engine, found one at a time by
    re-running the suite after each fix and triaging the next-simplest failure: case
@@ -868,7 +868,7 @@ the surprise, not the raw effort.
   `Regex.replace` (first match only, JS `.replace` default semantics) and
   `Regex.replaceAll` (every match, JS `.replaceAll`/`.replace` with `/g`), plus one-shot
   free-function wrappers. Initially literal-only (same scope as the C API's
-  `zregexp_replace`); **later extended** to support JS's full replacement substitution
+  `zregex_replace`); **later extended** to support JS's full replacement substitution
   syntax — `$$`, `$&`, `` $` ``, `$'`, `$1`-`$99`, `$<name>` (`expandReplacement` in
   `src/regex.zig`) — since that was identified as the simplest remaining documented gap
   and tackled as a direct follow-up. A group that exists in the pattern but didn't
@@ -876,7 +876,7 @@ the surprise, not the raw effort.
   is left as literal text, matching JS exactly (no error). Needed threading a new
   `group_count: u8` field through `CompileResult`/`Regex` to distinguish those two cases,
   since `MatchResult.getCapture` alone can't tell "group doesn't exist" from "group
-  exists but is unset." The C API's `zregexp_replace` was deliberately left as literal-only
+  exists but is unset." The C API's `zregex_replace` was deliberately left as literal-only
   substitution — out of scope for this pass, not forgotten (see `KNOWN_LIMITATIONS.md`).
   Covered by regression tests in `src/regex.zig`.
 - ✅ `docs/KNOWN_LIMITATIONS.md` and `README.md`/`README.es.md` rewritten to cite the
@@ -902,43 +902,43 @@ escapes, the `v` flag, `d`/match-indices, duplicate named groups, lookbehind, an
 Asked directly whether 168/168 meant "100% of real JS RegExp," the honest answer was no —
 which prompted a deliberate strategic pivot: stop treating the biased sample as the goal,
 and build toward a **real, verifiable** conformance number instead. The approach: embed
-zregexp as the actual `RegExp` backend inside Node.js via FFI and run the official,
+zregex as the actual `RegExp` backend inside Node.js via FFI and run the official,
 unmodified test262 harness against it (full design in the approved plan file this phase
 was scoped from). That requires the C API to actually be usable as a real `RegExp`
 implementation, which it wasn't yet — hence Phase 0 below as this phase's prerequisite.
 
 ### Phase 0 (of this phase) — C API parity — ✅ DONE (2026-07-08)
 
-The C API (`include/zregexp.h`/`.hpp`, `src/c_api.zig`) had fallen behind the pure Zig
+The C API (`include/zregex.h`/`.hpp`, `src/c_api.zig`) had fallen behind the pure Zig
 API it wraps: no way to set `m`/`s`/`y`/`u`/`v` flags, no capture byte offsets, no named-
-group enumeration, no position-parameterized matching, and `zregexp_replace` was still
+group enumeration, no position-parameterized matching, and `zregex_replace` was still
 literal-only with no all-matches equivalent at all. Closed all five gaps:
 
 - `ZRegexOptions` gained `multiline`/`dot_all`/`sticky`/`unicode`/`v` bool fields
   (mirroring `CompileOptions` in `src/codegen/compiler.zig`), wired through
-  `zregexp_compile`.
-- `zregexp_match_capture_start`/`_end` and `zregexp_match_named_capture_start`/`_end`
+  `zregex_compile`.
+- `zregex_match_capture_start`/`_end` and `zregex_match_named_capture_start`/`_end`
   wrap `MatchResult.getCaptureIndices`/`getNamedCaptureIndices`, returning byte offsets
   (`ZREGEXP_NO_CAPTURE` = `SIZE_MAX` sentinel for "doesn't exist or didn't participate").
-- `zregexp_named_group_count`/`_name`/`_index` enumerate a compiled pattern's named
+- `zregex_named_group_count`/`_name`/`_index` enumerate a compiled pattern's named
   groups without needing a name in hand (`re.compiled.named_groups`), needed to build a
   JS-style `match.groups` object from the outside.
-- `zregexp_find_at` wraps `Regex.findAt` for `lastIndex`-driven `exec()` semantics.
-- `zregexp_replace` was rewritten to call the Zig `Regex.replace` (which already supports
+- `zregex_find_at` wraps `Regex.findAt` for `lastIndex`-driven `exec()` semantics.
+- `zregex_replace` was rewritten to call the Zig `Regex.replace` (which already supports
   `$$`/`$&`/`` $` ``/`$'`/`$1`-`$99`/`$<name>` substitution, added in Phase 7) instead of
-  reimplementing literal-only replacement in C; a new `zregexp_replace_all` wraps
+  reimplementing literal-only replacement in C; a new `zregex_replace_all` wraps
   `Regex.replaceAll`. This also deleted ~50 lines of duplicated find-all-and-splice logic
   that's now just two thin wrapper calls.
 
-**Bug found and fixed along the way**: `zregexp_match_group`'s doc comment always said
+**Bug found and fixed along the way**: `zregex_match_group`'s doc comment always said
 `group_index=0` returns the full match, but the implementation silently returned `NULL`
 for index 0 unconditionally — verified with a standalone C probe before the fix (`(a)(b)`
-matched against `"ab"`, `zregexp_match_group(match, 0)` returned `NULL` instead of
+matched against `"ab"`, `zregex_match_group(match, 0)` returned `NULL` instead of
 `"ab"`). Root cause: the internal `captures` array is 1-indexed by capture-group number
 (group numbering starts at 1 in the parser; slot 0 is never written by any `SAVE_START`/
 `SAVE_END`), so `getCapture(0, ...)`/`getCaptureIndices(0)` always read an always-invalid
-slot. Fixed by special-casing `group_index == 0` in `zregexp_match_group` and the two new
-`zregexp_match_capture_start`/`_end` functions to read `match.result.start`/`.end`/
+slot. Fixed by special-casing `group_index == 0` in `zregex_match_group` and the two new
+`zregex_match_capture_start`/`_end` functions to read `match.result.start`/`.end`/
 `.group()` directly instead of going through the 1-indexed capture lookup. This bug
 predates this session's work — it was latent in the original C API — but was only
 discovered because building `match.indices[0]` support (needed for the harness's `d`-flag
@@ -955,18 +955,18 @@ fix. Full `zig build test`/`examples`/`test-conformance`/`build` all still passe
 
 Immediately after the parity work above landed, explicit user direction: stop
 maintaining a public C/C++ surface at all. Every Zig-side feature this whole plan adds
-had been requiring five parallel updates (`src/c_api.zig`, `include/zregexp.h`,
-`include/zregexp.hpp`'s C++ RAII wrapper, `examples/cpp_example.cpp`, and doc sections in
+had been requiring five parallel updates (`src/c_api.zig`, `include/zregex.h`,
+`include/zregex.hpp`'s C++ RAII wrapper, `examples/cpp_example.cpp`, and doc sections in
 two READMEs) just to stay in sync — a real, recurring maintenance tax the parity work
 above made concrete, unrelated to the actual goal of this plan (JS conformance). Decision:
-zregexp is Zig-first; `include/zregexp.h`, `include/zregexp.hpp`, and
+zregex is Zig-first; `include/zregex.h`, `include/zregex.hpp`, and
 `examples/cpp_example.cpp` were **deleted**, and `build.zig` no longer builds a static
 library or installs headers (removed the `lib`/`static` steps and the two
 `addInstallHeaderFile` calls). `src/c_api.zig`'s exported C ABI itself is **kept
 unchanged** — it's still built via `zig build shared` — because it's exactly the FFI
-substrate Phase A below needs to drive zregexp from Node.js; it's just no longer
+substrate Phase A below needs to drive zregex from Node.js; it's just no longer
 presented, documented, or verified as a supported *public* interface. Anyone wanting to
-call zregexp from C/C++ externally would need to write their own bindings against those
+call zregex from C/C++ externally would need to write their own bindings against those
 exported symbols. `docs/KNOWN_LIMITATIONS.md` and both READMEs updated accordingly; full
 `zig build test`/`examples`/`test-conformance`/`build` re-verified clean after the
 `build.zig` changes (402/402, 168/168, clean build, no static lib or `zig-out/include`

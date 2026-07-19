@@ -1,8 +1,8 @@
-# Known Limitations - zregexp
+# Known Limitations - zregex
 
 This document describes the current, **verified** limitations and known issues in the
-zregexp regex engine. Every claim below was checked by direct execution against the
-current source tree (compiling small probe programs against the `zregexp` module and
+zregex regex engine. Every claim below was checked by direct execution against the
+current source tree (compiling small probe programs against the `zregex` module and
 observing the actual result), not inferred from design docs or past status reports.
 
 ## Version: 402/402 unit/integration tests passing, 168/168 (100%) on a test262-derived
@@ -256,25 +256,25 @@ older internal notes had previously (incorrectly) listed as broken:
 - **`src/c_api.zig`'s exported C ABI reached parity with the Zig API, then C/C++ was
   dropped as a supported public target** *(both later session, Phase 0/8 of the
   100%-conformance plan)* — `ZRegexOptions` gained `multiline`/`dot_all`/`sticky`/
-  `unicode`/`v` fields, `zregexp_replace`/`zregexp_replace_all` gained the same
+  `unicode`/`v` fields, `zregex_replace`/`zregex_replace_all` gained the same
   `$1`/`$&`/`` $` ``/`$'`/`$<name>` substitution as the Zig `replace`/`replaceAll`, and
   new capture-index/named-group-enumeration/`find_at` functions were added, all to make
   the exported symbols usable as a real `RegExp` backend for the planned test262
   conformance harness (see Phase 8 in `ECMASCRIPT_COMPATIBILITY_PLAN.md`). **Bug found
-  and fixed along the way**: `zregexp_match_group`'s doc comment always claimed
+  and fixed along the way**: `zregex_match_group`'s doc comment always claimed
   `group_index=0` returns the full match, but the implementation silently returned
   `NULL` for index 0 in every case — the internal capture array is 1-indexed by
   capture-group number (slot 0 is never written), so index 0 needs its own path rather
   than going through the same lookup as real capture groups; fixed by special-casing
   `group_index == 0` to read `match.result.start`/`.end`/`.group()` directly. Immediately
-  after this parity work landed, the project's own C/C++ header (`include/zregexp.h`),
-  C++ RAII wrapper (`include/zregexp.hpp`), and example were **deleted**: maintaining a
+  after this parity work landed, the project's own C/C++ header (`include/zregex.h`),
+  C++ RAII wrapper (`include/zregex.hpp`), and example were **deleted**: maintaining a
   hand-written header, a C++ wrapper class, an example, and doc sections in lockstep with
   every Zig-side feature was recurring maintenance debt unrelated to the actual goal (JS
-  conformance), and zregexp is Zig-first — see "Not Suitable For" below. The exported C
+  conformance), and zregex is Zig-first — see "Not Suitable For" below. The exported C
   symbols in `src/c_api.zig` still exist (built via `zig build shared`) purely as the FFI
   substrate the conformance harness needs; they're not a documented or supported public
-  API, and anyone wanting to call zregexp from C/C++ needs to write their own bindings
+  API, and anyone wanting to call zregex from C/C++ needs to write their own bindings
   against them.
 - **`\p{Name}`/`\P{Name}` Unicode property escapes (General_Category)** *(added in Phase
   3)* — `\p{L}`, `\p{Lu}`, `\p{Letter}`, `\p{gc=Nd}`, etc. now compile and match real
@@ -491,7 +491,7 @@ itself (not the engine) was found and fixed — `scripts/extract_test262.py`'s J
 decoder didn't handle `\b`/`\f`/`\v` string escapes (only regex-pattern escapes), so a
 JS source string literal like `"easy\btoride"` was silently corrupted into
 `"easybto\x08ride"` (dropping the backslash, keeping the `b`) before ever reaching
-zregexp — 4 tests were failing against wrong input data, not because of an engine bug;
+zregex — 4 tests were failing against wrong input data, not because of an engine bug;
 then the six deeper backtracking-correctness bugs listed above accounted for the rest.
 **Caveat unchanged from before**: 168 cases is still a small, simple-case-biased sample of
 test262's several-thousand-plus RegExp-relevant tests (see above) — 100% here means "100%
@@ -688,7 +688,7 @@ strictness is itself only the unrecognized-escape slice — see above).
 
 ---
 
-## When to Use zregexp
+## When to Use zregex
 
 ### ✅ Good For:
 - ASCII text matching with the full range of standard regex syntax (quantifiers,
@@ -738,7 +738,7 @@ strictness is itself only the unrecognized-escape slice — see above).
   leniently; a backreference to a nonexistent group isn't rejected)
 - Chained (`[A--B--C]`) or deeply nested `v`-mode class set operations, `\q{...}`
   multi-string literals, or `v`'s own additional reserved-punctuator restrictions
-- Calling zregexp directly from C or C++: no headers, wrapper library, or examples are
+- Calling zregex directly from C or C++: no headers, wrapper library, or examples are
   shipped or maintained (deliberate — see the "C API" bullet above). `src/c_api.zig`
   still exports a plain C ABI, built via `zig build shared`, but only as the internal FFI
   substrate for this project's own conformance-testing tooling; write your own bindings

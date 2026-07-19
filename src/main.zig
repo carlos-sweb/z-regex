@@ -1,11 +1,11 @@
-//! zregexp - ECMAScript Regular Expression Engine in Zig
+//! zregex - ECMAScript Regular Expression Engine in Zig
 //!
 //! A modern, safe, and efficient regex engine inspired by QuickJS's libregexp.
 //!
 //! Example usage:
 //! ```zig
 //! const std = @import("std");
-//! const regex = @import("zregexp");
+//! const regex = @import("zregex");
 //!
 //! pub fn main() !void {
 //!     var gpa = std.heap.DebugAllocator(.{}){};
@@ -91,7 +91,7 @@ pub const unicode = struct {
 
 // Placeholder for development
 pub fn placeholder() void {
-    std.debug.print("zregexp v{s} - Not yet implemented\n", .{version});
+    std.debug.print("zregex v{s} - Not yet implemented\n", .{version});
     std.debug.print("See ROADMAP.md for development timeline\n", .{});
 }
 

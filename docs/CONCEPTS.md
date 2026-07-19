@@ -1,6 +1,6 @@
 # Core Concepts
 
-This document explains the fundamental concepts behind zregexp.
+This document explains the fundamental concepts behind zregex.
 
 ## Regular Expression Engine Architecture
 
@@ -77,7 +77,7 @@ Backtracking explores:
 3. **Pattern analysis**: Detect dangerous patterns
 4. **Hybrid engines**: Switch to DFA for simple patterns
 
-**zregexp approach**:
+**zregex approach**:
 - Interrupt counter (check every 10k ops)
 - User-configurable timeout
 - Stack depth limiting

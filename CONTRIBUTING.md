@@ -1,6 +1,6 @@
-# Contributing to zregexp
+# Contributing to zregex
 
-Thank you for your interest in contributing to zregexp! This document provides guidelines and information for contributors.
+Thank you for your interest in contributing to zregex! This document provides guidelines and information for contributors.
 
 ## Code of Conduct
 
@@ -18,8 +18,8 @@ We are committed to providing a welcoming and inclusive environment. Be respectf
 
 ```bash
 # Clone the repository
-git clone https://github.com/yourusername/zregexp.git
-cd zregexp
+git clone https://github.com/yourusername/zregex.git
+cd zregex
 
 # Verify Zig installation
 zig version  # Should be 0.16.0 or later
@@ -457,6 +457,6 @@ By contributing, you agree that your contributions will be licensed under the MI
 
 ---
 
-**Thank you for contributing to zregexp!**
+**Thank you for contributing to zregex!**
 
 We appreciate your time and effort in making this project better.

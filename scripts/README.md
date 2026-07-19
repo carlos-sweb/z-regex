@@ -20,8 +20,8 @@ To regenerate against a fresh test262 checkout:
 git clone --depth 1 --filter=blob:none --sparse https://github.com/tc39/test262.git /tmp/test262
 cd /tmp/test262
 git sparse-checkout set test/built-ins/RegExp test/language/literals/regexp harness
-python3 /path/to/zregexp/scripts/extract_test262.py > /tmp/extracted.json
-cd /path/to/zregexp
+python3 /path/to/zregex/scripts/extract_test262.py > /tmp/extracted.json
+cd /path/to/zregex
 python3 scripts/gen_test262_data.py /tmp/extracted.json > tests/test262_data.zig
 zig build test-conformance
 ```

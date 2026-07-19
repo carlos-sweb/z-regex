@@ -1,15 +1,15 @@
 //! Integration Tests
 //!
-//! End-to-end tests for the zregexp engine, testing complete
+//! End-to-end tests for the zregex engine, testing complete
 //! patterns and real-world use cases.
 //!
 //! NOTE: Tests using quantifiers (*,+,?,{n,m}) and alternation (|) are
 //! temporarily disabled due to infinite loop bug in Pike VM.
 
 const std = @import("std");
-const zregexp = @import("zregexp");
+const zregex = @import("zregex");
 
-const Regex = zregexp.Regex;
+const Regex = zregex.Regex;
 
 // =============================================================================
 // Basic Pattern Matching
@@ -260,23 +260,23 @@ test "Integration: deeply nested groups" {
 
 test "Integration: convenience test" {
     // test_() does FULL match, so pattern must match entire input
-    try std.testing.expect(try zregexp.test_(std.testing.allocator, "quick", "quick"));
-    try std.testing.expect(!try zregexp.test_(std.testing.allocator, "slow", "quick test"));
+    try std.testing.expect(try zregex.test_(std.testing.allocator, "quick", "quick"));
+    try std.testing.expect(!try zregex.test_(std.testing.allocator, "slow", "quick test"));
 
     // For partial matching, use find()
-    const result = try zregexp.find(std.testing.allocator, "quick", "quick test");
+    const result = try zregex.find(std.testing.allocator, "quick", "quick test");
     try std.testing.expect(result != null);
     if (result) |r| r.deinit();
 }
 
 test "Integration: convenience find" {
-    const find_result = try zregexp.find(std.testing.allocator, "test", "this is a test");
+    const find_result = try zregex.find(std.testing.allocator, "test", "this is a test");
     try std.testing.expect(find_result != null);
     defer find_result.?.deinit();
 }
 
 test "Integration: convenience findAll" {
-    var findall_result = try zregexp.findAll(std.testing.allocator, "t", "test");
+    var findall_result = try zregex.findAll(std.testing.allocator, "t", "test");
     defer {
         for (findall_result.items) |match| {
             match.deinit();

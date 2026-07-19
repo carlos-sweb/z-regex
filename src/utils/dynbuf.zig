@@ -1,4 +1,4 @@
-//! Dynamic buffer utilities for zregexp
+//! Dynamic buffer utilities for zregex
 //!
 //! This module provides a generic dynamic buffer implementation
 //! built on top of Zig's ArrayListUnmanaged with additional

@@ -1,30 +1,30 @@
 //! Basic Usage Example
 //!
-//! This example demonstrates the fundamental usage of zregexp:
+//! This example demonstrates the fundamental usage of zregex:
 //! - Compiling a regex pattern
 //! - Testing if a pattern matches
 //! - Finding matches in text
 //!
 //! Build and run:
-//!   zig build-exe basic_usage.zig --dep zregexp --mod zregexp:../src/main.zig
+//!   zig build-exe basic_usage.zig --dep zregex --mod zregex:../src/main.zig
 //!   ./basic_usage
 
 const std = @import("std");
-const zregexp = @import("zregexp");
+const zregex = @import("zregex");
 
 pub fn main() !void {
     var gpa = std.heap.DebugAllocator(.{}){};
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
 
-    std.debug.print("=== zregexp Basic Usage Example ===\n\n", .{});
+    std.debug.print("=== zregex Basic Usage Example ===\n\n", .{});
 
     // Example 1: Simple pattern matching
     {
         std.debug.print("Example 1: Simple Pattern Matching\n", .{});
         std.debug.print("-----------------------------------\n", .{});
 
-        var re = try zregexp.Regex.compile(allocator, "hello");
+        var re = try zregex.Regex.compile(allocator, "hello");
         defer re.deinit();
 
         const text1 = "hello world";
@@ -51,7 +51,7 @@ pub fn main() !void {
         std.debug.print("Example 2: Finding Matches\n", .{});
         std.debug.print("--------------------------\n", .{});
 
-        var re = try zregexp.Regex.compile(allocator, "world");
+        var re = try zregex.Regex.compile(allocator, "world");
         defer re.deinit();
 
         const text = "hello world, beautiful world";
@@ -73,7 +73,7 @@ pub fn main() !void {
         const pattern = "quick";
         const text = "the quick brown fox";
 
-        if (try zregexp.test_(allocator, pattern, text)) {
+        if (try zregex.test_(allocator, pattern, text)) {
             std.debug.print("Pattern '{f}' matches in '{f}'\n\n", .{
                 std.zig.fmtString(pattern),
                 std.zig.fmtString(text),
@@ -86,7 +86,7 @@ pub fn main() !void {
         std.debug.print("Example 4: Metacharacters\n", .{});
         std.debug.print("-------------------------\n", .{});
 
-        var re = try zregexp.Regex.compile(allocator, "h.llo");
+        var re = try zregex.Regex.compile(allocator, "h.llo");
         defer re.deinit();
 
         const tests = [_][]const u8{ "hello", "hallo", "hxllo", "hllo" };
@@ -108,7 +108,7 @@ pub fn main() !void {
         const tests = [_][]const u8{ "", "a", "aa", "aaa" };
 
         for (patterns) |pattern| {
-            var re = try zregexp.Regex.compile(allocator, pattern);
+            var re = try zregex.Regex.compile(allocator, pattern);
             defer re.deinit();
 
             std.debug.print("Pattern: '{f}'\n", .{std.zig.fmtString(pattern)});
@@ -125,7 +125,7 @@ pub fn main() !void {
         std.debug.print("Example 6: Anchors\n", .{});
         std.debug.print("------------------\n", .{});
 
-        var re = try zregexp.Regex.compile(allocator, "^hello$");
+        var re = try zregex.Regex.compile(allocator, "^hello$");
         defer re.deinit();
 
         const tests = [_][]const u8{ "hello", "hello world", "say hello", "hello there" };

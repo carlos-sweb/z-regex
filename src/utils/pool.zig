@@ -1,4 +1,4 @@
-//! Object pooling for zregexp
+//! Object pooling for zregex
 //!
 //! This module provides generic object pooling to reduce allocation
 //! overhead for frequently created and destroyed objects during

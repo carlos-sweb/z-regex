@@ -8,7 +8,7 @@ pub fn build(b: *std.Build) void {
     // Module for the exported C ABI (src/c_api.zig). This is *not* a supported public
     // C/C++ API -- no headers or wrapper are shipped for it. It exists solely as the
     // FFI substrate the test262 conformance harness (docs/ECMASCRIPT_COMPATIBILITY_PLAN.md
-    // Phase 8) drives zregexp through from Node.js. Anyone else wanting to call zregexp
+    // Phase 8) drives zregex through from Node.js. Anyone else wanting to call zregex
     // from C/C++ can link against the shared library and write their own bindings
     // against these exported symbols.
     const c_api_module = b.createModule(.{
@@ -18,8 +18,8 @@ pub fn build(b: *std.Build) void {
     });
 
     // Public module exposed to downstream consumers via the Zig package manager
-    // (e.g. `b.dependency("zregexp", .{}).module("zregexp")`).
-    const lib_module = b.addModule("zregexp", .{
+    // (e.g. `b.dependency("zregex", .{}).module("zregex")`).
+    const lib_module = b.addModule("zregex", .{
         .root_source_file = b.path("src/main.zig"),
         .target = target,
         .optimize = optimize,
@@ -34,7 +34,7 @@ pub fn build(b: *std.Build) void {
     // library and no headers are installed: there's no supported static-linking or
     // header-based C/C++ integration path anymore.
     const shared_lib = b.addLibrary(.{
-        .name = "zregexp",
+        .name = "zregex",
         .root_module = c_api_module,
         .version = .{ .major = 1, .minor = 0, .patch = 0 },
         .linkage = .dynamic,
@@ -58,7 +58,7 @@ pub fn build(b: *std.Build) void {
         .target = target,
         .optimize = optimize,
     });
-    integration_module.addImport("zregexp", lib_module);
+    integration_module.addImport("zregex", lib_module);
 
     const integration_tests = b.addTest(.{
         .root_module = integration_module,
@@ -87,7 +87,7 @@ pub fn build(b: *std.Build) void {
         .target = target,
         .optimize = optimize,
     });
-    conformance_module.addImport("zregexp", lib_module);
+    conformance_module.addImport("zregex", lib_module);
 
     const conformance_tests = b.addTest(.{
         .root_module = conformance_module,
@@ -124,7 +124,7 @@ pub fn build(b: *std.Build) void {
             .target = target,
             .optimize = optimize,
         });
-        example_module.addImport("zregexp", lib_module);
+        example_module.addImport("zregex", lib_module);
 
         const example_exe = b.addExecutable(.{
             .name = name,

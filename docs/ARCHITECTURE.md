@@ -12,7 +12,7 @@
 
 ## Philosophy
 
-zregexp follows these core principles:
+zregex follows these core principles:
 
 1. **Separation of Concerns**: Each subsystem is independent and testable
 2. **Explicit over Implicit**: No hidden allocations, clear ownership

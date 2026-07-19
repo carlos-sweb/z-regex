@@ -1,4 +1,4 @@
-# zregexp - Motor Moderno de Expresiones Regulares para Zig
+# zregex - Motor Moderno de Expresiones Regulares para Zig
 
 [![Licencia: MIT](https://img.shields.io/badge/Licencia-MIT-blue.svg)](LICENSE)
 [![Tests](https://img.shields.io/badge/tests-402%2F402-brightgreen)](#)
@@ -69,8 +69,8 @@ Agrega a tu `build.zig.zon`:
 
 ```zig
 .dependencies = .{
-    .zregexp = .{
-        .url = "https://github.com/tuusuario/zregexp/archive/refs/tags/v1.0.0.tar.gz",
+    .zregex = .{
+        .url = "https://github.com/tuusuario/zregex/archive/refs/tags/v1.0.0.tar.gz",
         .hash = "...",
     },
 },
@@ -79,19 +79,19 @@ Agrega a tu `build.zig.zon`:
 En tu `build.zig`:
 
 ```zig
-const zregexp = b.dependency("zregexp", .{
+const zregex = b.dependency("zregex", .{
     .target = target,
     .optimize = optimize,
 });
-exe.root_module.addImport("zregexp", zregexp.module("zregexp"));
+exe.root_module.addImport("zregex", zregex.module("zregex"));
 ```
 
-> **Nota sobre C/C++**: zregexp es una librería Zig-first y no distribuye una API C/C++
+> **Nota sobre C/C++**: zregex es una librería Zig-first y no distribuye una API C/C++
 > soportada (sin headers, sin librería wrapper, sin artefactos de build para linkeo
 > externo). Sí exporta un ABI C simple (`src/c_api.zig`, compilado como librería
 > compartida vía `zig build shared`) que las herramientas propias del proyecto usan vía
 > FFI — ver [`ECMASCRIPT_COMPATIBILITY_PLAN.md`](docs/ECMASCRIPT_COMPATIBILITY_PLAN.md)
-> Fase 8 (en inglés). Si querés llamar a zregexp desde C o C++, sos libre de escribir tus
+> Fase 8 (en inglés). Si querés llamar a zregex desde C o C++, sos libre de escribir tus
 > propios bindings contra esos símbolos exportados; no se provee ni mantiene ninguno acá.
 
 ## 🚀 Inicio Rápido
@@ -100,7 +100,7 @@ exe.root_module.addImport("zregexp", zregexp.module("zregexp"));
 
 ```zig
 const std = @import("std");
-const regex = @import("zregexp");
+const regex = @import("zregex");
 
 pub fn main() !void {
     var gpa = std.heap.DebugAllocator(.{}){};
@@ -177,8 +177,8 @@ Reemplaza todas las coincidencias con `replacement` (como `String.prototype.repl
 
 ```bash
 # Clonar el repositorio
-git clone https://github.com/tuusuario/zregexp.git
-cd zregexp
+git clone https://github.com/tuusuario/zregex.git
+cd zregex
 
 # Ejecutar tests
 zig build test
@@ -197,7 +197,7 @@ zig build -Dtarget=aarch64-linux
 
 ## ⚡ Rendimiento
 
-zregexp utiliza una máquina virtual basada en bytecode para matching eficiente de patrones:
+zregex utiliza una máquina virtual basada en bytecode para matching eficiente de patrones:
 
 - **Compilación Rápida**: Los patrones se compilan a bytecode optimizado
 - **Ejecución Eficiente**: Interpretación directa de bytecode con overhead mínimo
@@ -220,7 +220,7 @@ Tiempo: ~200ns por match
 
 ### Protección contra ReDoS
 
-zregexp incluye protección integrada contra ataques de Denegación de Servicio por Expresiones Regulares (ReDoS):
+zregex incluye protección integrada contra ataques de Denegación de Servicio por Expresiones Regulares (ReDoS):
 
 - **Límite de Profundidad de Recursión**: Por defecto 1000 (configurable)
 - **Límite de Pasos**: Por defecto 1,000,000 (configurable)
@@ -279,8 +279,8 @@ const password_pattern = "^(?=.*[a-z])(?=.*[A-Z])(?=.*\\d).{8,}$";
 
 ```bash
 # Clonar y compilar
-git clone https://github.com/tuusuario/zregexp.git
-cd zregexp
+git clone https://github.com/tuusuario/zregex.git
+cd zregex
 zig build test
 
 # Ejecutar tests específicos
@@ -305,8 +305,8 @@ Este proyecto está licenciado bajo la Licencia MIT - ver el archivo [LICENSE](L
 
 ## 📬 Contacto
 
-- GitHub Issues: [Reportar bugs o solicitar características](https://github.com/tuusuario/zregexp/issues)
-- Discussions: [Hacer preguntas y compartir ideas](https://github.com/tuusuario/zregexp/discussions)
+- GitHub Issues: [Reportar bugs o solicitar características](https://github.com/tuusuario/zregex/issues)
+- Discussions: [Hacer preguntas y compartir ideas](https://github.com/tuusuario/zregex/discussions)
 
 ## 🗺️ Hoja de Ruta
 
@@ -350,7 +350,7 @@ Este proyecto está licenciado bajo la Licencia MIT - ver el archivo [LICENSE](L
 
 ## 🏆 Comparación de Características
 
-| Característica | zregexp | JavaScript | PCRE2 | RE2 |
+| Característica | zregex | JavaScript | PCRE2 | RE2 |
 |----------------|---------|------------|-------|-----|
 | Lookahead | ✅ | ✅ | ✅ | ✅ |
 | Lookbehind | ✅ | ✅ | ✅ | ❌ |

@@ -1,6 +1,6 @@
-# zregexp Examples
+# zregex Examples
 
-This directory contains practical examples demonstrating how to use the zregexp library.
+This directory contains practical examples demonstrating how to use the zregex library.
 
 ## Available Examples
 
@@ -15,7 +15,7 @@ Demonstrates fundamental operations:
 
 **Run:**
 ```bash
-zig build-exe basic_usage.zig --dep zregexp --mod zregexp:../src/main.zig
+zig build-exe basic_usage.zig --dep zregex --mod zregex:../src/main.zig
 ./basic_usage
 ```
 
@@ -29,7 +29,7 @@ Shows how to work with capture groups:
 
 **Run:**
 ```bash
-zig build-exe capture_groups.zig --dep zregexp --mod zregexp:../src/main.zig
+zig build-exe capture_groups.zig --dep zregex --mod zregex:../src/main.zig
 ./capture_groups
 ```
 
@@ -43,7 +43,7 @@ Demonstrates finding all matches:
 
 **Run:**
 ```bash
-zig build-exe find_all.zig --dep zregexp --mod zregexp:../src/main.zig
+zig build-exe find_all.zig --dep zregex --mod zregex:../src/main.zig
 ./find_all
 ```
 
@@ -58,7 +58,7 @@ Real-world validation examples:
 
 **Run:**
 ```bash
-zig build-exe validation.zig --dep zregexp --mod zregexp:../src/main.zig
+zig build-exe validation.zig --dep zregex --mod zregex:../src/main.zig
 ./validation
 ```
 
@@ -68,14 +68,14 @@ zig build-exe validation.zig --dep zregexp --mod zregexp:../src/main.zig
 
 ```zig
 const std = @import("std");
-const zregexp = @import("zregexp");
+const zregex = @import("zregex");
 
 var gpa = std.heap.GeneralPurposeAllocator(.{}){};
 defer _ = gpa.deinit();
 const allocator = gpa.allocator();
 
 // Compile once, use many times
-var re = try zregexp.Regex.compile(allocator, "pattern");
+var re = try zregex.Regex.compile(allocator, "pattern");
 defer re.deinit();
 ```
 
@@ -119,7 +119,7 @@ for (matches.items) |match| {
 ### Working with Capture Groups
 
 ```zig
-var re = try zregexp.Regex.compile(allocator, "(capture) (this)");
+var re = try zregex.Regex.compile(allocator, "(capture) (this)");
 defer re.deinit();
 
 if (try re.find("capture this")) |match| {
@@ -134,18 +134,18 @@ if (try re.find("capture this")) |match| {
 
 ```zig
 // Test without storing compiled regex
-if (try zregexp.test_(allocator, "pattern", "text")) {
+if (try zregex.test_(allocator, "pattern", "text")) {
     // Matched!
 }
 
 // Find without storing compiled regex
-if (try zregexp.find(allocator, "pattern", "text")) |match| {
+if (try zregex.find(allocator, "pattern", "text")) |match| {
     defer match.deinit();
     // Process match
 }
 
 // Find all without storing compiled regex
-var matches = try zregexp.findAll(allocator, "pattern", "text");
+var matches = try zregex.findAll(allocator, "pattern", "text");
 defer {
     for (matches.items) |match| match.deinit();
     matches.deinit(allocator);

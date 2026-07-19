@@ -1,6 +1,6 @@
-//! C Foreign Function Interface (FFI) for zregexp
+//! C Foreign Function Interface (FFI) for zregex
 //!
-//! This module implements the C API defined in zregexp.h by wrapping the Zig regex module.
+//! This module implements the C API defined in zregex.h by wrapping the Zig regex module.
 //! It handles memory management, error handling, and type conversions between C and Zig.
 
 const std = @import("std");
@@ -40,7 +40,7 @@ pub const ZMatchList = struct {
 };
 
 // =============================================================================
-// Error Codes (must match zregexp.h)
+// Error Codes (must match zregex.h)
 // =============================================================================
 
 pub const ZRegexError = enum(c_int) {
@@ -56,7 +56,7 @@ pub const ZRegexError = enum(c_int) {
 };
 
 // =============================================================================
-// Compilation Options (must match zregexp.h)
+// Compilation Options (must match zregex.h)
 // =============================================================================
 
 pub const ZRegexOptions = extern struct {
@@ -112,7 +112,7 @@ fn sliceToCString(slice: []const u8) ![]u8 {
 // Version Information
 // =============================================================================
 
-export fn zregexp_version() [*:0]const u8 {
+export fn zregex_version() [*:0]const u8 {
     return "1.0.0";
 }
 
@@ -120,7 +120,7 @@ export fn zregexp_version() [*:0]const u8 {
 // Options
 // =============================================================================
 
-export fn zregexp_default_options() ZRegexOptions {
+export fn zregex_default_options() ZRegexOptions {
     return .{
         .case_insensitive = false,
         .multiline = false,
@@ -138,7 +138,7 @@ export fn zregexp_default_options() ZRegexOptions {
 // Compilation and Destruction
 // =============================================================================
 
-export fn zregexp_compile(pattern: [*:0]const u8, options: ?*const ZRegexOptions) ?*ZRegex {
+export fn zregex_compile(pattern: [*:0]const u8, options: ?*const ZRegexOptions) ?*ZRegex {
     clearError();
 
     const pattern_slice = cStringToSlice(pattern);
@@ -177,7 +177,7 @@ export fn zregexp_compile(pattern: [*:0]const u8, options: ?*const ZRegexOptions
     return heap_re;
 }
 
-export fn zregexp_free(re: ?*ZRegex) void {
+export fn zregex_free(re: ?*ZRegex) void {
     if (re) |r| {
         r.deinit();
         allocator.destroy(r);
@@ -188,11 +188,11 @@ export fn zregexp_free(re: ?*ZRegex) void {
 // Named Groups
 // =============================================================================
 
-export fn zregexp_named_group_count(re: *ZRegex) usize {
+export fn zregex_named_group_count(re: *ZRegex) usize {
     return re.compiled.named_groups.len;
 }
 
-export fn zregexp_named_group_name(re: *ZRegex, index: usize) ?[*:0]u8 {
+export fn zregex_named_group_name(re: *ZRegex, index: usize) ?[*:0]u8 {
     clearError();
 
     if (index >= re.compiled.named_groups.len) return null;
@@ -202,11 +202,11 @@ export fn zregexp_named_group_name(re: *ZRegex, index: usize) ?[*:0]u8 {
         return null;
     };
 
-    // Caller must free with zregexp_string_free()
+    // Caller must free with zregex_string_free()
     return @ptrCast(@constCast(buf.ptr));
 }
 
-export fn zregexp_named_group_index(re: *ZRegex, index: usize) u8 {
+export fn zregex_named_group_index(re: *ZRegex, index: usize) u8 {
     if (index >= re.compiled.named_groups.len) return 0;
     return re.compiled.named_groups[index].index;
 }
@@ -217,7 +217,7 @@ export fn zregexp_named_group_index(re: *ZRegex, index: usize) u8 {
 
 /// Wrap a matched `MatchResult` (and a duplicate of the input it matched
 /// against) in a heap-allocated `ZMatch`, or clean up and report an error.
-/// Shared by `zregexp_find` and `zregexp_find_at`.
+/// Shared by `zregex_find` and `zregex_find_at`.
 fn wrapMatch(input_slice: []const u8, match: MatchResult) ?*ZMatch {
     const input_dup = allocator.dupe(u8, input_slice) catch {
         match.deinit();
@@ -240,7 +240,7 @@ fn wrapMatch(input_slice: []const u8, match: MatchResult) ?*ZMatch {
     return heap_match;
 }
 
-export fn zregexp_find(re: *ZRegex, input: [*:0]const u8) ?*ZMatch {
+export fn zregex_find(re: *ZRegex, input: [*:0]const u8) ?*ZMatch {
     clearError();
 
     const input_slice = cStringToSlice(input);
@@ -254,7 +254,7 @@ export fn zregexp_find(re: *ZRegex, input: [*:0]const u8) ?*ZMatch {
     return null;
 }
 
-export fn zregexp_find_at(re: *ZRegex, input: [*:0]const u8, start_byte_offset: usize) ?*ZMatch {
+export fn zregex_find_at(re: *ZRegex, input: [*:0]const u8, start_byte_offset: usize) ?*ZMatch {
     clearError();
 
     const input_slice = cStringToSlice(input);
@@ -268,7 +268,7 @@ export fn zregexp_find_at(re: *ZRegex, input: [*:0]const u8, start_byte_offset: 
     return null;
 }
 
-export fn zregexp_find_all(re: *ZRegex, input: [*:0]const u8) ?*ZMatchList {
+export fn zregex_find_all(re: *ZRegex, input: [*:0]const u8) ?*ZMatchList {
     clearError();
 
     const input_slice = cStringToSlice(input);
@@ -316,7 +316,7 @@ export fn zregexp_find_all(re: *ZRegex, input: [*:0]const u8) ?*ZMatchList {
     return heap_list;
 }
 
-export fn zregexp_is_match(re: *ZRegex, input: [*:0]const u8) bool {
+export fn zregex_is_match(re: *ZRegex, input: [*:0]const u8) bool {
     clearError();
 
     const input_slice = cStringToSlice(input);
@@ -338,25 +338,25 @@ export fn zregexp_is_match(re: *ZRegex, input: [*:0]const u8) bool {
 // Match Result Functions
 // =============================================================================
 
-export fn zregexp_match_slice(match: *ZMatch) [*:0]u8 {
+export fn zregex_match_slice(match: *ZMatch) [*:0]u8 {
     const slice = match.result.group(match.input);
     const buf = sliceToCString(slice) catch {
         setError(.ZREGEXP_ERROR_OUT_OF_MEMORY);
         return @constCast("");
     };
-    // Caller must free with zregexp_string_free()
+    // Caller must free with zregex_string_free()
     return @ptrCast(@constCast(buf.ptr));
 }
 
-export fn zregexp_match_start(match: *ZMatch) usize {
+export fn zregex_match_start(match: *ZMatch) usize {
     return match.result.start;
 }
 
-export fn zregexp_match_end(match: *ZMatch) usize {
+export fn zregex_match_end(match: *ZMatch) usize {
     return match.result.end;
 }
 
-export fn zregexp_match_group(match: *ZMatch, group_index: u8) ?[*:0]u8 {
+export fn zregex_match_group(match: *ZMatch, group_index: u8) ?[*:0]u8 {
     // Group 0 is the full match; it isn't stored in the internal captures
     // array (which is 1-indexed by capture group number), so it needs its
     // own path rather than going through `MatchResult.getCapture`.
@@ -380,39 +380,39 @@ export fn zregexp_match_group(match: *ZMatch, group_index: u8) ?[*:0]u8 {
         return null;
     };
 
-    // Caller must free with zregexp_string_free()
+    // Caller must free with zregex_string_free()
     return @ptrCast(@constCast(buf.ptr));
 }
 
 /// Sentinel for "group doesn't exist or didn't participate" -- matches
-/// `ZREGEXP_NO_CAPTURE` in zregexp.h.
+/// `ZREGEXP_NO_CAPTURE` in zregex.h.
 const NO_CAPTURE: usize = std.math.maxInt(usize);
 
-export fn zregexp_match_capture_start(match: *ZMatch, group_index: u8) usize {
-    // See the comment in zregexp_match_group: group 0 (the full match)
+export fn zregex_match_capture_start(match: *ZMatch, group_index: u8) usize {
+    // See the comment in zregex_match_group: group 0 (the full match)
     // isn't in the internal captures array and needs its own path.
     if (group_index == 0) return match.result.start;
     const idx = match.result.getCaptureIndices(group_index) orelse return NO_CAPTURE;
     return idx.start;
 }
 
-export fn zregexp_match_capture_end(match: *ZMatch, group_index: u8) usize {
+export fn zregex_match_capture_end(match: *ZMatch, group_index: u8) usize {
     if (group_index == 0) return match.result.end;
     const idx = match.result.getCaptureIndices(group_index) orelse return NO_CAPTURE;
     return idx.end;
 }
 
-export fn zregexp_match_named_capture_start(match: *ZMatch, name: [*:0]const u8) usize {
+export fn zregex_match_named_capture_start(match: *ZMatch, name: [*:0]const u8) usize {
     const idx = match.result.getNamedCaptureIndices(cStringToSlice(name)) orelse return NO_CAPTURE;
     return idx.start;
 }
 
-export fn zregexp_match_named_capture_end(match: *ZMatch, name: [*:0]const u8) usize {
+export fn zregex_match_named_capture_end(match: *ZMatch, name: [*:0]const u8) usize {
     const idx = match.result.getNamedCaptureIndices(cStringToSlice(name)) orelse return NO_CAPTURE;
     return idx.end;
 }
 
-export fn zregexp_match_free(match: ?*ZMatch) void {
+export fn zregex_match_free(match: ?*ZMatch) void {
     if (match) |m| {
         m.result.deinit();
         allocator.free(m.input);
@@ -424,18 +424,18 @@ export fn zregexp_match_free(match: ?*ZMatch) void {
 // Match List Functions
 // =============================================================================
 
-export fn zregexp_match_list_count(list: *ZMatchList) usize {
+export fn zregex_match_list_count(list: *ZMatchList) usize {
     return list.matches.items.len;
 }
 
-export fn zregexp_match_list_get(list: *ZMatchList, index: usize) ?*ZMatch {
+export fn zregex_match_list_get(list: *ZMatchList, index: usize) ?*ZMatch {
     if (index >= list.matches.items.len) {
         return null;
     }
     return &list.matches.items[index];
 }
 
-export fn zregexp_match_list_free(list: ?*ZMatchList) void {
+export fn zregex_match_list_free(list: ?*ZMatchList) void {
     if (list) |l| {
         // Free input (shared by all matches in list)
         if (l.matches.items.len > 0) {
@@ -456,7 +456,7 @@ export fn zregexp_match_list_free(list: ?*ZMatchList) void {
 // String Replacement
 // =============================================================================
 
-export fn zregexp_replace(re: *ZRegex, input: [*:0]const u8, replacement: [*:0]const u8) ?[*:0]u8 {
+export fn zregex_replace(re: *ZRegex, input: [*:0]const u8, replacement: [*:0]const u8) ?[*:0]u8 {
     clearError();
 
     const input_slice = cStringToSlice(input);
@@ -476,7 +476,7 @@ export fn zregexp_replace(re: *ZRegex, input: [*:0]const u8, replacement: [*:0]c
     return @ptrCast(@constCast(buf.ptr));
 }
 
-export fn zregexp_replace_all(re: *ZRegex, input: [*:0]const u8, replacement: [*:0]const u8) ?[*:0]u8 {
+export fn zregex_replace_all(re: *ZRegex, input: [*:0]const u8, replacement: [*:0]const u8) ?[*:0]u8 {
     clearError();
 
     const input_slice = cStringToSlice(input);
@@ -496,7 +496,7 @@ export fn zregexp_replace_all(re: *ZRegex, input: [*:0]const u8, replacement: [*
     return @ptrCast(@constCast(buf.ptr));
 }
 
-export fn zregexp_string_free(str: ?[*:0]u8) void {
+export fn zregex_string_free(str: ?[*:0]u8) void {
     if (str) |s| {
         // Reconstruct the full buffer (len + 1 for null)
         const len = std.mem.len(s);
@@ -509,11 +509,11 @@ export fn zregexp_string_free(str: ?[*:0]u8) void {
 // Error Handling
 // =============================================================================
 
-export fn zregexp_last_error() ZRegexError {
+export fn zregex_last_error() ZRegexError {
     return last_error;
 }
 
-export fn zregexp_error_message(err: ZRegexError) [*:0]const u8 {
+export fn zregex_error_message(err: ZRegexError) [*:0]const u8 {
     return switch (err) {
         .ZREGEXP_OK => "No error",
         .ZREGEXP_ERROR_SYNTAX => "Syntax error in pattern",
@@ -527,7 +527,7 @@ export fn zregexp_error_message(err: ZRegexError) [*:0]const u8 {
     };
 }
 
-export fn zregexp_clear_error() void {
+export fn zregex_clear_error() void {
     clearError();
 }
 
@@ -535,7 +535,7 @@ export fn zregexp_clear_error() void {
 // Utility Functions
 // =============================================================================
 
-export fn zregexp_escape(input: [*:0]const u8) ?[*:0]u8 {
+export fn zregex_escape(input: [*:0]const u8) ?[*:0]u8 {
     clearError();
 
     const input_slice = cStringToSlice(input);
@@ -567,7 +567,7 @@ export fn zregexp_escape(input: [*:0]const u8) ?[*:0]u8 {
     return @ptrCast(@constCast(buf.ptr));
 }
 
-export fn zregexp_is_valid_pattern(pattern: [*:0]const u8) bool {
+export fn zregex_is_valid_pattern(pattern: [*:0]const u8) bool {
     clearError();
 
     const pattern_slice = cStringToSlice(pattern);

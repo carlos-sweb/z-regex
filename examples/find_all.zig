@@ -4,11 +4,11 @@
 //! in text, not just the first match.
 //!
 //! Build and run:
-//!   zig build-exe find_all.zig --dep zregexp --mod zregexp:../src/main.zig
+//!   zig build-exe find_all.zig --dep zregex --mod zregex:../src/main.zig
 //!   ./find_all
 
 const std = @import("std");
-const zregexp = @import("zregexp");
+const zregex = @import("zregex");
 
 pub fn main() !void {
     var gpa = std.heap.DebugAllocator(.{}){};
@@ -22,7 +22,7 @@ pub fn main() !void {
         std.debug.print("Example 1: Find All Letters\n", .{});
         std.debug.print("---------------------------\n", .{});
 
-        var re = try zregexp.Regex.compile(allocator, "a");
+        var re = try zregex.Regex.compile(allocator, "a");
         defer re.deinit();
 
         const text = "banana";
@@ -54,7 +54,7 @@ pub fn main() !void {
         std.debug.print("Example 2: Find All Words\n", .{});
         std.debug.print("-------------------------\n", .{});
 
-        var re = try zregexp.Regex.compile(allocator, "o+");
+        var re = try zregex.Regex.compile(allocator, "o+");
         defer re.deinit();
 
         const text = "foooobar boo zoo";
@@ -86,7 +86,7 @@ pub fn main() !void {
         std.debug.print("Example 3: Count Occurrences\n", .{});
         std.debug.print("----------------------------\n", .{});
 
-        var re = try zregexp.Regex.compile(allocator, "the");
+        var re = try zregex.Regex.compile(allocator, "the");
         defer re.deinit();
 
         const text = "the quick brown fox jumps over the lazy dog near the river";
@@ -109,7 +109,7 @@ pub fn main() !void {
         std.debug.print("Example 4: Find Multiple Patterns\n", .{});
         std.debug.print("---------------------------------\n", .{});
 
-        var re = try zregexp.Regex.compile(allocator, "cat|dog|bird");
+        var re = try zregex.Regex.compile(allocator, "cat|dog|bird");
         defer re.deinit();
 
         const text = "I have a cat and a dog, but no bird";
@@ -145,7 +145,7 @@ pub fn main() !void {
         std.debug.print("Pattern: '{f}'\n", .{std.zig.fmtString(pattern)});
         std.debug.print("Text: '{f}'\n", .{std.zig.fmtString(text)});
 
-        var matches = try zregexp.findAll(allocator, pattern, text);
+        var matches = try zregex.findAll(allocator, pattern, text);
         defer {
             for (matches.items) |match| {
                 match.deinit();
@@ -167,7 +167,7 @@ pub fn main() !void {
         std.debug.print("Example 6: No Matches Case\n", .{});
         std.debug.print("---------------------------\n", .{});
 
-        var re = try zregexp.Regex.compile(allocator, "xyz");
+        var re = try zregex.Regex.compile(allocator, "xyz");
         defer re.deinit();
 
         const text = "hello world";

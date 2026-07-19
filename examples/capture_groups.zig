@@ -4,11 +4,11 @@
 //! parts of matched text.
 //!
 //! Build and run:
-//!   zig build-exe capture_groups.zig --dep zregexp --mod zregexp:../src/main.zig
+//!   zig build-exe capture_groups.zig --dep zregex --mod zregex:../src/main.zig
 //!   ./capture_groups
 
 const std = @import("std");
-const zregexp = @import("zregexp");
+const zregex = @import("zregex");
 
 pub fn main() !void {
     var gpa = std.heap.DebugAllocator(.{}){};
@@ -22,7 +22,7 @@ pub fn main() !void {
         std.debug.print("Example 1: Simple Capture\n", .{});
         std.debug.print("--------------------------\n", .{});
 
-        var re = try zregexp.Regex.compile(allocator, "hello (world|there)");
+        var re = try zregex.Regex.compile(allocator, "hello (world|there)");
         defer re.deinit();
 
         const text = "hello world";
@@ -46,7 +46,7 @@ pub fn main() !void {
         std.debug.print("Example 2: Multiple Captures\n", .{});
         std.debug.print("----------------------------\n", .{});
 
-        var re = try zregexp.Regex.compile(allocator, "(a)(b)(c)");
+        var re = try zregex.Regex.compile(allocator, "(a)(b)(c)");
         defer re.deinit();
 
         const text = "abc";
@@ -73,7 +73,7 @@ pub fn main() !void {
         std.debug.print("Example 3: Nested Captures\n", .{});
         std.debug.print("--------------------------\n", .{});
 
-        var re = try zregexp.Regex.compile(allocator, "((ab)c)");
+        var re = try zregex.Regex.compile(allocator, "((ab)c)");
         defer re.deinit();
 
         const text = "abc";
@@ -97,7 +97,7 @@ pub fn main() !void {
 
         // Note: Character classes like [0-9] are not fully implemented yet
         // Using simple patterns for demonstration
-        var re = try zregexp.Regex.compile(allocator, "User: (.*), Age: (.*)");
+        var re = try zregex.Regex.compile(allocator, "User: (.*), Age: (.*)");
         defer re.deinit();
 
         const text = "User: Alice, Age: 30";
@@ -122,7 +122,7 @@ pub fn main() !void {
         std.debug.print("Example 5: Optional Captures\n", .{});
         std.debug.print("----------------------------\n", .{});
 
-        var re = try zregexp.Regex.compile(allocator, "a(bc)?d");
+        var re = try zregex.Regex.compile(allocator, "a(bc)?d");
         defer re.deinit();
 
         const texts = [_][]const u8{ "ad", "abcd" };
