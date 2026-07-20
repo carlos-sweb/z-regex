@@ -515,27 +515,54 @@ pub const Lexer = struct {
         }
     }
 
+    /// Implementation limit on how far a `{n,m}` quantifier is unrolled.
+    /// ECMA-262 permits arbitrarily large DecimalDigits counts (up to
+    /// 2**53-1), but the code generator lowers the *required* `min`
+    /// repetitions by emitting one copy of the atom apiece, so an
+    /// astronomical count (e.g. `b{9007199254740991}`) would overflow the
+    /// u32 counter (a safety-check panic) or exhaust memory. So we bound it:
+    ///   * a `max` above the limit becomes unbounded (`∞`) -- always correct,
+    ///     since no input can hold more repetitions than its own length; and
+    ///   * a `min` above the limit is clamped to the limit -- the sole lossy
+    ///     step, observable only for a subject that actually contains
+    ///     >= MAX_REPEAT_UNROLL repetitions (a >=64K-char adversarial input).
+    /// This is the same class of bounded-repeat limit engines like RE2 use.
+    /// A fully faithful fix would be a runtime counted loop (the unused
+    /// `LOOP` opcode was reserved for exactly that).
+    pub const MAX_REPEAT_UNROLL: u32 = 1 << 16;
+
+    /// Accumulate a decimal digit into a quantifier count, saturating once it
+    /// passes the unroll limit so no arithmetic can overflow no matter how
+    /// long the digit run is (the count is clamped at the return site).
+    fn accumCount(v: u64, digit: u8) u64 {
+        if (v > MAX_REPEAT_UNROLL) return v;
+        return v * 10 + digit;
+    }
+
     /// Parse repeat quantifier {n,m}
     fn parseRepeat(self: *Self, start_pos: usize) !Token {
-        var min: u32 = 0;
-        var max: u32 = 0;
+        const unbounded = std.math.maxInt(u32);
+        var min: u64 = 0;
+        var max: u64 = 0;
         var has_comma = false;
 
         // Parse min
         while (self.pos < self.pattern.len) {
             const c = self.pattern[self.pos];
             if (c >= '0' and c <= '9') {
-                min = min * 10 + (c - '0');
+                min = accumCount(min, c - '0');
                 self.pos += 1;
             } else if (c == ',') {
                 has_comma = true;
                 self.pos += 1;
                 break;
             } else if (c == '}') {
-                // {n} form
-                max = min;
+                // {n} form: exactly n. A count past the limit degrades to
+                // "clamped min, unbounded max" (see MAX_REPEAT_UNROLL).
                 self.pos += 1;
-                return Token.repeat_token(min, max, start_pos);
+                const n: u32 = @intCast(@min(min, MAX_REPEAT_UNROLL));
+                const m: u32 = if (min > MAX_REPEAT_UNROLL) unbounded else n;
+                return Token.repeat_token(n, m, start_pos);
             } else {
                 return error.InvalidRepeat;
             }
@@ -547,15 +574,19 @@ pub const Lexer = struct {
         while (self.pos < self.pattern.len) {
             const c = self.pattern[self.pos];
             if (c >= '0' and c <= '9') {
-                max = max * 10 + (c - '0');
+                max = accumCount(max, c - '0');
                 self.pos += 1;
             } else if (c == '}') {
                 self.pos += 1;
-                // {n,} means unlimited
-                if (max == 0 and self.pattern[self.pos - 2] == ',') {
-                    max = std.math.maxInt(u32);
-                }
-                return Token.repeat_token(min, max, start_pos);
+                const n: u32 = @intCast(@min(min, MAX_REPEAT_UNROLL));
+                // {n,} (no max digits) is unlimited; a max past the limit is
+                // treated as unlimited too -- correct for any real input.
+                const is_open = (max == 0 and self.pattern[self.pos - 2] == ',');
+                const m: u32 = if (is_open or max > MAX_REPEAT_UNROLL)
+                    unbounded
+                else
+                    @intCast(max);
+                return Token.repeat_token(n, m, start_pos);
             } else {
                 return error.InvalidRepeat;
             }
