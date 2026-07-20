@@ -116,6 +116,7 @@ pub const Matcher = struct {
     /// Check if pattern matches entire input
     pub fn matchFull(self: Self, input: []const u8) !bool {
         var matcher = RecursiveMatcher.init(self.allocator, self.bytecode, input);
+        defer matcher.deinit();
 
         const result = try matcher.matchFrom(0, 0);
 
@@ -133,6 +134,7 @@ pub const Matcher = struct {
         // Pass the FULL input to matcher (not a slice)
         // This allows lookbehind to see content before start_pos
         var matcher = RecursiveMatcher.init(self.allocator, self.bytecode, input);
+        defer matcher.deinit();
 
         const result = try matcher.matchFrom(0, start_pos);
         if (!result.matched) return null;

@@ -285,3 +285,39 @@ test "Integration: convenience findAll" {
     }
     try std.testing.expectEqual(@as(usize, 2), findall_result.items.len);
 }
+
+// =============================================================================
+// Nullable-quantifier regression (empty-body loops must not recurse forever)
+// =============================================================================
+
+test "Integration: nullable star does not stack-overflow and matches" {
+    // `(a?b??)*` on "ab": the group can match the empty string, which used
+    // to make the star loop recurse forever (SIGSEGV). ECMA-262 discards an
+    // iteration that matched empty; the whole "ab" must still match.
+    var re = try Regex.compile(std.testing.allocator, "(a?b??)*");
+    defer re.deinit();
+
+    const result = try re.find("ab");
+    try std.testing.expect(result != null);
+    defer result.?.deinit();
+    try std.testing.expectEqualStrings("ab", "ab"[result.?.start..result.?.end]);
+}
+
+test "Integration: nullable plus and empty-only bodies terminate" {
+    // Both loop shapes (star: closed by a backward GOTO; plus: closed by a
+    // backward SPLIT branch) with a body that can match empty must halt.
+    inline for (.{
+        .{ "(a?)+", "aaa", "aaa" },
+        .{ "(a*)*", "aaa", "aaa" },
+        .{ "(a*)*", "", "" },
+        .{ "x(a?)*y", "xy", "xy" },
+        .{ "(|a)*", "aaa", "aaa" },
+    }) |case| {
+        var re = try Regex.compile(std.testing.allocator, case[0]);
+        defer re.deinit();
+        const result = try re.find(case[1]);
+        try std.testing.expect(result != null);
+        defer result.?.deinit();
+        try std.testing.expectEqualStrings(case[2], case[1][result.?.start..result.?.end]);
+    }
+}

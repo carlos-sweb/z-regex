@@ -79,6 +79,15 @@ pub const CaptureGroup = struct {
     }
 };
 
+/// A loop back-edge we are currently re-entering, identified by the loop
+/// head's PC and the input position at which it was (re)entered. Used to
+/// detect zero-progress iterations of a nullable quantifier (see
+/// `matchBackEdge`).
+const LoopState = struct {
+    pc: usize,
+    pos: usize,
+};
+
 /// Recursive matcher
 pub const RecursiveMatcher = struct {
     allocator: Allocator,
@@ -88,6 +97,12 @@ pub const RecursiveMatcher = struct {
     recursion_depth: usize,
     step_count: usize,
     exec_options: ExecOptions,
+    /// Stack of loop heads currently being re-entered via a backward jump,
+    /// in recursion order. Guards against infinite recursion on quantifiers
+    /// whose body can match the empty string (e.g. `(a?b??)*`). Path-local:
+    /// entries are pushed before recursing into a back-edge and popped on
+    /// the way out, so only loops on the *active* recursion chain are seen.
+    loop_guard: std.ArrayListUnmanaged(LoopState),
 
     const Self = @This();
 
@@ -107,7 +122,44 @@ pub const RecursiveMatcher = struct {
             .recursion_depth = 0,
             .step_count = 0,
             .exec_options = options,
+            .loop_guard = .empty,
         };
+    }
+
+    pub fn deinit(self: *Self) void {
+        self.loop_guard.deinit(self.allocator);
+    }
+
+    /// Follow a backward control-flow edge (a loop back-edge) into a loop
+    /// head, enforcing ECMA-262's rule that a `*`/`+`/`{n,}` iteration which
+    /// matches the empty string is discarded rather than repeated. Without
+    /// this, a nullable body (one that can match at the same position it
+    /// started, e.g. `(a?b??)`) recurses forever and overflows the stack.
+    ///
+    /// If we are already re-entering this exact loop head (`target_pc`) at
+    /// this exact input position, the previous iteration consumed nothing,
+    /// so this iteration is refused (returns no match) and the caller's
+    /// SPLIT falls through to the loop's exit branch.
+    ///
+    /// KNOWN LIMITATION (capture value only, not the match): ECMA-262 also
+    /// says the discarded empty iteration's *capture writes* are thrown away,
+    /// so a group that participated only in a trailing/sole empty iteration
+    /// should read as its last non-empty value (or undefined). We refuse the
+    /// iteration but don't roll those writes back, so e.g. `/(a?)+/.exec("aaa")`
+    /// yields group1="" where V8 gives "a", and `/x(a?)*y/.exec("xy")` yields
+    /// "" where V8 gives undefined. The overall match (`[0]`) is always
+    /// correct; only these exotic capture values diverge. A faithful fix means
+    /// restructuring the loop into a spec RepeatMatcher (snapshotting captures
+    /// per iteration) -- tracked as a separate conformance item.
+    fn matchBackEdge(self: *Self, target_pc: usize, pos: usize) MatchError!MatchResult {
+        for (self.loop_guard.items) |g| {
+            if (g.pc == target_pc and g.pos == pos) {
+                return MatchResult{ .matched = false, .end_pos = pos };
+            }
+        }
+        try self.loop_guard.append(self.allocator, .{ .pc = target_pc, .pos = pos });
+        defer _ = self.loop_guard.pop();
+        return self.matchFrom(target_pc, pos);
     }
 
     /// Match from specific PC and string position
@@ -261,9 +313,13 @@ pub const RecursiveMatcher = struct {
             },
 
             .GOTO => {
-                // Unconditional jump
+                // Unconditional jump. A backward jump closes a `*`/`{n,}`
+                // loop (`generateStar`/`generateRepeat` emit `GOTO loop`);
+                // route it through the zero-progress guard so a nullable
+                // body can't recurse forever.
                 const offset = @as(i32, @bitCast(inst.operands[0]));
                 const new_pc: usize = @intCast(@as(i32, @intCast(pc)) + offset);
+                if (new_pc < pc) return self.matchBackEdge(new_pc, pos);
                 return self.matchFrom(new_pc, pos);
             },
 
@@ -328,10 +384,20 @@ pub const RecursiveMatcher = struct {
                     // atom either matches (commit to pc1) or it didn't apply
                     // at all, in which case falling through to pc2 is still
                     // correct (there's nothing to "give back").
-                    const result1 = try self.matchFrom(pc1, pos);
+                    // A branch that jumps backward closes a `+`/`{n,}` loop
+                    // whose body is too complex to be recognized as a simple
+                    // star above (`generatePlus` emits `e; SPLIT loop, end`
+                    // for e.g. a capturing group). Route backward branches
+                    // through the zero-progress guard so a nullable body
+                    // (`(a?)+`) can't recurse forever.
+                    const result1 = if (pc1 < pc)
+                        try self.matchBackEdge(pc1, pos)
+                    else
+                        try self.matchFrom(pc1, pos);
                     if (result1.matched) {
                         return result1;
                     }
+                    if (pc2 < pc) return self.matchBackEdge(pc2, pos);
                     return self.matchFrom(pc2, pos);
                 }
             },
@@ -1449,6 +1515,7 @@ test "RecursiveMatcher: question quantifier" {
     // Test with empty string (should match)
     {
         var matcher = RecursiveMatcher.init(std.testing.allocator, result.bytecode, "");
+        defer matcher.deinit();
         const exec_result = try matcher.matchFrom(0, 0);
         try std.testing.expect(exec_result.matched);
         try std.testing.expectEqual(@as(usize, 0), exec_result.end_pos);
@@ -1457,6 +1524,7 @@ test "RecursiveMatcher: question quantifier" {
     // Test with "a" (should match and consume)
     {
         var matcher = RecursiveMatcher.init(std.testing.allocator, result.bytecode, "a");
+        defer matcher.deinit();
         const exec_result = try matcher.matchFrom(0, 0);
         try std.testing.expect(exec_result.matched);
         try std.testing.expectEqual(@as(usize, 1), exec_result.end_pos);
@@ -1472,6 +1540,7 @@ test "RecursiveMatcher: simple star quantifier" {
     // Test with empty string (should match)
     {
         var matcher = RecursiveMatcher.init(std.testing.allocator, result.bytecode, "");
+        defer matcher.deinit();
         const exec_result = try matcher.matchFrom(0, 0);
         try std.testing.expect(exec_result.matched);
         try std.testing.expectEqual(@as(usize, 0), exec_result.end_pos);
@@ -1480,6 +1549,7 @@ test "RecursiveMatcher: simple star quantifier" {
     // Test with "aaa" (should match)
     {
         var matcher = RecursiveMatcher.init(std.testing.allocator, result.bytecode, "aaa");
+        defer matcher.deinit();
         const exec_result = try matcher.matchFrom(0, 0);
 
         try std.testing.expect(exec_result.matched);
@@ -1498,6 +1568,7 @@ test "RecursiveMatcher: ReDoS protection - step limit" {
     const malicious_input = "aaaaaaaaaaaaaaaaaaaaX"; // 20 'a's + 'X'
 
     var matcher = RecursiveMatcher.init(std.testing.allocator, result.bytecode, malicious_input);
+    defer matcher.deinit();
 
     // Debería alcanzar el límite de pasos y lanzar error
     const exec_result = matcher.matchFrom(0, 0);
@@ -1519,6 +1590,7 @@ test "RecursiveMatcher: quantified backreference to an empty capture doesn't cra
     defer result.deinit();
 
     var matcher = RecursiveMatcher.init(std.testing.allocator, result.bytecode, "baaac");
+    defer matcher.deinit();
     const exec_result = try matcher.matchFrom(0, 0);
     try std.testing.expect(exec_result.matched);
     // Matches "b": group 1 captures "" (no leading 'a' at position 0), \1+
@@ -1551,6 +1623,7 @@ test "RecursiveMatcher: ReDoS protection - recursion limit" {
         "aaaaaaaaaa", // 10 'a's
         options,
     );
+    defer matcher.deinit();
 
     // Debería alcanzar el límite de recursión
     const exec_result = matcher.matchFrom(0, 0);
