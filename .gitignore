@@ -63,7 +63,7 @@ Desktop.ini
 compile_commands.json
 
 # Core dumps
-core
+/core
 core.*
 vgcore.*
 
