@@ -575,16 +575,38 @@ pub const RecursiveMatcher = struct {
         return self.matchFrom(pc + inst_size, pos + 1);
     }
 
+    /// Decodes a WTF-8-encoded lone UTF-16 surrogate (U+D800-U+DFFF) --
+    /// the 3-byte sequence z-string/z-lexer/z-interpreter/z-json use to
+    /// represent an unpaired surrogate that plain UTF-8 can't express
+    /// (std.unicode.utf8Decode rejects that codepoint range even though
+    /// the bit layout is otherwise ordinary 3-byte UTF-8). Duplicated
+    /// locally per this ecosystem's small-standalone-library convention
+    /// (z-regex has no zstring dependency) -- see z-string-surrogate-charat.md.
+    fn decodeSurrogateWtf8(bytes: []const u8) ?u21 {
+        if (bytes.len != 3) return null;
+        if (bytes[0] & 0xF0 != 0xE0) return null;
+        if (bytes[1] & 0xC0 != 0x80 or bytes[2] & 0xC0 != 0x80) return null;
+        const value: u21 = (@as(u21, bytes[0] & 0x0F) << 12) | (@as(u21, bytes[1] & 0x3F) << 6) | (bytes[2] & 0x3F);
+        if (value < 0xD800 or value > 0xDFFF) return null;
+        return value;
+    }
+
     /// Length in bytes of the UTF-8 sequence starting at `input[pos]` (1-4),
     /// or 1 if it isn't the start of a valid sequence, or the sequence would
     /// run past the end of input, or the bytes there don't decode validly.
     /// This keeps matching binary-safe: malformed/non-UTF-8 input degrades to
-    /// byte-at-a-time matching instead of erroring.
+    /// byte-at-a-time matching instead of erroring. A WTF-8 lone surrogate
+    /// (see decodeSurrogateWtf8) counts as a valid 3-byte sequence too, so a
+    /// string built from e.g. String.fromCharCode(0xDC00) is matched as one
+    /// character, not three raw bytes.
     fn utf8SeqLenAt(input: []const u8, pos: usize) usize {
         if (pos >= input.len) return 1;
         const len = std.unicode.utf8ByteSequenceLength(input[pos]) catch return 1;
         if (pos + len > input.len) return 1;
-        _ = std.unicode.utf8Decode(input[pos..][0..len]) catch return 1;
+        _ = std.unicode.utf8Decode(input[pos..][0..len]) catch {
+            if (len == 3 and decodeSurrogateWtf8(input[pos..][0..3]) != null) return 3;
+            return 1;
+        };
         return len;
     }
 
@@ -680,7 +702,13 @@ pub const RecursiveMatcher = struct {
         if (len == 1) {
             return .{ .codepoint = input[pos], .len = 1 };
         }
-        // utf8SeqLenAt only returns >1 after already validating the decode.
+        if (len == 3) {
+            if (decodeSurrogateWtf8(input[pos..][0..3])) |surrogate| {
+                return .{ .codepoint = surrogate, .len = 3 };
+            }
+        }
+        // utf8SeqLenAt only returns >1 (and not a recognized WTF-8
+        // surrogate) after already validating the decode.
         const cp = std.unicode.utf8Decode(input[pos..][0..len]) catch unreachable;
         return .{ .codepoint = cp, .len = len };
     }
