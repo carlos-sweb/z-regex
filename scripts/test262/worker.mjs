@@ -41,18 +41,32 @@ function bridge(source, flags, S, lastIndex, sticky) {
 }
 
 /** A fresh realm with the zregex exec hook and a minimal $262. */
-function createRealm() {
+/**
+ * A fresh realm with a minimal $262. With `hooked`, RegExp.prototype.exec
+ * is backed by zregex; without it the realm is plain V8 (the control run).
+ */
+function createRealm(hooked = true) {
   const context = vm.createContext({});
-  context.__zregexBridge = bridge;
-  hookScript.runInContext(context);
+  if (hooked) {
+    context.__zregexBridge = bridge;
+    hookScript.runInContext(context);
+  }
   const $262 = {
     global: vm.runInContext('globalThis', context),
     evalScript: (src) => new vm.Script(src).runInContext(context),
-    createRealm: () => createRealm().$262,
+    createRealm: () => createRealm(hooked).$262,
   };
   vm.runInContext('globalThis', context).$262 = $262;
   vm.runInContext('globalThis', context).print = () => {};
   return { context, $262 };
+}
+
+// Mirrors the RegExp literal flag rules; validating a literal's flags is the
+// JS lexer's job (the host), not zregex's.
+function validLiteralFlags(flags) {
+  if (!/^[dgimsuvy]*$/.test(flags)) return false;
+  if (new Set(flags).size !== flags.length) return false;
+  return !(flags.includes('u') && flags.includes('v'));
 }
 
 function errorName(e) {
@@ -63,30 +77,15 @@ function errorName(e) {
   }
 }
 
-function runTest(task) {
+/**
+ * Run the test body in a realm (with or without the zregex hook). Returns
+ * { status, detail } where status is pass | fail | timeout | harness_error |
+ * compile_error (zregex) | unparsable (V8 can't parse the test).
+ */
+function runInRealm(task, source, hooked) {
   const { rel, mode, meta } = task;
-  const before = z.stats.execCalls;
   const compileErrorsBefore = z.stats.compileErrors;
-  const file = path.join(TEST262, 'test', rel);
-  const source = fs.readFileSync(file, 'utf8');
-  const result = (status, detail) => ({
-    status,
-    detail,
-    execCalls: z.stats.execCalls - before,
-  });
-
-  // Early (parse-phase) errors: V8 would reject the whole script, so test
-  // zregex directly on the extracted literal instead of running anything.
-  if (meta.negative && meta.negative.phase === 'parse') {
-    const lit = extractRegexLiteral(source);
-    if (!lit) return result('unextracted', 'no single regex literal after $DONOTEVALUATE()');
-    const r = z.rejects(lit.body, lit.flags);
-    return r.rejected
-      ? { ...result('pass', `rejected: ${r.reason}`), extracted: true }
-      : { ...result('fail', 'zregex accepted a pattern the spec rejects'), extracted: true };
-  }
-
-  const { context } = createRealm();
+  const { context } = createRealm(hooked);
   try {
     if (!meta.flags.includes('raw')) {
       harnessScript('assert.js').runInContext(context);
@@ -94,8 +93,8 @@ function runTest(task) {
       for (const inc of meta.includes) harnessScript(inc).runInContext(context);
     }
   } catch (e) {
-    if (e && e.harnessError) return result('harness_error', e.message);
-    return result('harness_error', `harness threw: ${errorName(e)}: ${e && e.message}`);
+    if (e && e.harnessError) return { status: 'harness_error', detail: e.message };
+    return { status: 'harness_error', detail: `harness threw: ${errorName(e)}: ${e && e.message}` };
   }
 
   let script;
@@ -103,8 +102,7 @@ function runTest(task) {
     const body = mode === 'strict' ? `"use strict";\n${source}` : source;
     script = new vm.Script(body, { filename: rel });
   } catch (e) {
-    // V8 itself can't parse this test (e.g. syntax newer than Node's V8).
-    return result('skipped_host', `V8 could not parse the test: ${errorName(e)}: ${e.message}`);
+    return { status: 'unparsable', detail: `V8 could not parse the test: ${errorName(e)}: ${e.message}` };
   }
 
   try {
@@ -112,18 +110,67 @@ function runTest(task) {
   } catch (e) {
     const name = errorName(e);
     if (e instanceof ZRegexCompileError || z.stats.compileErrors > compileErrorsBefore) {
-      return result('zregex_compile_error', e instanceof ZRegexCompileError ? e.message : `${name}: ${e && e.message}`);
+      return { status: 'compile_error', detail: e instanceof ZRegexCompileError ? e.message : `${name}: ${e && e.message}` };
     }
     if (meta.negative && meta.negative.phase === 'runtime') {
       return name === meta.negative.type
-        ? result('pass')
-        : result('fail', `expected ${meta.negative.type}, got ${name}: ${e && e.message}`);
+        ? { status: 'pass' }
+        : { status: 'fail', detail: `expected ${meta.negative.type}, got ${name}: ${e && e.message}` };
     }
-    if (e && e.code === 'ERR_SCRIPT_EXECUTION_TIMEOUT') return result('timeout', 'vm timeout');
-    return result('fail', `${name}: ${e && e.message}`);
+    if (e && e.code === 'ERR_SCRIPT_EXECUTION_TIMEOUT') return { status: 'timeout', detail: 'vm timeout' };
+    return { status: 'fail', detail: `${name}: ${e && e.message}` };
   }
-  if (meta.negative) return result('fail', `expected ${meta.negative.type} to be thrown`);
-  return result('pass');
+  if (meta.negative) return { status: 'fail', detail: `expected ${meta.negative.type} to be thrown` };
+  return { status: 'pass' };
+}
+
+function runTest(task) {
+  const { rel, meta } = task;
+  const before = z.stats.execCalls;
+  const source = fs.readFileSync(path.join(TEST262, 'test', rel), 'utf8');
+  const result = (status, detail, extra = {}) => ({
+    status,
+    detail,
+    execCalls: z.stats.execCalls - before,
+    ...extra,
+  });
+
+  // Early (parse-phase) errors: V8 would reject the whole script, so test
+  // zregex directly on the extracted literal instead of running anything.
+  if (meta.negative && meta.negative.phase === 'parse') {
+    const lit = extractRegexLiteral(source);
+    if (!lit) return result('unextracted', 'no single regex literal after $DONOTEVALUATE()');
+    if (!validLiteralFlags(lit.flags)) {
+      return result('skipped_host', `invalid literal flags "${lit.flags}": flag validation belongs to the host`, { reason: 'host_flags' });
+    }
+    const r = z.rejects(lit.body, lit.flags);
+    return r.rejected
+      ? result('pass', `rejected: ${r.reason}`, { extracted: true })
+      : result('fail', 'zregex accepted a pattern the spec rejects', { extracted: true });
+  }
+
+  const hooked = runInRealm(task, source, true);
+  const execCalls = z.stats.execCalls - before;
+  if (hooked.status === 'unparsable') {
+    return result('skipped_host', hooked.detail, { reason: 'host_feature' });
+  }
+  const status = hooked.status === 'compile_error' ? 'zregex_compile_error' : hooked.status;
+  if (status === 'pass' || status === 'harness_error') return result(status, hooked.detail);
+
+  // Control run (plan rule D-1): does the test also fail in plain V8,
+  // without zregex? Then the failure is V8's, not zregex's.
+  const control = runInRealm(task, source, false);
+  if (control.status !== 'pass') {
+    return {
+      status: 'skipped_host',
+      reason: 'v8_behind_spec',
+      detail: `fails in V8 without zregex too: ${control.detail}`,
+      hookedStatus: status,
+      hookedDetail: hooked.detail,
+      execCalls,
+    };
+  }
+  return { status, detail: hooked.detail, execCalls, controlStatus: 'pass' };
 }
 
 let seq = 0;

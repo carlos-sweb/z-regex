@@ -159,16 +159,16 @@ for (const rel of files) {
         : ['strict', 'sloppy'];
   for (const mode of modes) {
     const key = `${rel}|${mode}`;
-    const skip = (status, detail) => (results[key] = { status, detail, execCalls: 0 });
+    const skip = (status, detail, reason) => (results[key] = { status, reason, detail, execCalls: 0 });
     const hostGap = meta.features.find((f) => hostUnsupported.has(f));
     const zregexGap = meta.features.find((f) => f in zregexFeatureGaps);
     if (meta.unsupported) skip('harness_error', meta.unsupported);
     else if (meta.flags.includes('module') || meta.flags.includes('async')) {
-      skip('skipped_host', `flags: ${meta.flags.join(', ')} not supported by the vm-based runner`);
+      skip('skipped_host', `flags: ${meta.flags.join(', ')} not supported by the vm-based runner`, 'host_runner');
     } else if (meta.negative && meta.negative.phase === 'resolution') {
-      skip('skipped_host', 'module resolution phase');
-    } else if (hostGap) skip('skipped_host', `Node ${process.version} lacks ${hostGap}`);
-    else if (zregexGap) skip('skipped_feature', `${zregexGap}: not in zregex yet (${zregexFeatureGaps[zregexGap]})`);
+      skip('skipped_host', 'module resolution phase', 'host_runner');
+    } else if (hostGap) skip('skipped_host', `Node ${process.version} lacks ${hostGap}`, 'host_feature');
+    else if (zregexGap) skip('skipped_feature', `${zregexGap}: not in zregex yet (${zregexFeatureGaps[zregexGap]})`, 'zregex_feature');
     else tasks.push({ id: tasks.length, key, rel, mode, meta });
   }
 }

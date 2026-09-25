@@ -69,8 +69,24 @@ The pinned test262 revision is in `TEST262_SHA`.
 | `timeout` | the parent's timeout expired |
 | `unextracted` | parse-negative test whose literal couldn't be extracted |
 | `harness_error` | runner problem (missing include, unsupported metadata) |
-| `skipped_host` | Node's V8 can't run the test (feature probed at startup, `module`/`async` flags, or V8 can't parse it) |
+| `skipped_host` | not zregex's to pass; the `reason` field says why (see below) |
 | `skipped_feature` | feature zregex doesn't implement yet (`features.json`, with the phase that re-enables it) |
+
+`skipped_host` reasons (grep `results.json` by `reason` to re-enable them on
+a newer Node):
+
+| Reason | Meaning |
+|---|---|
+| `v8_behind_spec` | the test fails with zregex **and** in plain V8 without zregex (control run), so the failure is V8's. `hookedStatus`/`hookedDetail` keep the zregex-side result |
+| `host_feature` | a feature Node's V8 lacks (probed at startup), or V8 can't parse the test |
+| `host_flags` | a parse-negative literal with invalid flags: validating literal flags is the JS lexer's job, not zregex's |
+| `host_runner` | `module`/`async` tests, which the vm-based runner doesn't run |
+| `host_bug` | reserved for a reproducible harness/host bug left unfixed |
+
+**Control run.** Every engine entry that doesn't pass with zregex is run a
+second time in a plain V8 realm (no hook). This makes rule D-1 automatic,
+at the cost of roughly doubling the time of the non-passing entries
+(~300 entries x ~30 ms, about +10 s per full run).
 
 `built-ins/RegExp/prototype/exec/` is the **host suite**: it measures
 `host-exec.js`, not zregex, and is reported apart from the engine suite.

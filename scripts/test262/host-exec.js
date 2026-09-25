@@ -40,6 +40,9 @@
   const MathMax = Math.max;
   const MathFloor = Math.floor;
   const NumberCtor = Number;
+  // Captured so a test that poisons String.prototype.slice can't break the
+  // host (built-in exec never looks it up).
+  const stringSlice = Function.prototype.call.bind(String.prototype.slice);
 
   function toLength(value) {
     let n = NumberCtor(value);
@@ -71,7 +74,10 @@
     if (R === null || (typeof R !== 'object' && typeof R !== 'function')) {
       throw new TypeErrorCtor('RegExp.prototype.exec called on incompatible receiver');
     }
-    // Throws a TypeError for non-RegExp receivers, like [[RegExpMatcher]].
+    // The source getter throws a TypeError for objects without
+    // [[OriginalSource]], but special-cases %RegExp.prototype% (returning
+    // "(?:)"), which has no [[RegExpMatcher]] either.
+    if (R === proto) throw new TypeErrorCtor('RegExp.prototype.exec called on RegExp.prototype');
     const source = call(get.source, R);
     const S = StringCtor(string);
     return builtinExec(R, S, source, flagsOf(R));
@@ -104,7 +110,7 @@
     const A = new ArrayCtor(n + 1);
     createDataProperty(A, 'index', matchStart);
     createDataProperty(A, 'input', S);
-    createDataProperty(A, '0', S.slice(matchStart, e));
+    createDataProperty(A, '0', stringSlice(S, matchStart, e));
 
     const names = r.names;
     const hasGroups = names.length > 0;
@@ -121,7 +127,7 @@
     for (let i = 1; i <= n; i++) {
       const s = caps[2 * i];
       const end = caps[2 * i + 1];
-      const value = s < 0 ? undefined : S.slice(s, end);
+      const value = s < 0 ? undefined : stringSlice(S, s, end);
       createDataProperty(A, StringCtor(i), value);
       if (hasIndices) createDataProperty(indices, StringCtor(i), s < 0 ? undefined : [s, end]);
     }
@@ -133,7 +139,7 @@
         const s = caps[2 * idx];
         const matched = s >= 0;
         if (matched || !(name in groups)) {
-          createDataProperty(groups, name, matched ? S.slice(s, caps[2 * idx + 1]) : undefined);
+          createDataProperty(groups, name, matched ? stringSlice(S, s, caps[2 * idx + 1]) : undefined);
           if (hasIndices) {
             createDataProperty(indicesGroups, name, matched ? [s, caps[2 * idx + 1]] : undefined);
           }
