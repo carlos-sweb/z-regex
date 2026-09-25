@@ -183,7 +183,16 @@ export function loadZRegex(libPath) {
     stats.execCalls++;
     const re = compile(source, flags);
     const enc = encodeSubject(subject);
-    const start = enc.unitToByte[lastIndex];
+    let start = enc.unitToByte[lastIndex];
+    // A non-u lastIndex can point between the two halves of a surrogate
+    // pair, a position WTF-8 can't express (D6). A match must never start
+    // before lastIndex (or a global replace loops forever), so a search
+    // resumes after the pair and a sticky attempt fails.
+    const midPair = lastIndex > 0 && lastIndex < subject.length && start === enc.unitToByte[lastIndex - 1];
+    if (midPair) {
+      if (sticky) return null;
+      start = enc.unitToByte[lastIndex + 1];
+    }
     const m = sticky
       ? fn.matchAt(re.handle, enc.bytes, enc.bytes.length, start)
       : fn.search(re.handle, enc.bytes, enc.bytes.length, start);

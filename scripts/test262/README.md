@@ -63,8 +63,10 @@ The pinned test262 revision is in `TEST262_SHA`.
 - `new RegExp(src)` with a pattern V8 rejects but zregex would accept: V8
   throws first, so the test passes without measuring zregex. Only
   parse-negative tests with an extractable literal measure rejection.
-- A `lastIndex` inside a surrogate pair maps to the start of the pair in
-  WTF-8; related to D6.
+- A non-`u` `lastIndex` between the two halves of a surrogate pair can't be
+  expressed in WTF-8 (D6): a search resumes after the pair and a sticky
+  attempt fails, so a match never starts before `lastIndex`. Tests that
+  need to match a lone half of a pair fail on this.
 - `RegExp.$1` and the other legacy statics are maintained by V8's own
   matcher, which the hook bypasses; the tests for them are `legacy-regexp`,
   which Node 22's V8 doesn't support anyway (skipped).
