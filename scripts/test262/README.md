@@ -37,6 +37,7 @@ node scripts/test262/run.mjs --filter lookBehind
 | `ZREGEX_TEST_TIMEOUT_MS` | `20000` | per-test timeout, enforced by the parent |
 | `ZREGEX_TEST_RECYCLE` | `1000` | tests per worker before it is replaced |
 | `ZREGEX_TEST_WORKERS` | `min(os.availableParallelism(), 8)` | worker processes |
+| `ZREGEX_NATIVE_STACK_MB` | `8` | native stack for FFI calls; koffi's own default is 1 MiB, on which zregex's recursive matcher overflows |
 
 The pinned test262 revision is in `TEST262_SHA`.
 

@@ -81,7 +81,17 @@ export function encodeWtf8(str) {
   return { bytes: bytes.subarray(0, b), unitToByte, byteToUnit };
 }
 
+/**
+ * Native stack for FFI calls, in MiB. koffi runs synchronous calls on its
+ * own stack (1 MiB by default), much smaller than the 8 MiB main-thread
+ * stack a typical Linux host (and `zig test`) gives zregex; with 1 MiB the
+ * recursive matcher overflows on patterns that pass elsewhere. Matching the
+ * usual host stack keeps the harness measuring zregex, not koffi.
+ */
+const NATIVE_STACK_MIB = Number(process.env.ZREGEX_NATIVE_STACK_MB || 8);
+
 export function loadZRegex(libPath) {
+  koffi.config({ ...koffi.config(), sync_stack_size: NATIVE_STACK_MIB * 1024 * 1024 });
   const lib = koffi.load(libPath);
   const Options = koffi.struct('ZRegexOptions', {
     case_insensitive: 'bool',
