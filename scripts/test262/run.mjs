@@ -1,7 +1,16 @@
 #!/usr/bin/env node
 // test262 harness for zregex (docs/REGEX_TIERS_PLAN.md, phase F0b).
 //
-//   node scripts/test262/run.mjs [--sample N] [--filter SUBSTR] [--out FILE]
+//   node scripts/test262/run.mjs [--sample N] [--filter SUBSTR] [--out FILE] [--lib PATH]
+//                                [--check-baseline FILE | --update-baseline FILE]
+//
+// --check-baseline compares the engine suite against a committed baseline
+// and exits non-zero on a regression (pass -> anything else), on a test the
+// baseline doesn't know, or on a baseline test that disappeared while the
+// pinned test262 revision is unchanged. A test that starts passing is
+// reported as an improvement and doesn't fail the run.
+// --update-baseline writes the engine suite's current statuses (skips
+// excluded, crashes included) as the new baseline.
 //
 // Environment:
 //   ZREGEX_LIB               path to libzregex.so (default zig-out/lib/libzregex.so)
@@ -30,9 +39,19 @@ const opt = (name, dflt) => {
 const SAMPLE = opt('--sample', null) === null ? null : Number(opt('--sample'));
 const FILTER = opt('--filter', null);
 const OUT = path.resolve(opt('--out', path.join(repo, 'zig-out/test262/results.json')));
+const CHECK = opt('--check-baseline', null);
+const UPDATE = opt('--update-baseline', null);
+if (CHECK && UPDATE) {
+  console.error('--check-baseline and --update-baseline are mutually exclusive');
+  process.exit(2);
+}
+if (UPDATE && (FILTER || SAMPLE !== null)) {
+  console.error('--update-baseline needs a full run (no --filter/--sample)');
+  process.exit(2);
+}
 
 const TEST262 = path.resolve(process.env.ZREGEX_TEST262_DIR || path.join(repo, '.test262'));
-const LIB = path.resolve(process.env.ZREGEX_LIB || path.join(repo, 'zig-out/lib/libzregex.so'));
+const LIB = path.resolve(opt('--lib', null) || process.env.ZREGEX_LIB || path.join(repo, 'zig-out/lib/libzregex.so'));
 const TIMEOUT_MS = Number(process.env.ZREGEX_TEST_TIMEOUT_MS || 20000);
 const RECYCLE = Number(process.env.ZREGEX_TEST_RECYCLE || 1000);
 const WORKERS = Number(process.env.ZREGEX_TEST_WORKERS || Math.min(os.availableParallelism(), 8));
@@ -264,6 +283,67 @@ function report() {
   fs.mkdirSync(path.dirname(OUT), { recursive: true });
   fs.writeFileSync(OUT, JSON.stringify(out, null, 1));
   printSummary(out);
+  if (UPDATE) writeBaseline(out, UPDATE);
+  if (CHECK) process.exitCode = checkBaseline(out, CHECK);
+}
+
+const BASELINE_SKIPS = new Set(['skipped_host', 'skipped_feature']);
+function engineEntries(out) {
+  const entries = {};
+  for (const [key, r] of Object.entries(out.results)) {
+    if (key.startsWith(HOST_SUITE_PREFIX) || BASELINE_SKIPS.has(r.status)) continue;
+    entries[key] = r.status;
+  }
+  return entries;
+}
+
+function writeBaseline(out, file) {
+  const baseline = {
+    test262Sha: out.meta.test262Sha,
+    node: out.meta.node,
+    generated: out.meta.date,
+    note: 'Engine suite only (host suite and skipped tests excluded). Update with --update-baseline.',
+    entries: engineEntries(out),
+  };
+  fs.writeFileSync(file, `${JSON.stringify(baseline, null, 0).replace(/,"/g, ',\n"')}\n`);
+  const bytes = fs.statSync(file).size;
+  console.log(`\nbaseline: ${Object.keys(baseline.entries).length} entries, ${(bytes / 1024).toFixed(0)} KiB -> ${path.relative(process.cwd(), file)}`);
+}
+
+function checkBaseline(out, file) {
+  const baseline = JSON.parse(fs.readFileSync(file, 'utf8'));
+  const current = engineEntries(out);
+  const shaChanged = baseline.test262Sha !== out.meta.test262Sha;
+  const scoped = FILTER !== null || SAMPLE !== null;
+  const inScope = new Set(files.flatMap((f) => [`${f}|strict`, `${f}|sloppy`, `${f}|parse`]));
+  const regressions = [];
+  const improvements = [];
+  const added = [];
+  const disappeared = [];
+  for (const [key, was] of Object.entries(baseline.entries)) {
+    if (scoped && !inScope.has(key)) continue;
+    const now = current[key];
+    if (now === undefined) disappeared.push(`${key} (was ${was}, now ${out.results[key]?.status ?? 'absent'})`);
+    else if (was === 'pass' && now !== 'pass') regressions.push(`${key}: pass -> ${now}: ${out.results[key].detail ?? ''}`);
+    else if (was !== 'pass' && now === 'pass') improvements.push(`${key}: ${was} -> pass`);
+  }
+  for (const key of Object.keys(current)) {
+    if (!(key in baseline.entries)) added.push(`${key} (${current[key]})`);
+  }
+  const list = (title, items) => {
+    if (items.length === 0) return;
+    console.log(`\n${title} (${items.length}):`);
+    for (const i of items.slice(0, 50)) console.log(`  ${i}`);
+    if (items.length > 50) console.log(`  ... ${items.length - 50} more`);
+  };
+  console.log(`\nbaseline check against ${path.relative(process.cwd(), file)}${scoped ? ' (scoped to the selected tests)' : ''}`);
+  list('REGRESSIONS: pass -> not pass', regressions);
+  list('NEW tests not in the baseline', added);
+  list(shaChanged ? 'Disappeared (test262 revision changed)' : 'DISAPPEARED from the baseline', disappeared);
+  list('Improvements: now passing (run --update-baseline to record)', improvements);
+  const failed = regressions.length > 0 || added.length > 0 || (disappeared.length > 0 && !shaChanged);
+  console.log(`\nbaseline check: ${failed ? 'FAILED' : 'ok'} (${regressions.length} regressions, ${added.length} new, ${disappeared.length} disappeared, ${improvements.length} improvements)`);
+  return failed ? 1 : 0;
 }
 
 function printSummary(out) {

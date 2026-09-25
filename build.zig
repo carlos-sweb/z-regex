@@ -105,6 +105,25 @@ pub fn build(b: *std.Build) void {
     const conformance_step = b.step("test-conformance", "Run test262-derived conformance sample");
     conformance_step.dependOn(&run_conformance_tests.step);
 
+    // test262 gate (scripts/test262, docs/REGEX_TIERS_PLAN.md F0b). Opt-in: it
+    // needs Node, `npm ci --prefix scripts/test262` and the pinned test262
+    // checkout from scripts/test262/fetch.sh. Always runs against a
+    // ReleaseSafe build so engine bugs surface as crashes, not silent UB.
+    const test262_lib = b.addLibrary(.{
+        .name = "zregex-test262",
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/c_api.zig"),
+            .target = target,
+            .optimize = .ReleaseSafe,
+        }),
+        .linkage = .dynamic,
+    });
+    const run_test262 = b.addSystemCommand(&.{ "node", "scripts/test262/run.mjs", "--check-baseline", "scripts/test262/baseline.json", "--lib" });
+    run_test262.addArtifactArg(test262_lib);
+    run_test262.has_side_effects = true;
+    const test262_step = b.step("test262", "Run test262 against the committed baseline (needs Node + scripts/test262/fetch.sh)");
+    test262_step.dependOn(&run_test262.step);
+
     // =============================================================================
     // Library-specific build steps
     // =============================================================================

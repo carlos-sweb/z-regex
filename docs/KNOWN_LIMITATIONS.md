@@ -499,6 +499,121 @@ of what this harness currently checks," not "0 known JS RegExp incompatibilities
 unblocked-but-not-yet-implemented items in the summary table below (`\p{...}`, case
 folding, `u`/`v` flags, `$1`/`$&` in `replace`) are real gaps this sample doesn't exercise.
 
+### test262 baseline (F0b)
+
+The real test262 measurement that replaces the sample above as the semantic
+verdict (see `docs/REGEX_TIERS_PLAN.md`, phase F0b). Harness:
+`scripts/test262/` (see its README); run with `zig build test262`, which
+fails on any regression against `scripts/test262/baseline.json`.
+
+- **test262 revision** `7ab7fafa0003f73fc85c1b95d88094d33f7eb8bd`
+  (`scripts/test262/TEST262_SHA`), Node v22.22.2, ReleaseSafe build,
+  8 MiB native stack for FFI calls. Measured 2026-09-25.
+- **Scope**: `built-ins/RegExp`, `language/literals/regexp` and their Annex B
+  counterparts. 2189 files, 3996 entries (strict and sloppy run separately).
+  `built-ins/String/prototype/{match,replace,split,...}` is not included yet.
+- **Engine suite** (baseline; the host suite and skipped tests excluded):
+  3033 entries, **2729 pass (90.0 %)**, 137 fail, 152 zregex compile errors,
+  15 unextracted, 0 crashes, 0 timeouts.
+- **Of the 2088 entries that actually exercise zregex, 1809 pass (86.6 %).**
+- **Host suite** (`built-ins/RegExp/prototype/exec`, which tests the harness's
+  own JS `RegExpBuiltinExec`, not zregex): 152/152 pass.
+- **Skipped** (not in the baseline): 497 `skipped_host` (features Node 22's V8
+  lacks: RegExp modifiers, duplicate named groups, `RegExp.escape`, legacy
+  RegExp features) and 314 `skipped_feature` (the `v` flag, until F5;
+  `features.json`).
+- A full run takes ~65-80 s wall with 4 workers; ~95 % of it is
+  `property-escapes/generated`.
+
+**Read the percentages with care.** 945 of the 3033 engine entries
+(31.2 %) never call into zregex at all (getters, property descriptors,
+species, names): they pass or fail on V8 and on the harness's host code.
+The median number of zregex `exec` calls per entry is 1 (mean 3.5). The
+"Pass (of ran)" column therefore measures the host as much as the engine;
+**"Pass (of exercised)" is the column that describes zregex.** (A 100-file
+sample stratified by directory put the non-exercising share at ~55 % with
+a median of 0; the full suite is dominated by `property-escapes/generated`,
+where every entry exercises zregex.)
+
+| Directory | Ran | Pass (of ran) | Exercise zregex | Pass (of exercised) | Skipped | Time (s) | Non-pass statuses |
+|---|---|---|---|---|---|---|---|
+| annexB/built-ins/RegExp | 20 | 12 (60.0 %) | 12 | 4 (33.3 %) | 0 | 3.5 | fail 6, zregex_compile_error 2 |
+| annexB/built-ins/RegExp/legacy-accessors | 0 | 0 (—) | 0 | 0 (—) | 48 | 0.0 | — |
+| annexB/built-ins/RegExp/named-groups | 4 | 0 (0.0 %) | 4 | 0 (0.0 %) | 0 | 0.0 | zregex_compile_error 4 |
+| annexB/built-ins/RegExp/prototype | 46 | 46 (100.0 %) | 24 | 24 (100.0 %) | 6 | 0.1 | — |
+| annexB/language/literals/regexp | 16 | 8 (50.0 %) | 16 | 8 (50.0 %) | 0 | 0.0 | fail 6, zregex_compile_error 2 |
+| built-ins/RegExp | 820 | 798 (97.3 %) | 520 | 498 (95.8 %) | 156 | 1.7 | fail 12, zregex_compile_error 10 |
+| built-ins/RegExp/Symbol.species | 8 | 8 (100.0 %) | 0 | 0 (—) | 0 | 0.0 | — |
+| built-ins/RegExp/dotall | 8 | 2 (25.0 %) | 8 | 2 (25.0 %) | 0 | 0.0 | fail 6 |
+| built-ins/RegExp/escape | 0 | 0 (—) | 0 | 0 (—) | 40 | 0.0 | — |
+| built-ins/RegExp/lookBehind | 34 | 18 (52.9 %) | 34 | 18 (52.9 %) | 0 | 0.1 | fail 16 |
+| built-ins/RegExp/match-indices | 28 | 24 (85.7 %) | 28 | 24 (85.7 %) | 0 | 0.0 | fail 2, zregex_compile_error 2 |
+| built-ins/RegExp/named-groups | 52 | 38 (73.1 %) | 44 | 30 (68.2 %) | 20 | 0.1 | fail 2, zregex_compile_error 12 |
+| built-ins/RegExp/property-escapes | 146 | 136 (93.2 %) | 144 | 134 (93.1 %) | 0 | 0.0 | zregex_compile_error 2, fail 8 |
+| built-ins/RegExp/prototype | 20 | 18 (90.0 %) | 2 | 0 (0.0 %) | 0 | 0.0 | fail 2 |
+| built-ins/RegExp/prototype/Symbol.match | 106 | 98 (92.5 %) | 52 | 48 (92.3 %) | 0 | 0.1 | fail 8 |
+| built-ins/RegExp/prototype/Symbol.matchAll | 52 | 52 (100.0 %) | 14 | 14 (100.0 %) | 0 | 0.1 | — |
+| built-ins/RegExp/prototype/Symbol.replace | 138 | 124 (89.9 %) | 60 | 52 (86.7 %) | 0 | 0.2 | fail 12, zregex_compile_error 2 |
+| built-ins/RegExp/prototype/Symbol.search | 46 | 46 (100.0 %) | 10 | 10 (100.0 %) | 0 | 0.1 | — |
+| built-ins/RegExp/prototype/Symbol.split | 88 | 88 (100.0 %) | 36 | 36 (100.0 %) | 0 | 0.1 | — |
+| built-ins/RegExp/prototype/dotAll | 16 | 16 (100.0 %) | 0 | 0 (—) | 0 | 0.0 | — |
+| built-ins/RegExp/prototype/flags | 30 | 30 (100.0 %) | 0 | 0 (—) | 2 | 0.0 | — |
+| built-ins/RegExp/prototype/global | 20 | 20 (100.0 %) | 0 | 0 (—) | 0 | 0.0 | — |
+| built-ins/RegExp/prototype/hasIndices | 16 | 16 (100.0 %) | 0 | 0 (—) | 0 | 0.0 | — |
+| built-ins/RegExp/prototype/ignoreCase | 20 | 20 (100.0 %) | 0 | 0 (—) | 0 | 0.0 | — |
+| built-ins/RegExp/prototype/multiline | 20 | 20 (100.0 %) | 0 | 0 (—) | 0 | 0.0 | — |
+| built-ins/RegExp/prototype/source | 24 | 22 (91.7 %) | 10 | 8 (80.0 %) | 0 | 0.0 | fail 2 |
+| built-ins/RegExp/prototype/sticky | 16 | 16 (100.0 %) | 0 | 0 (—) | 0 | 0.0 | — |
+| built-ins/RegExp/prototype/test | 90 | 90 (100.0 %) | 50 | 50 (100.0 %) | 0 | 0.1 | — |
+| built-ins/RegExp/prototype/toString | 18 | 18 (100.0 %) | 0 | 0 (—) | 0 | 0.0 | — |
+| built-ins/RegExp/prototype/unicode | 16 | 16 (100.0 %) | 0 | 0 (—) | 0 | 0.0 | — |
+| built-ins/RegExp/prototype/unicodeSets | 0 | 0 (—) | 0 | 0 (—) | 47 | 0.0 | — |
+| built-ins/RegExp/regexp-modifiers | 0 | 0 (—) | 0 | 0 (—) | 124 | 0.0 | — |
+| built-ins/RegExp/regexp-modifiers/syntax | 0 | 0 (—) | 0 | 0 (—) | 16 | 0.0 | — |
+| built-ins/RegExp/unicodeSets/generated | 0 | 0 (—) | 0 | 0 (—) | 228 | 0.0 | — |
+| language/literals/regexp | 151 | 99 (65.6 %) | 58 | 21 (36.2 %) | 83 | 7.3 | unextracted 15, fail 37 |
+| language/literals/regexp/named-groups | 58 | 44 (75.9 %) | 56 | 42 (75.0 %) | 0 | 0.0 | zregex_compile_error 2, fail 12 |
+
+Groups with huge subjects (every code point of a property, or loops over
+the code space), which dominate run time:
+
+| Directory | Ran | Pass (of ran) | Exercise zregex | Pass (of exercised) | Skipped | Time (s) | Non-pass statuses |
+|---|---|---|---|---|---|---|---|
+| built-ins/RegExp/CharacterClassEscapes | 24 | 20 (83.3 %) | 24 | 20 (83.3 %) | 0 | 13.1 | fail 4 |
+| built-ins/RegExp/property-escapes/generated | 882 | 766 (86.8 %) | 882 | 766 (86.8 %) | 35 | 222.4 | zregex_compile_error 114, fail 2 |
+
+**Root causes worth knowing before reading the failures:**
+
+- **`UnknownUnicodeProperty`: short aliases of binary properties** (`\p{Alpha}`,
+  `\p{AHex}`, `\p{Bidi_C}`, `\p{CWU}`, `\p{Dia}`, ...) and
+  `Changes_When_NFKC_Casefolded` are not recognized. One root cause, not 114
+  bugs: a fix in F5 unblocks ~114 entries (57 patterns) of
+  `property-escapes/generated`. **When F5 fixes it, those entries will run
+  `testPropertyEscapes`' per-symbol loop (up to ~1.1 M calls) for the first
+  time, so the first run of that group may take longer and hit timeouts;
+  today's ~57 s for the group is not representative of the gate's cost
+  from F5 on.**
+- **`\p{General_Category=Other}` doesn't include unassigned code points
+  (Cn)** (e.g. U+038B): a bug in the generated Unicode tables, not in the
+  `\p{}` logic (tracked in F5 with pinning the Unicode version).
+- Known ECMA-262 deviations of the parser/matcher show up as expected:
+  non-`u` `.` consuming a whole supplementary character and lone surrogate
+  halves (D6), lookbehind (D7), escaped surrogate pairs under `u` (D13),
+  Annex B forms (`\8`, `\1` without groups, lone `]`, `\k<a>` without named
+  groups, `[\12-\14]`) and incomplete `u`-mode strictness (most of the
+  `language/literals/regexp` failures are parse-negative tests zregex
+  accepts). See `docs/REGEX_TIERS_PLAN.md` §2.3.
+- The recursive matcher bounds recursion depth, not stack bytes: some
+  patterns (e.g. `/<body.*>((.*\n?)*?)<\/body>/i`) crash on a 1 MiB native
+  stack and pass on 8 MiB. The harness uses 8 MiB; F6a's explicit stack
+  addresses it.
+
+**Blind spots**: a pattern V8 rejects but zregex would accept via
+`new RegExp(...)` isn't measured (V8 throws first); parse-negative tests
+whose literal can't be extracted are `unextracted`; a non-`u` `lastIndex`
+between the halves of a surrogate pair can't be expressed in WTF-8. Details
+in `scripts/test262/README.md`.
+
 ### `test_()` vs `find()` — a common source of confusion
 
 `test_()` requires the **entire** input string to match (it's an anchored full match), not

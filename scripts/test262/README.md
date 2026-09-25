@@ -28,7 +28,24 @@ zig build -Doptimize=ReleaseSafe               # safety checks on: bugs surface 
 node scripts/test262/run.mjs                   # full run -> zig-out/test262/results.json
 node scripts/test262/run.mjs --sample 100      # stratified, reproducible sample
 node scripts/test262/run.mjs --filter lookBehind
+
+zig build test262                              # the gate: ReleaseSafe build + --check-baseline
+node scripts/test262/run.mjs --update-baseline scripts/test262/baseline.json   # record a new baseline
 ```
+
+## The baseline gate
+
+`baseline.json` holds the engine suite's status per entry (host suite and
+skipped tests excluded; crashes included as expected states).
+`--check-baseline` fails the run on:
+
+- a **regression**: an entry that passed and no longer does;
+- a **new** entry the baseline doesn't know;
+- an entry that **disappeared**, unless the pinned test262 revision changed.
+
+An entry that starts passing is reported as an improvement and doesn't fail
+the run; record it with `--update-baseline` in an explicit commit. With
+`--filter`/`--sample` the check is scoped to the selected tests.
 
 | Variable | Default | Meaning |
 |---|---|---|
