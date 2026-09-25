@@ -136,8 +136,10 @@ process.on('message', (task) => {
     res = { status: 'harness_error', detail: `runner threw: ${e && e.stack}`, execCalls: 0 };
   }
   res.ms = Math.round((performance.now() - t0) * 10) / 10;
+  if (typeof globalThis.gc === 'function') globalThis.gc();
   res.rss = process.memoryUsage().rss;
   res.seq = ++seq;
+  res.pid = process.pid;
   process.send({ id: task.id, ...res });
 });
 

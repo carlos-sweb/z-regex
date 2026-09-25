@@ -35,7 +35,7 @@ node scripts/test262/run.mjs --filter lookBehind
 | `ZREGEX_LIB` | `zig-out/lib/libzregex.so` | library under test |
 | `ZREGEX_TEST262_DIR` | `.test262` | test262 checkout |
 | `ZREGEX_TEST_TIMEOUT_MS` | `20000` | per-test timeout, enforced by the parent |
-| `ZREGEX_TEST_RECYCLE` | `500` | tests per worker before it is replaced |
+| `ZREGEX_TEST_RECYCLE` | `1000` | tests per worker before it is replaced |
 | `ZREGEX_TEST_WORKERS` | `min(os.availableParallelism(), 8)` | worker processes |
 
 The pinned test262 revision is in `TEST262_SHA`.

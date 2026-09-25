@@ -7,8 +7,10 @@
 //   ZREGEX_LIB               path to libzregex.so (default zig-out/lib/libzregex.so)
 //   ZREGEX_TEST262_DIR       test262 checkout (default .test262, see fetch.sh)
 //   ZREGEX_TEST_TIMEOUT_MS   per-test timeout enforced by the parent (default 20000)
-//   ZREGEX_TEST_RECYCLE      tests per worker before it is replaced (default 500)
+//   ZREGEX_TEST_RECYCLE      tests per worker before it is replaced (default 1000)
 //   ZREGEX_TEST_WORKERS      worker count (default min(os.availableParallelism(), 8))
+//   ZREGEX_TEST_GC           1 = run workers with --expose-gc and force a GC before
+//                            each RSS sample (to tell a leak from GC lag)
 
 import fs from 'node:fs';
 import os from 'node:os';
@@ -32,8 +34,9 @@ const OUT = path.resolve(opt('--out', path.join(repo, 'zig-out/test262/results.j
 const TEST262 = path.resolve(process.env.ZREGEX_TEST262_DIR || path.join(repo, '.test262'));
 const LIB = path.resolve(process.env.ZREGEX_LIB || path.join(repo, 'zig-out/lib/libzregex.so'));
 const TIMEOUT_MS = Number(process.env.ZREGEX_TEST_TIMEOUT_MS || 20000);
-const RECYCLE = Number(process.env.ZREGEX_TEST_RECYCLE || 500);
+const RECYCLE = Number(process.env.ZREGEX_TEST_RECYCLE || 1000);
 const WORKERS = Number(process.env.ZREGEX_TEST_WORKERS || Math.min(os.availableParallelism(), 8));
+const FORCE_GC = process.env.ZREGEX_TEST_GC === '1';
 
 const ROOTS = [
   'built-ins/RegExp',
@@ -45,6 +48,11 @@ const ROOTS = [
 // RegExpBuiltinExec), not zregex: reported separately, outside the engine
 // baseline (plan D-1).
 const HOST_SUITE_PREFIX = 'built-ins/RegExp/prototype/exec/';
+// Groups whose tests build huge subjects (every code point of a property,
+// or loops over the whole code space). They dominate run time, so they get
+// their own table.
+const HEAVY_GROUPS = ['built-ins/RegExp/property-escapes/generated', 'built-ins/RegExp/CharacterClassEscapes'];
+const isHeavy = (g) => HEAVY_GROUPS.some((h) => g === h || g.startsWith(`${h}/`));
 
 const pinnedSha = fs.readFileSync(path.join(here, 'TEST262_SHA'), 'utf8').trim();
 const zregexFeatureGaps = JSON.parse(fs.readFileSync(path.join(here, 'features.json'), 'utf8'));
@@ -155,6 +163,7 @@ let done = 0;
 function spawnWorker(slot) {
   const child = fork(path.join(here, 'worker.mjs'), [], {
     env: { ...process.env, ZREGEX_TEST262_DIR: TEST262, ZREGEX_LIB: LIB },
+    execArgv: FORCE_GC ? ['--expose-gc'] : [],
     stdio: ['ignore', 'ignore', 'pipe', 'ipc'],
   });
   const w = { slot, child, task: null, timer: null, ran: 0, stderr: '', rss: [] };
@@ -239,6 +248,7 @@ function report() {
       workers: WORKERS,
       timeoutMs: TIMEOUT_MS,
       recycle: RECYCLE,
+      forceGc: FORCE_GC,
       sample: SAMPLE,
       filter: FILTER,
       hostUnsupportedFeatures: [...hostUnsupported],
@@ -264,9 +274,10 @@ function printSummary(out) {
     const rel = key.slice(0, key.lastIndexOf('|'));
     const suite = rel.startsWith(HOST_SUITE_PREFIX) ? 'host' : 'engine';
     const g = `${suite === 'host' ? '[host] ' : ''}${groupOf(rel)}`;
-    if (!rows.has(g)) rows.set(g, { entries: 0, ran: 0, pass: 0, exercised: 0, exercisedPass: 0, statuses: {} });
+    if (!rows.has(g)) rows.set(g, { entries: 0, ran: 0, pass: 0, exercised: 0, exercisedPass: 0, ms: 0, statuses: {} });
     const row = rows.get(g);
     row.entries++;
+    row.ms += r.ms || 0;
     row.statuses[r.status] = (row.statuses[r.status] || 0) + 1;
     totals[suite][r.status] = (totals[suite][r.status] || 0) + 1;
     if (SKIPS.has(r.status)) continue;
@@ -279,13 +290,21 @@ function printSummary(out) {
     }
   }
   const pct = (a, b) => (b === 0 ? '—' : `${((100 * a) / b).toFixed(1)}%`);
-  console.log(`\ntest262 ${out.meta.test262Sha.slice(0, 12)} · ${out.meta.files} files · ${out.meta.entries} entries · ${(out.meta.durationMs / 1000).toFixed(1)} s\n`);
-  console.log('| Directory | Entries | Ran | Pass (of ran) | zregex exercised | Pass (of exercised) | Statuses |');
-  console.log('|---|---|---|---|---|---|---|');
-  for (const [g, r] of [...rows].sort(([a], [b]) => (a < b ? -1 : 1))) {
-    const st = Object.entries(r.statuses).map(([s, n]) => `${s} ${n}`).join(', ');
-    console.log(`| ${g} | ${r.entries} | ${r.ran} | ${r.pass} (${pct(r.pass, r.ran)}) | ${r.exercised} | ${r.exercisedPass} (${pct(r.exercisedPass, r.exercised)}) | ${st} |`);
-  }
+  const table = (title, entries) => {
+    if (entries.length === 0) return;
+    console.log(`\n${title}\n`);
+    console.log('| Directory | Entries | Ran | Pass (of ran) | zregex exercised | Pass (of exercised) | Time (s) | Statuses |');
+    console.log('|---|---|---|---|---|---|---|---|');
+    for (const [g, r] of entries) {
+      const st = Object.entries(r.statuses).map(([s, n]) => `${s} ${n}`).join(', ');
+      console.log(`| ${g} | ${r.entries} | ${r.ran} | ${r.pass} (${pct(r.pass, r.ran)}) | ${r.exercised} | ${r.exercisedPass} (${pct(r.exercisedPass, r.exercised)}) | ${(r.ms / 1000).toFixed(1)} | ${st} |`);
+    }
+  };
+  const sorted = [...rows].sort(([a], [b]) => (a < b ? -1 : 1));
+  console.log(`\ntest262 ${out.meta.test262Sha.slice(0, 12)} · ${out.meta.files} files · ${out.meta.entries} entries · ${(out.meta.durationMs / 1000).toFixed(1)} s wall`);
+  console.log('Time (s) is the sum of per-test worker time (CPU-ish), not wall time.');
+  table('Engine and host suites', sorted.filter(([g]) => !isHeavy(g.replace('[host] ', ''))));
+  table('Heavy groups (huge subjects; dominate run time)', sorted.filter(([g]) => isHeavy(g)));
   console.log(`\nengine suite: ${JSON.stringify(totals.engine)}`);
   console.log(`host suite:   ${JSON.stringify(totals.host)}`);
   console.log(`results: ${path.relative(process.cwd(), OUT)}`);
