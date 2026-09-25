@@ -140,14 +140,14 @@ pub const PoolStats = struct {
     pub fn reuseRatio(self: PoolStats) f64 {
         if (self.total_acquired == 0) return 0.0;
         return @as(f64, @floatFromInt(self.total_released)) /
-               @as(f64, @floatFromInt(self.total_acquired));
+            @as(f64, @floatFromInt(self.total_acquired));
     }
 
     /// Calculate the allocation efficiency (1 - allocated / acquired)
     pub fn efficiency(self: PoolStats) f64 {
         if (self.total_acquired == 0) return 0.0;
         return 1.0 - (@as(f64, @floatFromInt(self.total_allocated)) /
-                     @as(f64, @floatFromInt(self.total_acquired)));
+            @as(f64, @floatFromInt(self.total_acquired)));
     }
 };
 

@@ -12,7 +12,7 @@
 | DC1 | **Semántica objetivo: ECMA-262 2025 (16ª edición)**, incluyendo duplicate named groups, modificadores `(?ims-ims:…)`, flag `v` y `RegExp.escape` (este último, del host). | Cerrada |
 | DC2 | **ECMA-262 estricto por defecto.** `{,5}` no es cuantificador: sin `u`/`v` (Annex B) es texto literal; con `u`/`v` es SyntaxError. Todo lo no-ECMA (posesivos, `{,n}`) solo como extensión opt-in, apagada por defecto. | Cerrada |
 | DC3 | **Entrada abstracta WTF-8 + UTF-16**; los índices se expresan en unidades del `Subject`. | Cerrada |
-| DC4 | **La versión de Unicode debe quedar fijada en el generador.** Hoy no lo está: `scripts/gen_unicode_tables.py:45-51` descarga de `…/UCD/latest/…`, así que el repo no sabe qué versión contiene `src/unicode/tables.zig`. | Cerrado que se fija; **cuál (16.0 o 17.0) es pregunta abierta P1** |
+| DC4 | **La versión de Unicode debe quedar fijada en el generador.** Hoy no lo está: `scripts/gen_unicode_tables.py:45-51` descarga de `…/UCD/latest/…`, así que el repo no sabe qué versión contiene `src/unicode/tables.zig`. | Cerrado que se fija. **Verificado en F0d: las tablas actuales son Unicode 17.0.0** (regeneradas desde la UCD 17.0.0 de `unicode-org/unicodetools` salen idénticas byte a byte). Falta que el generador fije esa versión en lugar de `latest` (F5). |
 | DC5 | No se sabe con certeza qué cambios de RegExp trae ES2026; su adopción es **pregunta abierta P2**, no un supuesto. | Abierta |
 
 ---
@@ -603,7 +603,7 @@ Trabajo suelto que no pertenece a ninguna fase. No son mitigaciones: reducen el 
 - S5. Las duraciones (F0a: 1–2 semanas) son de esfuerzo, no de calendario: no se conoce la dedicación del equipo.
 
 **Preguntas abiertas**
-- **P1.** ¿Qué versión de Unicode se fija: 16.0 o 17.0? Hoy no se sabe cuál tienen las tablas.
+- **P1.** ¿Qué versión de Unicode se fija? Las tablas actuales son **Unicode 17.0.0** (verificado en F0d); la pregunta abierta es si se mantiene 17.0 o se adopta la siguiente cuando salga.
 - **P2.** ¿Se adopta ES2026? No sé con certeza qué cambios de RegExp incluye.
 - P3. ¿El motor consumidor guarda los strings en UTF-16, Latin1 o WTF-8? ¿Hace falta `Subject.latin1`?
 - P4. ¿Los posesivos se mantienen como opt-in o se eliminan del todo?
