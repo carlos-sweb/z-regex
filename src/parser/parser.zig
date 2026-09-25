@@ -708,7 +708,7 @@ pub const Parser = struct {
             self.lexer.in_char_class = true;
             try self.advance();
         } else {
-            self.lexer.pos = self.current_token.position;
+            self.lexer.rewindTo(self.current_token.position);
             self.lexer.in_char_class = true;
             try self.advance();
         }
@@ -743,7 +743,7 @@ pub const Parser = struct {
             // still-open class body). Rewind and re-fetch in class mode so
             // `--`/`&&` tokenize correctly here rather than as literal
             // characters.
-            self.lexer.pos = self.current_token.position;
+            self.lexer.rewindTo(self.current_token.position);
             self.lexer.in_char_class = true;
             try self.advance();
 
@@ -927,7 +927,7 @@ pub const Parser = struct {
             // which would misparse the outer class's closing `]` (or a
             // chained operator, correctly rejected below by the caller) as
             // literal characters instead.
-            self.lexer.pos = self.current_token.position;
+            self.lexer.rewindTo(self.current_token.position);
             self.lexer.in_char_class = true;
             try self.advance();
             return nested;

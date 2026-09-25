@@ -169,6 +169,17 @@ pub const Token = struct {
 };
 
 /// Lexer for tokenizing regex patterns
+/// A `{...}` quantifier the lexer accepts with a meaning ECMA-262 doesn't
+/// give it (docs/REGEX_TIERS_PLAN.md §2.3). Recorded, not corrected: fixing
+/// these changes what existing patterns compile to, which is F1's job.
+pub const QuantifierDeviation = enum {
+    /// D1: empty minimum (`{}`, `{,}`, `{,5}`) accepted as `{0,...}`. Per
+    /// Annex B it's literal text; with `u`/`v` it's a SyntaxError.
+    min_omitted,
+    /// D10: minimum above `MAX_REPEAT_UNROLL`, silently clamped.
+    min_clamped,
+};
+
 pub const Lexer = struct {
     pattern: []const u8,
     pos: usize,
@@ -197,6 +208,15 @@ pub const Lexer = struct {
     /// `.class_minus_minus`/`.class_and_and`.
     v_mode: bool = false,
 
+    /// First quantifier this lexer accepted whose current meaning is known
+    /// to deviate from ECMA-262 (see `QuantifierDeviation`), and where it
+    /// starts. Pure instrumentation for `analysis/classify.zig`: tokenization
+    /// is unaffected. Cleared by `rewindTo` when the parser discards a
+    /// speculatively fetched token, so a `{,5}` that is really class content
+    /// (`[{,5}]`) isn't reported.
+    deviation: ?QuantifierDeviation = null,
+    deviation_pos: usize = 0,
+
     const Self = @This();
 
     /// Initialize a new lexer
@@ -205,6 +225,21 @@ pub const Lexer = struct {
             .pattern = pattern,
             .pos = 0,
         };
+    }
+
+    /// Move back to `pos` to re-tokenize from there (the parser's
+    /// speculative-lookahead rewind), forgetting any deviation recorded at
+    /// or after it -- it belonged to a token that is being discarded.
+    pub fn rewindTo(self: *Self, pos: usize) void {
+        self.pos = pos;
+        if (self.deviation != null and self.deviation_pos >= pos) self.deviation = null;
+    }
+
+    fn noteDeviation(self: *Self, kind: QuantifierDeviation, pos: usize) void {
+        if (self.deviation == null) {
+            self.deviation = kind;
+            self.deviation_pos = pos;
+        }
     }
 
     /// Get the next token
@@ -539,12 +574,22 @@ pub const Lexer = struct {
         return v * 10 + digit;
     }
 
+    /// Record D1/D10 for a quantifier `parseRepeat` is about to accept.
+    fn noteRepeatDeviation(self: *Self, min: u64, min_omitted: bool, start_pos: usize) void {
+        if (min_omitted) {
+            self.noteDeviation(.min_omitted, start_pos);
+        } else if (min > MAX_REPEAT_UNROLL) {
+            self.noteDeviation(.min_clamped, start_pos);
+        }
+    }
+
     /// Parse repeat quantifier {n,m}
     fn parseRepeat(self: *Self, start_pos: usize) !Token {
         const unbounded = std.math.maxInt(u32);
         var min: u64 = 0;
         var max: u64 = 0;
         var has_comma = false;
+        const min_start = self.pos;
 
         // Parse min
         while (self.pos < self.pattern.len) {
@@ -560,6 +605,7 @@ pub const Lexer = struct {
                 // {n} form: exactly n. A count past the limit degrades to
                 // "clamped min, unbounded max" (see MAX_REPEAT_UNROLL).
                 self.pos += 1;
+                self.noteRepeatDeviation(min, self.pos - 1 == min_start, start_pos);
                 const n: u32 = @intCast(@min(min, MAX_REPEAT_UNROLL));
                 const m: u32 = if (min > MAX_REPEAT_UNROLL) unbounded else n;
                 return Token.repeat_token(n, m, start_pos);
@@ -578,6 +624,8 @@ pub const Lexer = struct {
                 self.pos += 1;
             } else if (c == '}') {
                 self.pos += 1;
+                // `min_start` holds the comma when the min digits are empty.
+                self.noteRepeatDeviation(min, self.pattern[min_start] == ',', start_pos);
                 const n: u32 = @intCast(@min(min, MAX_REPEAT_UNROLL));
                 // {n,} (no max digits) is unlimited; a max past the limit is
                 // treated as unlimited too -- correct for any real input.

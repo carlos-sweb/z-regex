@@ -75,6 +75,12 @@ pub const Matcher = @import("executor/matcher.zig").Matcher;
 pub const MatchResult = @import("executor/matcher.zig").MatchResult;
 pub const CaptureIndices = @import("executor/matcher.zig").CaptureIndices;
 
+// Tier classification (docs/REGEX_TIERS_PLAN.md, F0a prototype): reports
+// the features a pattern uses and the minimum execution tier they need.
+// Classification only -- nothing dispatches on it yet.
+pub const analysis = @import("analysis/classify.zig");
+pub const analyze = analysis.analyze;
+
 // High-level Regex API
 pub const Regex = @import("regex.zig").Regex;
 pub const test_ = @import("regex.zig").test_;
@@ -119,6 +125,9 @@ test {
 
     // Unicode module tests (General_Category properties + simple case folding)
     _ = @import("unicode/unicode_tests.zig");
+
+    // Tier classifier (F0a)
+    _ = @import("analysis/classify.zig");
 }
 
 test "version info" {

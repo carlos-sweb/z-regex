@@ -202,6 +202,7 @@ pub const Node = struct {
     /// Create a quantifier node
     pub fn createQuantifier(allocator: Allocator, qtype: NodeType, child: *Node) !*Node {
         const node = try allocator.create(Node);
+        errdefer allocator.destroy(node);
         node.* = .{
             .type = qtype,
             .allocator = allocator,
@@ -213,6 +214,7 @@ pub const Node = struct {
     /// Create a repeat node
     pub fn createRepeat(allocator: Allocator, child: *Node, min: u32, max: u32) !*Node {
         const node = try allocator.create(Node);
+        errdefer allocator.destroy(node);
         node.* = .{
             .type = .repeat,
             .allocator = allocator,
@@ -226,6 +228,7 @@ pub const Node = struct {
     /// Create a lazy repeat node {n,m}?
     pub fn createLazyRepeat(allocator: Allocator, child: *Node, min: u32, max: u32) !*Node {
         const node = try allocator.create(Node);
+        errdefer allocator.destroy(node);
         node.* = .{
             .type = .lazy_repeat,
             .allocator = allocator,
@@ -249,6 +252,7 @@ pub const Node = struct {
     /// Create an alternation node
     pub fn createAlternation(allocator: Allocator, left: *Node, right: *Node) !*Node {
         const node = try allocator.create(Node);
+        errdefer allocator.destroy(node);
         node.* = .{
             .type = .alternation,
             .allocator = allocator,
@@ -261,6 +265,7 @@ pub const Node = struct {
     /// Create a group node
     pub fn createGroup(allocator: Allocator, child: *Node, index: u8) !*Node {
         const node = try allocator.create(Node);
+        errdefer allocator.destroy(node);
         node.* = .{
             .type = .group,
             .allocator = allocator,
@@ -273,6 +278,7 @@ pub const Node = struct {
     /// Create a non-capturing group node
     pub fn createNonCapturingGroup(allocator: Allocator, child: *Node) !*Node {
         const node = try allocator.create(Node);
+        errdefer allocator.destroy(node);
         node.* = .{
             .type = .non_capturing_group,
             .allocator = allocator,
@@ -305,6 +311,7 @@ pub const Node = struct {
     /// Create a lookahead node
     pub fn createLookahead(allocator: Allocator, child: *Node, negative: bool) !*Node {
         const node = try allocator.create(Node);
+        errdefer allocator.destroy(node);
         node.* = .{
             .type = if (negative) .negative_lookahead else .lookahead,
             .allocator = allocator,
@@ -316,6 +323,7 @@ pub const Node = struct {
     /// Create a lookbehind assertion node
     pub fn createLookbehind(allocator: Allocator, child: *Node, negative: bool) !*Node {
         const node = try allocator.create(Node);
+        errdefer allocator.destroy(node);
         node.* = .{
             .type = if (negative) .negative_lookbehind else .lookbehind,
             .allocator = allocator,
