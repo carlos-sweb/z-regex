@@ -52,6 +52,12 @@ pub fn build(b: *std.Build) void {
 
     const run_tests = b.addRunArtifact(tests);
 
+    // Tests for the exported C ABI (src/c_api.zig), which has its own root.
+    const c_api_tests = b.addTest(.{
+        .root_module = c_api_module,
+    });
+    const run_c_api_tests = b.addRunArtifact(c_api_tests);
+
     // Create integration test executable
     const integration_module = b.createModule(.{
         .root_source_file = b.path("tests/integration_tests.zig"),
@@ -69,6 +75,7 @@ pub fn build(b: *std.Build) void {
     // Test step (runs all tests)
     const test_step = b.step("test", "Run all tests");
     test_step.dependOn(&run_tests.step);
+    test_step.dependOn(&run_c_api_tests.step);
     test_step.dependOn(&run_integration_tests.step);
 
     // Individual test steps
