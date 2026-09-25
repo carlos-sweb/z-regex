@@ -124,6 +124,27 @@ pub fn build(b: *std.Build) void {
     const test262_step = b.step("test262", "Run test262 against the committed baseline (needs Node + scripts/test262/fetch.sh)");
     test262_step.dependOn(&run_test262.step);
 
+    // Performance baseline (bench/bench.zig, docs/REGEX_TIERS_PLAN.md F0d).
+    // Always ReleaseFast, whatever -Doptimize says, so numbers are comparable.
+    const bench_zregex = b.createModule(.{
+        .root_source_file = b.path("src/main.zig"),
+        .target = target,
+        .optimize = .ReleaseFast,
+    });
+    const bench_module = b.createModule(.{
+        .root_source_file = b.path("bench/bench.zig"),
+        .target = target,
+        .optimize = .ReleaseFast,
+    });
+    bench_module.addImport("zregex", bench_zregex);
+    const bench_exe = b.addExecutable(.{ .name = "bench", .root_module = bench_module });
+    const run_bench = b.addRunArtifact(bench_exe);
+    run_bench.setCwd(b.path("."));
+    run_bench.addArg("zig-out/bench/results.json");
+    run_bench.has_side_effects = true;
+    const bench_step = b.step("bench", "Run the performance baseline (ReleaseFast)");
+    bench_step.dependOn(&run_bench.step);
+
     // =============================================================================
     // Library-specific build steps
     // =============================================================================

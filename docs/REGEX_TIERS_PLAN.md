@@ -516,18 +516,24 @@ Un consumidor que solo necesite T0 puede importar `zregex-t0` y no enlaza las ~3
 
 Son **estimaciones de orden de magnitud, no mediciones**. No hay benchmarks en el repo, y las cifras del README (`README.md:208-216`) no tienen un script que las respalde. Se recalibran con el baseline de F0d. Se supone ReleaseFast en un x86-64 o arm64 moderno a ~3 GHz.
 
-| Benchmark (entradas de 1–10 MB) | Tier | Objetivo | Aspiracional | Razonamiento |
-|---|---|---|---|---|
-| Literal `hello` | T0 | **≥ 300 MB/s** | 500 MB/s | Prefiltro con `std.mem.indexOfScalar` sobre el primer byte o unidad del literal + comparación del resto (en F4a). Un memmem SIMD propio no está en el roadmap. **No verifiqué si `indexOfScalar` está vectorizado en la std de Zig 0.16**; por eso el objetivo que cuenta es 300. |
-| `/[a-z]+/` con la VM genérica | T0 | ≥ 50 MB/s | — | 2–3 hilos activos × 5–10 ns por paso (dispatch, test de conjunto, inserción en sparse set) ≈ 10–30 ns/byte, es decir 33–100 MB/s. |
-| `/[a-z]+/` con fast path de clase única | T0 | ≥ 500 MB/s | — | Basta una tabla de 256 entradas y un bucle simple (`while (i < n and tbl[s[i]]) i += 1`), ~1–2 ns/byte; no requiere desenrollado ni despacho especializado. Con Subject UTF-16, la tabla cubre las unidades < 256 y el resto va por `CharSet.contains`. |
-| `\d{3}-\d{4}` con dígitos dispersos / densos | T0 | ≥ 200 / ≥ 40 MB/s | — | El prefiltro por primer byte descarta la mayoría de las posiciones / con dígitos densos trabaja la VM genérica. |
-| Email | T0 | ≥ 30 MB/s | — | Más hilos activos. |
-| `\p{L}+` con `u`, texto mixto / mayormente ASCII | T1 | ≥ 30 / ≥ 100 MB/s | — | Búsqueda binaria en rangos (~20–40 ns por code point) / bitmap ASCII primero. |
-| `[\p{L}--\p{Lu}]` con `v` | T1 | igual que `\p` | — | El conjunto se calcula en compilación. |
-| `<(\w+)>.*?<\/\1>` sobre HTML no adversarial | T2 | ≥ 10 MB/s | — | Sin objetivo de throughput para entradas adversariales. |
-| `(?<=\$)\d+` | T2 | ≥ 20 MB/s | — | Lookbehind delegado a la VM con memo (disponible desde F6b). |
-| `(a+)+b` y `(a\|aa)*c` sobre 40 `a` + un caracter que no matchea | T2 | `StepLimitExceeded` en ≤ 10 ms con el presupuesto por defecto | — | Lo que se garantiza es la cota, no el throughput. |
+| Benchmark (entradas de 1–10 MB) | Tier | Objetivo | Aspiracional | Baseline F0d (medido) | Razonamiento |
+|---|---|---|---|---|---|
+| Literal `hello` | T0 | **≥ 300 MB/s** | 500 MB/s | 6,1–6,4 MB/s | Prefiltro con `std.mem.indexOfScalar` sobre el primer byte o unidad del literal + comparación del resto (en F4a). Un memmem SIMD propio no está en el roadmap. **No verifiqué si `indexOfScalar` está vectorizado en la std de Zig 0.16**; por eso el objetivo que cuenta es 300. |
+| `/[a-z]+/` con la VM genérica | T0 | ≥ 50 MB/s | — | 8,0–8,5 MB/s | 2–3 hilos activos × 5–10 ns por paso (dispatch, test de conjunto, inserción en sparse set) ≈ 10–30 ns/byte, es decir 33–100 MB/s. |
+| `/[a-z]+/` con fast path de clase única | T0 | ≥ 500 MB/s | — | 8,0–8,5 MB/s (no hay fast path) | Basta una tabla de 256 entradas y un bucle simple (`while (i < n and tbl[s[i]]) i += 1`), ~1–2 ns/byte; no requiere desenrollado ni despacho especializado. Con Subject UTF-16, la tabla cubre las unidades < 256 y el resto va por `CharSet.contains`. |
+| `\d{3}-\d{4}` con dígitos dispersos / densos | T0 | ≥ 200 / ≥ 40 MB/s | — | 5,4–6,7 / 4,7–5,8 MB/s | El prefiltro por primer byte descarta la mayoría de las posiciones / con dígitos densos trabaja la VM genérica. |
+| Email | T0 | ≥ 30 MB/s | — | 3,0–3,2 MB/s | Más hilos activos. |
+| `\p{L}+` con `u`, texto mixto / mayormente ASCII | T1 | ≥ 30 / ≥ 100 MB/s | — | 10,7–11,0 / 8,0–8,8 MB/s | Búsqueda binaria en rangos (~20–40 ns por code point) / bitmap ASCII primero. |
+| `[\p{L}--\p{Lu}]` con `v` | T1 | igual que `\p` | — | 3,5–3,7 MB/s | El conjunto se calcula en compilación. |
+| `<(\w+)>.*?<\/\1>` sobre HTML no adversarial | T2 | ≥ 10 MB/s | — | 13,7–14,8 MB/s | Sin objetivo de throughput para entradas adversariales. |
+| `(?<=\$)\d+` | T2 | ≥ 20 MB/s | — | 0,27–0,34 MB/s | Lookbehind delegado a la VM con memo (disponible desde F6b). |
+| `(a+)+b` y `(a\|aa)*c` sobre 40 `a` + un caracter que no matchea | T2 | `StepLimitExceeded` en ≤ 10 ms con el presupuesto por defecto | — | `StepLimitExceeded` en 44–48 ms (tope de 30 s no alcanzado) | Lo que se garantiza es la cota, no el throughput. |
+
+**Baseline F0d.** Medido con `zig build bench` (`bench/bench.zig`, ReleaseFast): `findAll` sobre 1 MiB de entrada generada con semilla fija, mediana de 5 corridas, rango de 3 ejecuciones del bench. Intel Xeon @ 2,10 GHz, 4 núcleos, contenedor compartido: es **una sola máquina con ruido de ±10–20 %**, así que sirve para comparar fases entre sí, no como cifra absoluta. Detalle completo (asignaciones por `findAll`/match, tiempo de `compile`) en `zig-out/bench/results.json`. Lectura:
+- Todo el camino actual está entre **0,3 y 15 MB/s**: 1–2 órdenes de magnitud por debajo de los objetivos de T0/T1. Esto es coherente con D12: `find` crea un matcher por posición y avanza de a un byte, sin prefiltro.
+- `(?<=\$)\d+` es el peor caso (0,3 MB/s): el lookbehind actual (D7) prueba hasta 100 longitudes en cada posición.
+- Asignaciones: 1–2 por match en la mayoría de los casos (la copia de 16 capturas del `MatchResult`), pero **~108 por match en email**, por las listas de posiciones de `matchStarGreedy`.
+- Los casos adversariales agotan el presupuesto por defecto (1 M de pasos) en ~45 ms desde la primera posición de inicio; el objetivo de ≤ 10 ms implica bajar ese presupuesto o hacer cada paso ~5 veces más barato. **El presupuesto por defecto no está calibrado contra ese objetivo**; se revisa en F6a.
 
 **Si no se llega al objetivo de literal (300 MB/s):**
 1. Se perfila y se prueba a elegir, en lugar del primer byte, el byte del literal menos frecuente según una tabla fija de frecuencias. Sigue usando la std, sin SIMD propio.
