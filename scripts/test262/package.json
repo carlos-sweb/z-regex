@@ -1,0 +1,9 @@
+{
+  "name": "zregex-test262",
+  "private": true,
+  "description": "test262 harness for zregex (docs/REGEX_TIERS_PLAN.md, F0b). Tooling only; not a dependency of the library.",
+  "type": "module",
+  "dependencies": {
+    "koffi": "3.3.1"
+  }
+}
