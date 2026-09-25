@@ -513,20 +513,29 @@ fails on any regression against `scripts/test262/baseline.json`.
   counterparts. 2189 files, 3996 entries (strict and sloppy run separately).
   `built-ins/String/prototype/{match,replace,split,...}` is not included yet.
 - **Engine suite** (baseline; the host suite and skipped tests excluded):
-  3033 entries, **2729 pass (90.0 %)**, 137 fail, 152 zregex compile errors,
+  3017 entries, **2733 pass (90.6 %)**, 117 fail, 152 zregex compile errors,
   15 unextracted, 0 crashes, 0 timeouts.
-- **Of the 2088 entries that actually exercise zregex, 1809 pass (86.6 %).**
+- **Of the 2080 entries that actually exercise zregex, 1811 pass (87.1 %).**
 - **Host suite** (`built-ins/RegExp/prototype/exec`, which tests the harness's
   own JS `RegExpBuiltinExec`, not zregex): 152/152 pass.
-- **Skipped** (not in the baseline): 497 `skipped_host` (features Node 22's V8
-  lacks: RegExp modifiers, duplicate named groups, `RegExp.escape`, legacy
-  RegExp features) and 314 `skipped_feature` (the `v` flag, until F5;
-  `features.json`).
-- A full run takes ~65-80 s wall with 4 workers; ~95 % of it is
-  `property-escapes/generated`.
+- **Skipped** (not in the baseline), each with a typed `reason`:
+  513 `skipped_host` -- 497 `host_feature` (features Node 22's V8 lacks:
+  RegExp modifiers, duplicate named groups, `RegExp.escape`, legacy RegExp
+  features), 14 `v8_behind_spec` (tests that also fail in plain V8 without
+  zregex, found by the harness's control run: `flags`/`unicode` handling in
+  `@@match`/`@@replace`), 2 `host_flags` (literal flag validation) -- and
+  314 `skipped_feature` (the `v` flag, until F5; `features.json`).
+- **The baseline assumes an 8 MiB native stack in the caller.** Consumers
+  that call zregex with less stack (FFI layers, threads with small stacks)
+  can crash on patterns with deep recursion (see D14 in
+  `docs/REGEX_TIERS_PLAN.md`); F6a's explicit heap stack removes the
+  dependency.
+- A full run takes ~65 s wall with 4 workers; ~95 % of it is
+  `property-escapes/generated`. The control run re-runs every non-passing
+  entry without zregex, adding ~10 s.
 
-**Read the percentages with care.** 945 of the 3033 engine entries
-(31.2 %) never call into zregex at all (getters, property descriptors,
+**Read the percentages with care.** 937 of the 3017 engine entries
+(31.1 %) never call into zregex at all (getters, property descriptors,
 species, names): they pass or fail on V8 and on the harness's host code.
 The median number of zregex `exec` calls per entry is 1 (mean 3.5). The
 "Pass (of ran)" column therefore measures the host as much as the engine;
@@ -537,24 +546,24 @@ where every entry exercises zregex.)
 
 | Directory | Ran | Pass (of ran) | Exercise zregex | Pass (of exercised) | Skipped | Time (s) | Non-pass statuses |
 |---|---|---|---|---|---|---|---|
-| annexB/built-ins/RegExp | 20 | 12 (60.0 %) | 12 | 4 (33.3 %) | 0 | 3.5 | fail 6, zregex_compile_error 2 |
+| annexB/built-ins/RegExp | 20 | 12 (60.0 %) | 12 | 4 (33.3 %) | 0 | 3.4 | fail 6, zregex_compile_error 2 |
 | annexB/built-ins/RegExp/legacy-accessors | 0 | 0 (—) | 0 | 0 (—) | 48 | 0.0 | — |
 | annexB/built-ins/RegExp/named-groups | 4 | 0 (0.0 %) | 4 | 0 (0.0 %) | 0 | 0.0 | zregex_compile_error 4 |
 | annexB/built-ins/RegExp/prototype | 46 | 46 (100.0 %) | 24 | 24 (100.0 %) | 6 | 0.1 | — |
 | annexB/language/literals/regexp | 16 | 8 (50.0 %) | 16 | 8 (50.0 %) | 0 | 0.0 | fail 6, zregex_compile_error 2 |
-| built-ins/RegExp | 820 | 798 (97.3 %) | 520 | 498 (95.8 %) | 156 | 1.7 | fail 12, zregex_compile_error 10 |
+| built-ins/RegExp | 820 | 798 (97.3 %) | 520 | 498 (95.8 %) | 156 | 2.3 | fail 12, zregex_compile_error 10 |
 | built-ins/RegExp/Symbol.species | 8 | 8 (100.0 %) | 0 | 0 (—) | 0 | 0.0 | — |
 | built-ins/RegExp/dotall | 8 | 2 (25.0 %) | 8 | 2 (25.0 %) | 0 | 0.0 | fail 6 |
 | built-ins/RegExp/escape | 0 | 0 (—) | 0 | 0 (—) | 40 | 0.0 | — |
 | built-ins/RegExp/lookBehind | 34 | 18 (52.9 %) | 34 | 18 (52.9 %) | 0 | 0.1 | fail 16 |
-| built-ins/RegExp/match-indices | 28 | 24 (85.7 %) | 28 | 24 (85.7 %) | 0 | 0.0 | fail 2, zregex_compile_error 2 |
+| built-ins/RegExp/match-indices | 28 | 24 (85.7 %) | 28 | 24 (85.7 %) | 0 | 0.1 | fail 2, zregex_compile_error 2 |
 | built-ins/RegExp/named-groups | 52 | 38 (73.1 %) | 44 | 30 (68.2 %) | 20 | 0.1 | fail 2, zregex_compile_error 12 |
 | built-ins/RegExp/property-escapes | 146 | 136 (93.2 %) | 144 | 134 (93.1 %) | 0 | 0.0 | zregex_compile_error 2, fail 8 |
-| built-ins/RegExp/prototype | 20 | 18 (90.0 %) | 2 | 0 (0.0 %) | 0 | 0.0 | fail 2 |
-| built-ins/RegExp/prototype/Symbol.match | 106 | 98 (92.5 %) | 52 | 48 (92.3 %) | 0 | 0.1 | fail 8 |
+| built-ins/RegExp/prototype | 20 | 20 (100.0 %) | 0 | 0 (—) | 0 | 0.0 | — |
+| built-ins/RegExp/prototype/Symbol.match | 100 | 98 (98.0 %) | 50 | 48 (96.0 %) | 6 | 0.1 | fail 2 |
 | built-ins/RegExp/prototype/Symbol.matchAll | 52 | 52 (100.0 %) | 14 | 14 (100.0 %) | 0 | 0.1 | — |
-| built-ins/RegExp/prototype/Symbol.replace | 138 | 124 (89.9 %) | 60 | 52 (86.7 %) | 0 | 0.2 | fail 12, zregex_compile_error 2 |
-| built-ins/RegExp/prototype/Symbol.search | 46 | 46 (100.0 %) | 10 | 10 (100.0 %) | 0 | 0.1 | — |
+| built-ins/RegExp/prototype/Symbol.replace | 130 | 126 (96.9 %) | 58 | 54 (93.1 %) | 8 | 0.2 | fail 2, zregex_compile_error 2 |
+| built-ins/RegExp/prototype/Symbol.search | 46 | 46 (100.0 %) | 10 | 10 (100.0 %) | 0 | 0.0 | — |
 | built-ins/RegExp/prototype/Symbol.split | 88 | 88 (100.0 %) | 36 | 36 (100.0 %) | 0 | 0.1 | — |
 | built-ins/RegExp/prototype/dotAll | 16 | 16 (100.0 %) | 0 | 0 (—) | 0 | 0.0 | — |
 | built-ins/RegExp/prototype/flags | 30 | 30 (100.0 %) | 0 | 0 (—) | 2 | 0.0 | — |
@@ -571,7 +580,7 @@ where every entry exercises zregex.)
 | built-ins/RegExp/regexp-modifiers | 0 | 0 (—) | 0 | 0 (—) | 124 | 0.0 | — |
 | built-ins/RegExp/regexp-modifiers/syntax | 0 | 0 (—) | 0 | 0 (—) | 16 | 0.0 | — |
 | built-ins/RegExp/unicodeSets/generated | 0 | 0 (—) | 0 | 0 (—) | 228 | 0.0 | — |
-| language/literals/regexp | 151 | 99 (65.6 %) | 58 | 21 (36.2 %) | 83 | 7.3 | unextracted 15, fail 37 |
+| language/literals/regexp | 149 | 99 (66.4 %) | 56 | 21 (37.5 %) | 85 | 6.7 | unextracted 15, fail 35 |
 | language/literals/regexp/named-groups | 58 | 44 (75.9 %) | 56 | 42 (75.0 %) | 0 | 0.0 | zregex_compile_error 2, fail 12 |
 
 Groups with huge subjects (every code point of a property, or loops over
@@ -579,8 +588,8 @@ the code space), which dominate run time:
 
 | Directory | Ran | Pass (of ran) | Exercise zregex | Pass (of exercised) | Skipped | Time (s) | Non-pass statuses |
 |---|---|---|---|---|---|---|---|
-| built-ins/RegExp/CharacterClassEscapes | 24 | 20 (83.3 %) | 24 | 20 (83.3 %) | 0 | 13.1 | fail 4 |
-| built-ins/RegExp/property-escapes/generated | 882 | 766 (86.8 %) | 882 | 766 (86.8 %) | 35 | 222.4 | zregex_compile_error 114, fail 2 |
+| built-ins/RegExp/CharacterClassEscapes | 24 | 20 (83.3 %) | 24 | 20 (83.3 %) | 0 | 13.5 | fail 4 |
+| built-ins/RegExp/property-escapes/generated | 882 | 766 (86.8 %) | 882 | 766 (86.8 %) | 35 | 225.3 | zregex_compile_error 114, fail 2 |
 
 **Root causes worth knowing before reading the failures:**
 
@@ -603,10 +612,14 @@ the code space), which dominate run time:
   groups, `[\12-\14]`) and incomplete `u`-mode strictness (most of the
   `language/literals/regexp` failures are parse-negative tests zregex
   accepts). See `docs/REGEX_TIERS_PLAN.md` §2.3.
-- The recursive matcher bounds recursion depth, not stack bytes: some
+- The recursive matcher bounds recursion depth, not stack bytes (D14): some
   patterns (e.g. `/<body.*>((.*\n?)*?)<\/body>/i`) crash on a 1 MiB native
   stack and pass on 8 MiB. The harness uses 8 MiB; F6a's explicit stack
   addresses it.
+- Per-phase breakdown of the non-passing entries:
+  `node scripts/test262/categorize.mjs` (explicit rules, no unclassified
+  entries at this baseline): F1 115, F3 12, F5 122, F6a 2, F6b 18, and 15
+  lexer-level tests whose literal can't be extracted.
 
 **Blind spots**: a pattern V8 rejects but zregex would accept via
 `new RegExp(...)` isn't measured (V8 throws first); parse-negative tests
