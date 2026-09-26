@@ -271,3 +271,31 @@ test "negated shorthands in a class cover every code point, not just 0-255" {
         try expectMatch("^[\\s\\d\\w-]+$", opts, "a-1\xC2\xA0", "a-1\xC2\xA0");
     }
 }
+
+// --- D5: LineTerminator is LF, CR, LS and PS ---
+
+test "dot excludes every LineTerminator unless dotAll" {
+    for ([_]zregex.CompileOptions{ annex_b, u }) |opts| {
+        for ([_][]const u8{ "\n", "\r", "\xE2\x80\xA8", "\xE2\x80\xA9" }) |lt| {
+            try expectMatch("^.$", opts, lt, null);
+            var dot_all = opts;
+            dot_all.dot_all = true;
+            try expectMatch("^.$", dot_all, lt, lt);
+        }
+        // Other separators are ordinary characters for `.`.
+        for ([_][]const u8{ "\xC2\x85", "\x0B", "\x0C", "\xE2\x80\xA7" }) |c| try expectMatch("^.$", opts, c, c);
+    }
+}
+
+test "^ and $ with multiline split lines at every LineTerminator" {
+    const m: zregex.CompileOptions = .{ .multiline = true };
+    for ([_][]const u8{ "\n", "\r", "\xE2\x80\xA8", "\xE2\x80\xA9" }) |lt| {
+        var buf: [16]u8 = undefined;
+        const input = try std.fmt.bufPrint(&buf, "a{s}b", .{lt});
+        try expectMatch("^b", m, input, "b");
+        try expectMatch("a$", m, input, "a");
+        try expectMatch("^b", .{}, input, null);
+    }
+    // CRLF is two terminators: an empty line sits between them.
+    try expectMatch("^$", m, "a\r\nb", "");
+}

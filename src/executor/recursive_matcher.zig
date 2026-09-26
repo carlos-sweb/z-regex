@@ -522,8 +522,8 @@ pub const RecursiveMatcher = struct {
 
             .LINE_START => {
                 // Assert start of line (used for ^ with multiline): absolute
-                // start of input, or immediately after a '\n'
-                const at_line_start = pos == 0 or self.input[pos - 1] == '\n';
+                // start of input, or right after a LineTerminator (D5)
+                const at_line_start = pos == 0 or lineTerminatorEndsAt(self.input, pos);
                 if (!at_line_start) {
                     return MatchResult{ .matched = false, .end_pos = pos };
                 }
@@ -532,8 +532,8 @@ pub const RecursiveMatcher = struct {
 
             .LINE_END => {
                 // Assert end of line (used for $ with multiline): absolute
-                // end of input, or immediately before a '\n'
-                const at_line_end = pos == self.input.len or self.input[pos] == '\n';
+                // end of input, or right before a LineTerminator (D5)
+                const at_line_end = pos == self.input.len or isLineTerminatorAt(self.input, pos);
                 if (!at_line_end) {
                     return MatchResult{ .matched = false, .end_pos = pos };
                 }
@@ -617,6 +617,25 @@ pub const RecursiveMatcher = struct {
         return len;
     }
 
+    /// ECMA-262 LineTerminator: LF, CR, LS (U+2028) or PS (U+2029, both
+    /// E2 80 A8/A9 in UTF-8). What `.` without /s excludes and what `^`/`$`
+    /// with /m look for (D5).
+    fn isLineTerminatorAt(input: []const u8, pos: usize) bool {
+        if (pos >= input.len) return false;
+        return switch (input[pos]) {
+            '\n', '\r' => true,
+            0xE2 => pos + 2 < input.len and input[pos + 1] == 0x80 and (input[pos + 2] == 0xA8 or input[pos + 2] == 0xA9),
+            else => false,
+        };
+    }
+
+    /// Whether a LineTerminator ends right before `pos`.
+    fn lineTerminatorEndsAt(input: []const u8, pos: usize) bool {
+        if (pos == 0) return false;
+        if (input[pos - 1] == '\n' or input[pos - 1] == '\r') return true;
+        return pos >= 3 and isLineTerminatorAt(input, pos - 3);
+    }
+
     /// Match any Unicode scalar value (dot). `exclude_newline` is true for
     /// plain `.` (no /s flag), false for dot_all. Consumes the full UTF-8
     /// sequence at `pos`, not just one byte.
@@ -624,7 +643,7 @@ pub const RecursiveMatcher = struct {
         if (pos >= self.input.len) {
             return MatchResult{ .matched = false, .end_pos = pos };
         }
-        if (exclude_newline and self.input[pos] == '\n') {
+        if (exclude_newline and isLineTerminatorAt(self.input, pos)) {
             return MatchResult{ .matched = false, .end_pos = pos };
         }
         const seq_len = utf8SeqLenAt(self.input, pos);
@@ -1125,8 +1144,9 @@ pub const RecursiveMatcher = struct {
             },
 
             .CHAR => {
-                // Match any Unicode scalar value except newline (dot without /s)
-                if (pos >= self.input.len or self.input[pos] == '\n') {
+                // Match any Unicode scalar value except a LineTerminator
+                // (dot without /s)
+                if (pos >= self.input.len or isLineTerminatorAt(self.input, pos)) {
                     return .{ .matched = false, .end_pos = pos };
                 }
                 return .{ .matched = true, .end_pos = pos + utf8SeqLenAt(self.input, pos) };
