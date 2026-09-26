@@ -19,7 +19,7 @@ const std = @import("std");
 const Allocator = std.mem.Allocator;
 const lexer_mod = @import("lexer.zig");
 const ast_mod = @import("ast.zig");
-const properties = @import("../unicode/properties.zig");
+const properties = @import("../../unicode/properties.zig");
 
 const Lexer = lexer_mod.Lexer;
 const Token = lexer_mod.Token;
@@ -169,7 +169,7 @@ pub const Parser = struct {
     nested_class_depth: u32 = 0,
     /// Names are decoded (escapes resolved, UTF-8) and owned by the parser
     /// (freed in `deinit`); callers that need them to outlive the parser
-    /// copy them (see `codegen/compiler.zig`). In source order.
+    /// copy them (see `src/compile.zig`). In source order.
     group_names: std.ArrayListUnmanaged(GroupNameEntry) = .empty,
     /// `\k<name>` references waiting for `finish` (F1c): a reference may come
     /// before its group, or inside it. `node` is borrowed (owned by the AST);

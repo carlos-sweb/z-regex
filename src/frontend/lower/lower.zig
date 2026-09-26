@@ -16,10 +16,10 @@
 const std = @import("std");
 const Allocator = std.mem.Allocator;
 const ast = @import("../parser/ast.zig");
-const hir = @import("../ir/hir.zig");
-const charset_mod = @import("../ir/charset.zig");
-const properties = @import("../unicode/properties.zig");
-const casefold = @import("../unicode/casefold.zig");
+const hir = @import("../../ir/hir.zig");
+const charset_mod = @import("../../ir/charset.zig");
+const properties = @import("../../unicode/properties.zig");
+const casefold = @import("../../unicode/casefold.zig");
 const Lexer = @import("../parser/lexer.zig").Lexer;
 const Parser = @import("../parser/parser.zig").Parser;
 

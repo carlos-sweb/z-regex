@@ -5,7 +5,7 @@
 
 const std = @import("std");
 const Allocator = std.mem.Allocator;
-const DynBuf = @import("../utils/dynbuf.zig").DynBuf;
+const DynBuf = @import("../../utils/dynbuf.zig").DynBuf;
 const opcodes = @import("opcodes.zig");
 const format = @import("format.zig");
 const Opcode = opcodes.Opcode;

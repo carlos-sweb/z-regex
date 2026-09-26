@@ -341,3 +341,6 @@ test {
 test {
     _ = @import("hir_contract_tests.zig");
 }
+test {
+    _ = @import("tier2_pipeline_tests.zig");
+}

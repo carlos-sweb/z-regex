@@ -7,7 +7,7 @@
 //!
 //! | Bug (origin)                                                        | Existing test |
 //! |---------------------------------------------------------------------|---------------|
-//! | `/(a*)b\1+/` on "baaac" segfaulted (Phase 6)                        | src/executor/recursive_matcher.zig: "RecursiveMatcher: quantified backreference to an empty capture doesn't crash" |
+//! | `/(a*)b\1+/` on "baaac" segfaulted (Phase 6)                        | tests/tier2_pipeline_tests.zig: "RecursiveMatcher: quantified backreference to an empty capture doesn't crash" |
 //! | `/[a-z]+/i` ignored case in ranges (Phase 6)                         | src/regex.zig: "Regex: case_insensitive character ranges match both cases (test262 S15.10.2.8_A5_T1)" |
 //! | `/[^o]/i` negated class ignored case (Phase 6)                       | src/regex.zig: "Regex: case_insensitive negated character class matches both cases (test262 S15.10.2.6_A3_T7)" |
 //! | `/(123){1,}/` lost its last iteration's capture (Phase 6)           | src/regex.zig: "Regex: a quantified capturing group retains its last iteration's capture (test262 S15.10.2.7_A6_T4)" |

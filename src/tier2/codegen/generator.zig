@@ -2,19 +2,19 @@
 //!
 //! This module implements the code generation phase of the compiler: it
 //! walks the HIR (`src/ir/hir.zig`, lowered from the parser's AST by
-//! `src/lower/lower.zig`) and emits the backtracker's bytecode. Since F2c it
+//! `src/frontend/lower/lower.zig`) and emits the backtracker's bytecode. Since F2c it
 //! reads only the HIR; the bytecode is the same as the AST-based generator
 //! produced (tests/snapshots/bytecode.txt).
 
 const std = @import("std");
 const Allocator = std.mem.Allocator;
-const hir = @import("../ir/hir.zig");
+const hir = @import("../../ir/hir.zig");
 const bytecode = @import("../bytecode/writer.zig");
 const opcodes = @import("../bytecode/opcodes.zig");
-const bittable_mod = @import("../utils/bittable.zig");
+const bittable_mod = @import("../../utils/bittable.zig");
 const BitTable = bittable_mod.BitTable;
-const casefold = @import("../unicode/casefold.zig");
-const charset_mod = @import("../ir/charset.zig");
+const casefold = @import("../../unicode/casefold.zig");
+const charset_mod = @import("../../ir/charset.zig");
 const CharSet = charset_mod.CharSet;
 const Range = charset_mod.Range;
 
@@ -699,120 +699,3 @@ pub const CodeGenerator = struct {
         try self.writer.emitSimple(if (l.behind) .LOOKBEHIND_END else .LOOKAHEAD_END);
     }
 };
-
-// =============================================================================
-// Tests
-// =============================================================================
-
-const TestProgram = struct {
-    writer: BytecodeWriter,
-    code: []const u8,
-
-    fn deinit(self: *TestProgram) void {
-        self.writer.deinit();
-    }
-};
-
-/// Parse, lower and generate `pattern` (`flags` as the root scope).
-fn testProgram(pattern: []const u8, flags: hir.Flags) !TestProgram {
-    const a = std.testing.allocator;
-    const Lexer = @import("../parser/lexer.zig").Lexer;
-    const Parser = @import("../parser/parser.zig").Parser;
-    const lower = @import("../lower/lower.zig");
-
-    var lexer = Lexer.init(pattern);
-    var parser = try Parser.init(a, &lexer);
-    defer parser.deinit();
-    const ast_root = try parser.parse();
-    defer ast_root.deinit();
-    var arena = std.heap.ArenaAllocator.init(a);
-    defer arena.deinit();
-    const root = try lower.lower(arena.allocator(), ast_root, flags, &.{});
-
-    var program: TestProgram = .{ .writer = BytecodeWriter.init(a), .code = &.{} };
-    errdefer program.writer.deinit();
-    var gen = CodeGenerator.init(a, &program.writer);
-    defer gen.deinit();
-    try gen.generate(root);
-    program.code = try program.writer.finalize();
-    return program;
-}
-
-test "CodeGenerator: simple character" {
-    var p = try testProgram("a", .{});
-    defer p.deinit();
-    // CHAR32 'a', MATCH
-    try std.testing.expectEqual(@intFromEnum(Opcode.CHAR32), p.code[0]);
-    try std.testing.expectEqual(@intFromEnum(Opcode.MATCH), p.code[p.code.len - 1]);
-}
-
-test "CodeGenerator: a literal is one CHAR32 per character" {
-    var p = try testProgram("abc", .{});
-    defer p.deinit();
-    try std.testing.expectEqual(@as(usize, 3 * 5 + 1), p.code.len);
-}
-
-test "CodeGenerator: alternation starts with SPLIT" {
-    var p = try testProgram("a|b", .{});
-    defer p.deinit();
-    try std.testing.expectEqual(@intFromEnum(Opcode.SPLIT), p.code[0]);
-}
-
-test "CodeGenerator: quantifiers" {
-    for ([_][]const u8{ "a*", "a+", "a{2,4}", "a{2,}?" }) |pattern| {
-        var p = try testProgram(pattern, .{});
-        defer p.deinit();
-        try std.testing.expect(p.code.len > 0);
-    }
-}
-
-test "CodeGenerator: group" {
-    var p = try testProgram("(ab)", .{});
-    defer p.deinit();
-    try std.testing.expectEqual(@intFromEnum(Opcode.SAVE_START), p.code[0]);
-}
-
-test "CodeGenerator: anchors follow the scope's m flag" {
-    var p = try testProgram("^a$", .{});
-    defer p.deinit();
-    try std.testing.expectEqual(@intFromEnum(Opcode.STRING_START), p.code[0]);
-    var m = try testProgram("^a$", .{ .multiline = true });
-    defer m.deinit();
-    try std.testing.expectEqual(@intFromEnum(Opcode.LINE_START), m.code[0]);
-}
-
-test "CodeGenerator: dot excludes newline by default" {
-    var p = try testProgram(".", .{});
-    defer p.deinit();
-    // Without dot_all, '.' must exclude '\n' (matches JS default): CHAR now
-    // means "any Unicode scalar value except newline" (decoded at match time).
-    try std.testing.expectEqual(@intFromEnum(Opcode.CHAR), p.code[0]);
-}
-
-test "CodeGenerator: dot matches newline with dot_all" {
-    var p = try testProgram(".", .{ .dot_all = true });
-    defer p.deinit();
-    // With dot_all, '.' matches newline too, so it compiles to the dedicated
-    // CHAR_ANY opcode instead of the newline-excluding CHAR opcode.
-    try std.testing.expectEqual(@intFromEnum(Opcode.CHAR_ANY), p.code[0]);
-}
-
-test "CodeGenerator: a?/a?? clear inner captures on skip, a{0,1} doesn't" {
-    var q = try testProgram("(a)?", .{});
-    defer q.deinit();
-    var c = try testProgram("(a){0,1}", .{});
-    defer c.deinit();
-    try std.testing.expect(try hasOpcode(q.code, .CLEAR_CAPTURE));
-    try std.testing.expect(!try hasOpcode(c.code, .CLEAR_CAPTURE));
-}
-
-fn hasOpcode(code: []const u8, op: Opcode) !bool {
-    const format = @import("../bytecode/format.zig");
-    var pc: usize = 0;
-    while (pc < code.len) {
-        const inst = try format.decodeInstruction(code, pc);
-        if (inst.opcode == op) return true;
-        pc += inst.size;
-    }
-    return false;
-}

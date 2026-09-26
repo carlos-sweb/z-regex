@@ -4,7 +4,7 @@
 //! bytecode dumping, pretty printing, and conditional logging.
 
 const std = @import("std");
-const config = @import("../core/config.zig");
+const config = @import("config.zig");
 
 /// Print a hex dump of a byte buffer
 pub fn hexDump(writer: anytype, data: []const u8, offset: usize) !void {

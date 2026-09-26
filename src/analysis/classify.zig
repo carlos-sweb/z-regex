@@ -27,7 +27,7 @@
 const std = @import("std");
 const Allocator = std.mem.Allocator;
 
-const lower_mod = @import("../lower/lower.zig");
+const lower_mod = @import("../frontend/lower/lower.zig");
 const hir = @import("../ir/hir.zig");
 const Node = hir.Node;
 
@@ -195,7 +195,7 @@ pub const UNROLL_BUDGET: u64 = 1000;
 /// Classify `pattern` under `flags`. Only allocation failure is an error;
 /// parse failures and known deviations are reported in the result.
 pub fn analyze(gpa: Allocator, pattern: []const u8, flags: Flags) Allocator.Error!Analysis {
-    // The same front end and lexer modes `codegen/compiler.zig::compile`
+    // The same front end and lexer modes `src/compile.zig::compile`
     // uses, so this classifies exactly the HIR compile generates from.
     const fe = lower_mod.Frontend.init(gpa, pattern, .{ .unicode = flags.u, .v = flags.v }, .{
         .ignore_case = flags.i,

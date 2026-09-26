@@ -1,5 +1,5 @@
 //! HIR: the high-level intermediate representation (docs/REGEX_TIERS_PLAN.md,
-//! F2c). The parser's AST is lowered into it (`src/lower/lower.zig`) and the
+//! F2c). The parser's AST is lowered into it (`src/frontend/lower/lower.zig`) and the
 //! code generator reads only the HIR.
 //!
 //! The tree lives in one arena per compilation and holds no pointer into the

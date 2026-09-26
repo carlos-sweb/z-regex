@@ -27,11 +27,11 @@ const std = @import("std");
 const Allocator = std.mem.Allocator;
 
 // Import compiler and executor modules
-const compiler = @import("codegen/compiler.zig");
-const matcher_mod = @import("executor/matcher.zig");
-const parser_mod = @import("parser/parser.zig");
-const generator_mod = @import("codegen/generator.zig");
-const format_mod = @import("bytecode/format.zig");
+const compiler = @import("compile.zig");
+const matcher_mod = @import("tier2/executor/matcher.zig");
+const parser_mod = @import("frontend/parser/parser.zig");
+const generator_mod = @import("tier2/codegen/generator.zig");
+const format_mod = @import("tier2/bytecode/format.zig");
 
 const CompileResult = compiler.CompileResult;
 const CompileOptions = compiler.CompileOptions;
