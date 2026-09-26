@@ -70,6 +70,7 @@ pub const compileSimple = @import("codegen/compiler.zig").compileSimple;
 pub const CompileOptions = @import("codegen/compiler.zig").CompileOptions;
 pub const CompileResult = @import("codegen/compiler.zig").CompileResult;
 pub const CharSet = @import("ir/charset.zig").CharSet;
+pub const hir = @import("ir/hir.zig");
 pub const NamedGroup = @import("codegen/compiler.zig").NamedGroup;
 
 // Executor module exports
@@ -110,6 +111,7 @@ test {
 
     // IR (F2b: CharSet)
     _ = @import("ir/charset.zig");
+    _ = @import("ir/hir.zig");
 
     // Utils module tests (implemented)
     _ = @import("utils/utils_tests.zig");
