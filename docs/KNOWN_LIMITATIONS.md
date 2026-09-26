@@ -725,6 +725,13 @@ Bench (median of 10 against F3a): every case within noise or faster (−1.5 % to
 every character went through the generic decoding path; the matcher now decodes ASCII
 inline and shares one inline character test.
 
+The lookbehind case (+25.8 %) runs the same number of matcher steps as before on the
+bench's ASCII subject (1,233 on a sample), so the gain is cost per step. On non-ASCII
+text it also makes fewer attempts (Greek sample: 2,240 → 1,508 steps), since it no longer
+starts inside a character. That also fixes captures that were silently wrong:
+`(?<=(.))x` on `"éx"` captured the byte `A9` (half a character) and now captures `é`, and
+`(?<=([^a]))x` on `"😀x"` captured `80` and now captures `😀`.
+
 ### test262 baseline (F0b)
 
 The real test262 measurement that replaces the sample above as the semantic
