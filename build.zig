@@ -16,8 +16,10 @@ pub const layers = [_]Layer{
     .{ .name = "unicode", .root = "src/unicode/root.zig", .deps = &.{} },
     .{ .name = "utils", .root = "src/utils/root.zig", .deps = &.{} },
     .{ .name = "frontend", .root = "src/frontend/root.zig", .deps = &.{ "ir", "unicode" } },
+    .{ .name = "tier0", .root = "src/tier0/root.zig", .deps = &.{ "ir", "utils" } },
+    .{ .name = "tier1", .root = "src/tier1/root.zig", .deps = &.{ "ir", "unicode", "utils", "tier0" } },
     .{ .name = "tier2", .root = "src/tier2/root.zig", .deps = &.{ "ir", "unicode", "utils" } },
-    .{ .name = "zregex", .root = "src/main.zig", .deps = &.{ "ir", "unicode", "utils", "frontend", "tier2" } },
+    .{ .name = "zregex", .root = "src/main.zig", .deps = &.{ "ir", "unicode", "utils", "frontend", "tier0", "tier1", "tier2" } },
 };
 
 /// One build of the whole module graph (per target/optimize mode).
@@ -56,6 +58,75 @@ fn addCApiModule(b: *std.Build, mods: Modules, target: std.Build.ResolvedTarget,
     });
     m.addImport("zregex", mods.get("zregex"));
     return m;
+}
+
+/// A layer's declared deps, from the table.
+fn depsOf(name: []const u8) []const []const u8 {
+    for (layers) |layer| if (std.mem.eql(u8, layer.name, name)) return layer.deps;
+    unreachable;
+}
+
+const Canary = struct {
+    /// The layer the canary pretends to be (it gets that layer's deps).
+    layer: []const u8,
+    /// Its root file: `bad` must fail with `expect`; `good` must compile.
+    bad: []const u8,
+    good: []const u8,
+    expect: []const u8,
+    /// Extra files next to it (for the relative-path canary).
+    extra: []const [2][]const u8 = &.{},
+};
+
+const canaries = [_]Canary{
+    .{
+        .layer = "tier0",
+        .bad = "pub fn f() usize {\n    return @import(\"unicode\").tables.RANGES_L.len;\n}\n",
+        .good = "pub fn f() usize {\n    return @sizeOf(@import(\"ir\").hir.Flags);\n}\n",
+        .expect = "no module named 'unicode' available within module 'tier0'",
+    },
+    .{
+        .layer = "tier1",
+        .bad = "pub fn f() usize {\n    return @sizeOf(@import(\"tier2\").ExecOptions);\n}\n",
+        .good = "pub fn f() usize {\n    return @sizeOf(@import(\"tier0\").hir.Flags);\n}\n",
+        .expect = "no module named 'tier2' available within module 'tier1'",
+    },
+    .{
+        .layer = "tier0",
+        .bad = "pub fn f() usize {\n    return @import(\"../unicode/properties.zig\").x;\n}\n",
+        .good = "pub fn f() usize {\n    return @import(\"helper.zig\").x;\n}\n",
+        .expect = "import of file outside module path",
+        .extra = &.{ .{ "unicode/properties.zig", "pub const x: usize = 1;\n" }, .{ "helper.zig", "pub const x: usize = 1;\n" } },
+    },
+};
+
+/// Each canary is compiled twice as a module named after its layer, with that
+/// layer's deps from the table: `bad` must fail with exactly `expect` (so a
+/// typo, which fails differently, doesn't pass), `good` must compile (so the
+/// file is otherwise sound). Granting the forbidden edge in the table makes
+/// `bad` compile, and the step fails. The sources are generated into the
+/// build cache, never committed.
+fn addCanaries(b: *std.Build, mods: Modules, target: std.Build.ResolvedTarget, step: *std.Build.Step) void {
+    for (canaries, 0..) |canary, i| {
+        for ([_]bool{ true, false }) |bad| {
+            const files = b.addWriteFiles();
+            const dir = b.fmt("canary{d}/{s}", .{ i, if (bad) "bad" else "good" });
+            const root = files.add(b.fmt("{s}/{s}/root.zig", .{ dir, canary.layer }), if (bad) canary.bad else canary.good);
+            for (canary.extra) |e| {
+                // `extra` paths are relative to the layer directory's parent
+                // (unicode/...) or to the layer directory itself (helper.zig).
+                const sub = if (std.mem.indexOfScalar(u8, e[0], '/') != null) b.fmt("{s}/{s}", .{ dir, e[0] }) else b.fmt("{s}/{s}/{s}", .{ dir, canary.layer, e[0] });
+                _ = files.add(sub, e[1]);
+            }
+            const main = files.add(b.fmt("{s}/main.zig", .{dir}), b.fmt("test {{\n    _ = &@import(\"{s}\").f;\n}}\n", .{canary.layer}));
+            const layer_mod = b.createModule(.{ .root_source_file = root, .target = target, .optimize = .Debug });
+            for (depsOf(canary.layer)) |dep| layer_mod.addImport(dep, mods.get(dep));
+            const main_mod = b.createModule(.{ .root_source_file = main, .target = target, .optimize = .Debug });
+            main_mod.addImport(canary.layer, layer_mod);
+            const t = b.addTest(.{ .name = b.fmt("canary{d}-{s}", .{ i, if (bad) "bad" else "good" }), .root_module = main_mod });
+            if (bad) t.expect_errors = .{ .contains = canary.expect };
+            step.dependOn(&t.step);
+        }
+    }
 }
 
 pub fn build(b: *std.Build) void {
@@ -112,6 +183,48 @@ pub fn build(b: *std.Build) void {
         .root_module = c_api_module,
     });
     const run_c_api_tests = b.addRunArtifact(c_api_tests);
+
+    // Layer check (docs/REGEX_TIERS_PLAN.md, F2e), its own step: a textual
+    // lint of every @import against the layer table, plus canaries that must
+    // fail to compile with the exact error the layering produces, each next
+    // to a control that must compile.
+    const check_layers_step = b.step("check-layers", "Check the module layering: import lint and compile-error canaries");
+    const lint_exe = b.addExecutable(.{
+        .name = "check_layers",
+        .root_module = b.createModule(.{ .root_source_file = b.path("tools/check_layers.zig"), .target = b.graph.host, .optimize = .Debug }),
+    });
+    const run_lint = b.addRunArtifact(lint_exe);
+    run_lint.setCwd(b.path("."));
+    run_lint.addArg("src");
+    for (layers) |layer| {
+        const deps = std.mem.join(b.allocator, ",", layer.deps) catch @panic("OOM");
+        run_lint.addArg(b.fmt("{s}={s}={s}", .{ layer.name, layer.root, deps }));
+    }
+    run_lint.addArg("c_api=src/c_api.zig=zregex");
+    run_lint.has_side_effects = true;
+    check_layers_step.dependOn(&run_lint.step);
+    addCanaries(b, mods, target, check_layers_step);
+
+    // Forced analysis (tests/layers/ref_all.zig): each layer's public API is
+    // walked recursively in a test binary whose only import is that layer, so
+    // a forbidden import anywhere reachable fails to compile. Part of
+    // check-layers, not `test`: it added 77 % to `zig build test` in
+    // ReleaseSafe (F2e measurement); compiling is the check, nothing runs.
+    const ref_all = b.createModule(.{ .root_source_file = b.path("tests/layers/ref_all.zig"), .target = target, .optimize = optimize });
+    const layer_sources = b.addWriteFiles();
+    for (layers) |layer| {
+        const src = layer_sources.add(b.fmt("{s}.zig", .{layer.name}), b.fmt(
+            \\test "forced analysis of the {s} module" {{
+            \\    @import("ref_all").refAllDeclsRecursive(@import("{s}"));
+            \\}}
+            \\
+        , .{ layer.name, layer.name }));
+        const m = b.createModule(.{ .root_source_file = src, .target = target, .optimize = optimize });
+        m.addImport("ref_all", ref_all);
+        m.addImport(layer.name, mods.get(layer.name));
+        const analysis_tests = b.addTest(.{ .name = b.fmt("analysis-{s}", .{layer.name}), .root_module = m });
+        check_layers_step.dependOn(&analysis_tests.step);
+    }
 
     // Create integration test executable
     const integration_module = b.createModule(.{
