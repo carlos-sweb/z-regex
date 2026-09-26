@@ -61,6 +61,7 @@ pub const ParseError = @import("parser/parser.zig").ParseError;
 // Codegen module exports
 pub const CodeGenerator = @import("codegen/generator.zig").CodeGenerator;
 pub const CodegenError = @import("codegen/generator.zig").CodegenError;
+pub const MAX_PROGRAM_BYTES = @import("codegen/generator.zig").MAX_PROGRAM_BYTES;
 pub const Optimizer = @import("codegen/optimizer.zig").Optimizer;
 pub const OptLevel = @import("codegen/optimizer.zig").OptLevel;
 pub const compile = @import("codegen/compiler.zig").compile;

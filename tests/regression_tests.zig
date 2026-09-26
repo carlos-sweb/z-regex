@@ -171,3 +171,15 @@ test "regression: nested counted repeats past the program cap are PatternTooLarg
     var re = try zregex.Regex.compile(testing.allocator, "(?:a{100}){100}");
     re.deinit();
 }
+
+test "PatternTooLarge is exactly MAX_PROGRAM_BYTES (16 MiB) of bytecode" {
+    const max = zregex.MAX_PROGRAM_BYTES;
+    try testing.expectEqual(@as(usize, 16 << 20), max);
+    // `a{65536}` is 327680 bytes of copies (5 per `a`) plus MATCH: 51 copies
+    // fit the cap, 52 don't.
+    const at_cap = try zregex.compile(testing.allocator, "(?:a{65536}){51}", .{});
+    defer at_cap.deinit();
+    try testing.expect(at_cap.bytecode.len <= max);
+    try testing.expect(at_cap.bytecode.len > max - 327680);
+    try testing.expectError(error.PatternTooLarge, zregex.compile(testing.allocator, "(?:a{65536}){52}", .{}));
+}
