@@ -1884,11 +1884,26 @@ test "Regex: quantifiers on a multi-byte character class" {
 }
 
 test "Regex: character class with more than MAX_CLASS_RANGES multi-byte members is rejected" {
-    // 9 distinct multi-byte single-char members; MAX_CLASS_RANGES is 8.
-    try std.testing.expectError(
-        error.TooManyRanges,
-        Regex.compile(std.testing.allocator, "[\u{1F600}\u{1F601}\u{1F602}\u{1F603}\u{1F604}\u{1F605}\u{1F606}\u{1F607}\u{1F608}]"),
-    );
+    const max = @import("bytecode/opcodes.zig").MAX_CLASS_RANGES;
+    // `n` non-adjacent members (every other code point from U+1F600), so the
+    // codegen can't merge them into fewer ranges.
+    const Build = struct {
+        fn pattern(buf: []u8, n: usize, step: u21) []const u8 {
+            var len: usize = 0;
+            buf[len] = '[';
+            len += 1;
+            for (0..n) |i| len += std.unicode.utf8Encode(0x1F600 + @as(u21, @intCast(i)) * step, buf[len..]) catch unreachable;
+            buf[len] = ']';
+            return buf[0 .. len + 1];
+        }
+    };
+    var buf: [512]u8 = undefined;
+    try std.testing.expectError(error.TooManyRanges, Regex.compile(std.testing.allocator, Build.pattern(&buf, max + 1, 2)));
+    var at_max = try Regex.compile(std.testing.allocator, Build.pattern(&buf, max, 2));
+    at_max.deinit();
+    // Adjacent members merge into one range, so many of them fit.
+    var merged = try Regex.compile(std.testing.allocator, Build.pattern(&buf, max * 3, 1));
+    merged.deinit();
 }
 
 test "Regex: sticky flag only matches at the current position" {

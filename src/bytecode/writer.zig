@@ -178,11 +178,11 @@ pub const BytecodeWriter = struct {
     /// negated:u8 followed by the same range-table + property-table layout
     /// `emitCharClassUnicode` writes.
     fn emitClassSetOperand(self: *Self, operand: ClassSetOperand) !void {
-        std.debug.assert(operand.ranges.len <= opcodes.MAX_CLASS_RANGES);
+        std.debug.assert(operand.ranges.len <= opcodes.MAX_SET_OP_RANGES);
         std.debug.assert(operand.properties.len <= opcodes.MAX_CLASS_PROPERTIES);
         try self.code.append(if (operand.negated) 1 else 0);
         try self.code.append(@intCast(operand.ranges.len));
-        for (0..opcodes.MAX_CLASS_RANGES) |i| {
+        for (0..opcodes.MAX_SET_OP_RANGES) |i| {
             const range = if (i < operand.ranges.len) operand.ranges[i] else [2]u32{ 0, 0 };
             var buf: [4]u8 = undefined;
             std.mem.writeInt(u32, &buf, range[0], .little);

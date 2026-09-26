@@ -15,7 +15,16 @@ const std = @import("std");
 /// CHAR_CLASS's fixed 32-byte bitmap) instead of requiring variable-length
 /// instruction decoding. Classes needing more ranges than this are a
 /// compile error (`error.TooManyRanges`) rather than silently truncated.
-pub const MAX_CLASS_RANGES = 8;
+/// 30 is the most that keeps CHAR_CLASS_UNICODE within the u8 instruction
+/// size (1 + 1 + 30*8 + 1 + MAX_CLASS_PROPERTIES*3 = 255); the codegen
+/// merges overlapping/adjacent ranges first. F2's dynamic CharSet removes
+/// the cap.
+pub const MAX_CLASS_RANGES = 30;
+
+/// Range slots per CHAR_CLASS_SET_OP operand: two operand blocks must fit the
+/// u8 instruction size (3 + 2 * CLASS_SET_OPERAND_SIZE <= 255). 13 holds a
+/// spliced `\S` (11 ranges).
+pub const MAX_SET_OP_RANGES = 13;
 
 /// Maximum number of `\p{...}`/`\P{...}` (property, script, or
 /// script-extensions) tests inline in a CHAR_CLASS_UNICODE(_INV)
@@ -35,12 +44,12 @@ pub const ClassPropertyKind = enum(u8) {
 };
 
 /// Byte size of one CHAR_CLASS_SET_OP operand block: negated:u8 +
-/// range_count:u8 + MAX_CLASS_RANGES*(u32+u32) + prop_count:u8 +
+/// range_count:u8 + MAX_SET_OP_RANGES*(u32+u32) + prop_count:u8 +
 /// MAX_CLASS_PROPERTIES*(u8+u8+u8) -- the same range/property-table layout
 /// CHAR_CLASS_UNICODE uses, plus one leading `negated` byte for this
 /// operand's own `[^...]` (only meaningful when the operand is a nested
 /// class; see CHAR_CLASS_SET_OP's doc comment).
-pub const CLASS_SET_OPERAND_SIZE = 1 + 1 + MAX_CLASS_RANGES * 8 + 1 + MAX_CLASS_PROPERTIES * 3;
+pub const CLASS_SET_OPERAND_SIZE = 1 + 1 + MAX_SET_OP_RANGES * 8 + 1 + MAX_CLASS_PROPERTIES * 3;
 
 /// One `\p{...}`/`\P{...}` test inline in a CHAR_CLASS_UNICODE(_INV)
 /// instruction. `negated` is this individual test's own `\P{...}`-ness

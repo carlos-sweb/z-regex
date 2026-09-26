@@ -228,3 +228,46 @@ test "findAll steps over whole characters after an empty match" {
     try testing.expectEqual(@as(usize, 0), all.items[0].start);
     try testing.expectEqual(@as(usize, 2), all.items[1].start);
 }
+
+// --- D4: \s is WhiteSpace + LineTerminator, with or without u ---
+
+const js_whitespace = [_][]const u8{
+    "\t", "\n", "\x0B", "\x0C", "\r", " ", "\xC2\xA0", // TAB..CR, SPACE, NBSP
+    "\xE1\x9A\x80", // U+1680
+    "\xE2\x80\x80", "\xE2\x80\x8A", // U+2000, U+200A
+    "\xE2\x80\xA8", "\xE2\x80\xA9", // LS, PS
+    "\xE2\x80\xAF", "\xE2\x81\x9F", // U+202F, U+205F
+    "\xE3\x80\x80", "\xEF\xBB\xBF", // U+3000, ZWNBSP
+};
+const not_whitespace = [_][]const u8{ "a", "0", "_", "\xC3\xA9", "\xE2\x82\xAC", "\xE2\x80\x8B", "\xC2\x85", "\xF0\x9F\x92\x9A" }; // é € ZWSP NEL 💚
+
+test "\\s and \\S follow ECMA-262 WhiteSpace + LineTerminator, standalone and in a class" {
+    for ([_]zregex.CompileOptions{ annex_b, u }) |opts| {
+        for (js_whitespace) |ws| {
+            try expectMatch("^\\s$", opts, ws, ws);
+            try expectMatch("^[\\s]$", opts, ws, ws);
+            try expectMatch("^\\S$", opts, ws, null);
+            try expectMatch("^[\\S]$", opts, ws, null);
+            try expectMatch("^[^\\s]$", opts, ws, null);
+        }
+        for (not_whitespace) |c| {
+            try expectMatch("^\\s$", opts, c, null);
+            try expectMatch("^[\\s]$", opts, c, null);
+            try expectMatch("^\\S$", opts, c, c);
+            try expectMatch("^[\\S]$", opts, c, c);
+            try expectMatch("^[^\\s]$", opts, c, c);
+        }
+    }
+}
+
+test "negated shorthands in a class cover every code point, not just 0-255" {
+    for ([_]zregex.CompileOptions{ annex_b, u }) |opts| {
+        // Before F1a these missed everything above U+00FF.
+        for ([_][]const u8{ "\xE2\x82\xAC", "\xF0\x9F\x92\x9A", "\xEF\xBB\xBF" }) |c| {
+            try expectMatch("^[\\D]$", opts, c, c);
+            try expectMatch("^[\\W]$", opts, c, c);
+        }
+        try expectMatch("^[\\s\\S]+$", opts, "a \xE2\x82\xAC\n", "a \xE2\x82\xAC\n");
+        try expectMatch("^[\\s\\d\\w-]+$", opts, "a-1\xC2\xA0", "a-1\xC2\xA0");
+    }
+}

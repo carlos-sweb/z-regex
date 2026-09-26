@@ -832,7 +832,7 @@ pub const RecursiveMatcher = struct {
         }
 
         if (!matched) {
-            const props_count_offset = ranges_start + opcodes.MAX_CLASS_RANGES * 8;
+            const props_count_offset = ranges_start + opcodes.MAX_SET_OP_RANGES * 8;
             const props_start = props_count_offset + 1;
             const prop_count = self.bytecode[props_count_offset];
             var j: usize = 0;

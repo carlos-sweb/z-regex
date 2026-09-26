@@ -27,30 +27,37 @@ const TokenType = lexer_mod.TokenType;
 const Node = ast_mod.Node;
 const NodeType = ast_mod.NodeType;
 
-/// Byte ranges (inclusive, ASCII-only -- see KNOWN_LIMITATIONS.md) making up
-/// the shorthand character classes. Shared between standalone usage (e.g.
-/// bare `\d`) and splicing a shorthand into an enclosing `[...]` (e.g.
-/// `[a-c\d]`), so both stay consistent with each other.
-const DIGIT_RANGES = [_][2]u8{.{ '0', '9' }};
-const WORD_RANGES = [_][2]u8{ .{ '0', '9' }, .{ 'A', 'Z' }, .{ '_', '_' }, .{ 'a', 'z' } };
-/// \t \n \v \f \r (0x09-0x0D) and space. (JS's \s also matches several
-/// non-ASCII Unicode space characters; not implemented here.)
-const WHITESPACE_RANGES = [_][2]u8{ .{ 0x09, 0x0D }, .{ 0x20, 0x20 } };
+/// Code point ranges (inclusive, sorted) making up the shorthand character
+/// classes. Shared between standalone usage (e.g. bare `\d`) and splicing a
+/// shorthand into an enclosing `[...]` (e.g. `[a-c\d]`), so both stay
+/// consistent with each other.
+const DIGIT_RANGES = [_][2]u32{.{ '0', '9' }};
+const WORD_RANGES = [_][2]u32{ .{ '0', '9' }, .{ 'A', 'Z' }, .{ '_', '_' }, .{ 'a', 'z' } };
+/// `\s` is WhiteSpace + LineTerminator, with or without `u` (ECMA-262
+/// CharacterClassEscape): TAB..CR (0x09-0x0D, which includes LF, VT, FF,
+/// CR), SPACE, NBSP, every other Zs (U+1680, U+2000-U+200A, U+202F,
+/// U+205F, U+3000), LS/PS (U+2028-U+2029) and ZWNBSP (U+FEFF).
+const WHITESPACE_RANGES = [_][2]u32{
+    .{ 0x09, 0x0D },     .{ 0x20, 0x20 },     .{ 0xA0, 0xA0 },     .{ 0x1680, 0x1680 },
+    .{ 0x2000, 0x200A }, .{ 0x2028, 0x2029 }, .{ 0x202F, 0x202F }, .{ 0x205F, 0x205F },
+    .{ 0x3000, 0x3000 }, .{ 0xFEFF, 0xFEFF },
+};
 
-/// Complement (within byte range 0-255) of a sorted, non-overlapping list of
-/// inclusive ranges. `out` must have at least `ranges.len + 1` slots.
-fn complementByteRanges(ranges: []const [2]u8, out: [][2]u8) [][2]u8 {
+/// Complement over all code points (0..U+10FFFF) of a sorted,
+/// non-overlapping list of inclusive ranges. `out` must have at least
+/// `ranges.len + 1` slots.
+fn complementRanges(ranges: []const [2]u32, out: [][2]u32) [][2]u32 {
     var count: usize = 0;
-    var next: u16 = 0;
+    var next: u32 = 0;
     for (ranges) |r| {
-        if (@as(u16, r[0]) > next) {
-            out[count] = .{ @intCast(next), @intCast(r[0] - 1) };
+        if (r[0] > next) {
+            out[count] = .{ next, r[0] - 1 };
             count += 1;
         }
-        next = @max(next, @as(u16, r[1]) + 1);
+        next = @max(next, r[1] + 1);
     }
-    if (next <= 255) {
-        out[count] = .{ @intCast(next), 255 };
+    if (next <= 0x10FFFF) {
+        out[count] = .{ next, 0x10FFFF };
         count += 1;
     }
     return out[0..count];
@@ -491,7 +498,7 @@ pub const Parser = struct {
 
             .whitespace => {
                 try self.advance();
-                // \s is [ \t\n\v\f\r]
+                // \s is WhiteSpace + LineTerminator (see WHITESPACE_RANGES)
                 return self.createRangesClassNode(&WHITESPACE_RANGES, false);
             },
 
@@ -512,7 +519,7 @@ pub const Parser = struct {
 
             .not_whitespace => {
                 try self.advance();
-                // \S is [^ \t\n\v\f\r]
+                // \S is the complement of \s
                 return self.createRangesClassNode(&WHITESPACE_RANGES, true);
             },
 
@@ -1043,31 +1050,31 @@ pub const Parser = struct {
     }
 
     /// Append a shorthand class's members to an enclosing character class.
-    /// Negated shorthands (`\D`/`\W`/`\S`) contribute their byte-range
-    /// complement, not a `class.inverted` flip -- see `parseCharClass`.
+    /// Negated shorthands (`\D`/`\W`/`\S`) contribute their complement over
+    /// all code points, not a `class.inverted` flip -- see `parseCharClass`.
     fn appendShorthandToClass(self: *Self, class: *Node, token_type: TokenType) !void {
         switch (token_type) {
             .digit => try self.appendRangesToClass(class, &DIGIT_RANGES),
             .word => try self.appendRangesToClass(class, &WORD_RANGES),
             .whitespace => try self.appendRangesToClass(class, &WHITESPACE_RANGES),
             .not_digit => {
-                var buf: [DIGIT_RANGES.len + 1][2]u8 = undefined;
-                try self.appendRangesToClass(class, complementByteRanges(&DIGIT_RANGES, &buf));
+                var buf: [DIGIT_RANGES.len + 1][2]u32 = undefined;
+                try self.appendRangesToClass(class, complementRanges(&DIGIT_RANGES, &buf));
             },
             .not_word => {
-                var buf: [WORD_RANGES.len + 1][2]u8 = undefined;
-                try self.appendRangesToClass(class, complementByteRanges(&WORD_RANGES, &buf));
+                var buf: [WORD_RANGES.len + 1][2]u32 = undefined;
+                try self.appendRangesToClass(class, complementRanges(&WORD_RANGES, &buf));
             },
             .not_whitespace => {
-                var buf: [WHITESPACE_RANGES.len + 1][2]u8 = undefined;
-                try self.appendRangesToClass(class, complementByteRanges(&WHITESPACE_RANGES, &buf));
+                var buf: [WHITESPACE_RANGES.len + 1][2]u32 = undefined;
+                try self.appendRangesToClass(class, complementRanges(&WHITESPACE_RANGES, &buf));
             },
             else => unreachable,
         }
     }
 
-    /// Append each byte range as a `char_range` child node.
-    fn appendRangesToClass(self: *Self, class: *Node, ranges: []const [2]u8) !void {
+    /// Append each code point range as a `char_range` child node.
+    fn appendRangesToClass(self: *Self, class: *Node, ranges: []const [2]u32) !void {
         for (ranges) |r| {
             const range = try Node.createCharRange(self.allocator, r[0], r[1]);
             errdefer range.deinit();
@@ -1077,7 +1084,7 @@ pub const Parser = struct {
 
     /// Build a standalone `char_class` node (optionally negated) from a list
     /// of byte ranges -- used for the standalone `\w`/`\W`/`\s`/`\S` atoms.
-    fn createRangesClassNode(self: *Self, ranges: []const [2]u8, inverted: bool) !*Node {
+    fn createRangesClassNode(self: *Self, ranges: []const [2]u32, inverted: bool) !*Node {
         const class = try Node.createCharClass(self.allocator);
         errdefer class.deinit();
         class.inverted = inverted;

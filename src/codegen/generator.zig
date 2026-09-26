@@ -46,6 +46,9 @@ pub const CodegenError = error{
 };
 
 /// Code generator for translating AST to bytecode
+/// Capacity for collecting a class's members before `normalizeRanges`
+/// merges them down to at most `opcodes.MAX_CLASS_RANGES`.
+const COLLECT_RANGES = 64;
 pub const CodeGenerator = struct {
     allocator: Allocator,
     writer: *BytecodeWriter,
@@ -199,6 +202,47 @@ pub const CodeGenerator = struct {
     }
 
     /// Generate code for a character class [abc] or [a-z0-9]
+    /// Sort `ranges` by start and merge overlapping or adjacent ones in
+    /// place, returning the new count; `error.TooManyRanges` if the result
+    /// still doesn't fit the fixed `opcodes.MAX_CLASS_RANGES` slots. Lets a
+    /// class hold members that only fit once merged (`[\s\S]` is one range,
+    /// `[\s\d]` a few), since `\s`/`\S` alone are 10-11 ranges.
+    fn normalizeRanges(ranges: [][2]u32) error{TooManyRanges}!usize {
+        const count = mergeRanges(ranges);
+        if (count > opcodes.MAX_CLASS_RANGES) return error.TooManyRanges;
+        return count;
+    }
+
+    /// Append a range to a collection buffer, merging the buffer first when
+    /// it is full; `error.TooManyRanges` only if it is still full after that.
+    fn pushRange(ranges: *[COLLECT_RANGES][2]u32, count: *usize, r: [2]u32) error{TooManyRanges}!void {
+        if (count.* == COLLECT_RANGES) {
+            count.* = mergeRanges(ranges[0..count.*]);
+            if (count.* == COLLECT_RANGES) return error.TooManyRanges;
+        }
+        ranges[count.*] = r;
+        count.* += 1;
+    }
+
+    fn mergeRanges(ranges: [][2]u32) usize {
+        if (ranges.len == 0) return 0;
+        std.mem.sort([2]u32, ranges, {}, struct {
+            fn lessThan(_: void, a: [2]u32, b: [2]u32) bool {
+                return a[0] < b[0];
+            }
+        }.lessThan);
+        var out: usize = 0;
+        for (ranges[1..]) |r| {
+            if (r[0] <= ranges[out][1] +| 1) {
+                ranges[out][1] = @max(ranges[out][1], r[1]);
+            } else {
+                out += 1;
+                ranges[out] = r;
+            }
+        }
+        return out + 1;
+    }
+
     fn generateCharClass(self: *Self, node: *Node) !void {
         if (node.children.items.len == 0 and !node.inverted) {
             return error.InvalidPattern;
@@ -276,26 +320,22 @@ pub const CodeGenerator = struct {
     /// Generate a character class containing a member above U+007F, using
     /// CHAR_CLASS_RANGES(_INV) (up to `opcodes.MAX_CLASS_RANGES` code point
     /// ranges) instead of the byte bitmap.
-    fn generateCharClassRanges(self: *Self, node: *Node) !void {
-        var ranges: [opcodes.MAX_CLASS_RANGES][2]u32 = undefined;
+    noinline fn generateCharClassRanges(self: *Self, node: *Node) !void {
+        var ranges: [COLLECT_RANGES][2]u32 = undefined;
         var count: usize = 0;
 
         for (node.children.items) |child| {
-            if (count >= opcodes.MAX_CLASS_RANGES) return error.TooManyRanges;
             switch (child.type) {
                 .char => {
-                    ranges[count] = .{ child.char_value, child.char_value };
-                    count += 1;
+                    try pushRange(&ranges, &count, .{ child.char_value, child.char_value });
                     try self.appendCaseFoldPair(&ranges, &count, child.char_value);
                 },
-                .char_range => {
-                    ranges[count] = .{ child.range_start, child.range_end };
-                    count += 1;
-                },
+                .char_range => try pushRange(&ranges, &count, .{ child.range_start, child.range_end }),
                 else => return error.InvalidPattern,
             }
         }
 
+        count = try normalizeRanges(ranges[0..count]);
         const opcode: opcodes.Opcode = if (node.inverted) .CHAR_CLASS_RANGES_INV else .CHAR_CLASS_RANGES;
         try self.writer.emitCharClassRanges(opcode, ranges[0..count]);
     }
@@ -311,12 +351,10 @@ pub const CodeGenerator = struct {
     /// +32 shift, non-ASCII case mappings aren't a simple offset over an
     /// arbitrary range, so that remains a documented gap (see
     /// `docs/KNOWN_LIMITATIONS.md`).
-    fn appendCaseFoldPair(self: *Self, ranges: *[opcodes.MAX_CLASS_RANGES][2]u32, count: *usize, char_value: u32) !void {
+    fn appendCaseFoldPair(self: *Self, ranges: *[COLLECT_RANGES][2]u32, count: *usize, char_value: u32) !void {
         if (!self.options.case_insensitive) return;
         const opposite = casefold.toUpper(char_value) orelse casefold.toLower(char_value) orelse return;
-        if (count.* >= opcodes.MAX_CLASS_RANGES) return error.TooManyRanges;
-        ranges[count.*] = .{ opposite, opposite };
-        count.* += 1;
+        try pushRange(ranges, count, .{ opposite, opposite });
     }
 
     /// Generate a character class containing at least one `\p{...}`/`\P{...}`
@@ -328,8 +366,8 @@ pub const CodeGenerator = struct {
     /// `negated` bit for `\P{...}` used as a member -- independent of
     /// `node.inverted` (the whole class's `[^...]` negation, applied once via
     /// the opcode's _INV form) -- see CHAR_CLASS_UNICODE's doc comment.
-    fn generateCharClassUnicode(self: *Self, node: *Node) !void {
-        var ranges: [opcodes.MAX_CLASS_RANGES][2]u32 = undefined;
+    noinline fn generateCharClassUnicode(self: *Self, node: *Node) !void {
+        var ranges: [COLLECT_RANGES][2]u32 = undefined;
         var range_count: usize = 0;
         var props: [opcodes.MAX_CLASS_PROPERTIES]opcodes.ClassPropertyTest = undefined;
         var prop_count: usize = 0;
@@ -337,15 +375,11 @@ pub const CodeGenerator = struct {
         for (node.children.items) |child| {
             switch (child.type) {
                 .char => {
-                    if (range_count >= opcodes.MAX_CLASS_RANGES) return error.TooManyRanges;
-                    ranges[range_count] = .{ child.char_value, child.char_value };
-                    range_count += 1;
+                    try pushRange(&ranges, &range_count, .{ child.char_value, child.char_value });
                     try self.appendCaseFoldPair(&ranges, &range_count, child.char_value);
                 },
                 .char_range => {
-                    if (range_count >= opcodes.MAX_CLASS_RANGES) return error.TooManyRanges;
-                    ranges[range_count] = .{ child.range_start, child.range_end };
-                    range_count += 1;
+                    try pushRange(&ranges, &range_count, .{ child.range_start, child.range_end });
                 },
                 .unicode_property, .unicode_script, .unicode_script_extensions => {
                     if (prop_count >= opcodes.MAX_CLASS_PROPERTIES) return error.TooManyClassProperties;
@@ -362,6 +396,7 @@ pub const CodeGenerator = struct {
             }
         }
 
+        range_count = try normalizeRanges(ranges[0..range_count]);
         const opcode: opcodes.Opcode = if (node.inverted) .CHAR_CLASS_UNICODE_INV else .CHAR_CLASS_UNICODE;
         try self.writer.emitCharClassUnicode(opcode, ranges[0..range_count], props[0..prop_count]);
     }
@@ -379,7 +414,7 @@ pub const CodeGenerator = struct {
     fn collectClassSetOperand(
         self: *Self,
         node: *Node,
-        ranges: *[opcodes.MAX_CLASS_RANGES][2]u32,
+        ranges: *[COLLECT_RANGES][2]u32,
         props: *[opcodes.MAX_CLASS_PROPERTIES]opcodes.ClassPropertyTest,
     ) !bytecode.BytecodeWriter.ClassSetOperand {
         _ = self;
@@ -393,14 +428,10 @@ pub const CodeGenerator = struct {
                 for (node.children.items) |child| {
                     switch (child.type) {
                         .char => {
-                            if (range_count >= opcodes.MAX_CLASS_RANGES) return error.TooManyRanges;
-                            ranges[range_count] = .{ child.char_value, child.char_value };
-                            range_count += 1;
+                            try pushRange(ranges, &range_count, .{ child.char_value, child.char_value });
                         },
                         .char_range => {
-                            if (range_count >= opcodes.MAX_CLASS_RANGES) return error.TooManyRanges;
-                            ranges[range_count] = .{ child.range_start, child.range_end };
-                            range_count += 1;
+                            try pushRange(ranges, &range_count, .{ child.range_start, child.range_end });
                         },
                         .unicode_property, .unicode_script, .unicode_script_extensions => {
                             if (prop_count >= opcodes.MAX_CLASS_PROPERTIES) return error.TooManyClassProperties;
@@ -426,6 +457,8 @@ pub const CodeGenerator = struct {
             else => return error.InvalidPattern,
         }
 
+        range_count = try normalizeRanges(ranges[0..range_count]);
+        if (range_count > opcodes.MAX_SET_OP_RANGES) return error.TooManyRanges;
         return .{ .negated = negated, .ranges = ranges[0..range_count], .properties = props[0..prop_count] };
     }
 
@@ -445,14 +478,14 @@ pub const CodeGenerator = struct {
     /// operand's own negation, handled per-operand by
     /// `collectClassSetOperand`. See `docs/KNOWN_LIMITATIONS.md` for this
     /// feature's scope (exactly one operation, no chaining, no `\q{...}`).
-    fn generateClassSetOp(self: *Self, node: *Node) !void {
+    noinline fn generateClassSetOp(self: *Self, node: *Node) !void {
         if (node.children.items.len != 2) return error.InvalidPattern;
 
-        var left_ranges: [opcodes.MAX_CLASS_RANGES][2]u32 = undefined;
+        var left_ranges: [COLLECT_RANGES][2]u32 = undefined;
         var left_props: [opcodes.MAX_CLASS_PROPERTIES]opcodes.ClassPropertyTest = undefined;
         const left = try self.collectClassSetOperand(node.children.items[0], &left_ranges, &left_props);
 
-        var right_ranges: [opcodes.MAX_CLASS_RANGES][2]u32 = undefined;
+        var right_ranges: [COLLECT_RANGES][2]u32 = undefined;
         var right_props: [opcodes.MAX_CLASS_PROPERTIES]opcodes.ClassPropertyTest = undefined;
         const right = try self.collectClassSetOperand(node.children.items[1], &right_ranges, &right_props);
 
