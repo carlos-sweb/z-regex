@@ -618,11 +618,26 @@ the code space), which dominate run time:
   `(a|aa)*c` on 41 bytes segfault with 1 MiB of stack and return
   `StepLimitExceeded` in 44-48 ms with 8 MiB. **The caller's stack is the
   line between answering and crashing.** The harness uses 8 MiB; F6a's
-  explicit stack addresses it. Worse, found by the F0d parser fuzzer: a
-  quantified empty backreference such as `()\1{1000}` costs one frame per
-  iteration and overflows even an 8 MiB stack in ReleaseSafe (`()\1{300}`
-  in Debug), so the recursion limit of 1000 doesn't protect the default
-  stack either (skipped test in `tests/regression_tests.zig` until F6a).
+  explicit stack addresses it.
+- **The recursion limit doesn't fit any default stack (D15).** The
+  recursion counter (limit 1000) protects depth, not stack bytes, and each
+  level of the matcher's `matchFrom` -> `matchBackRef` chain costs ~25.3 KiB
+  of stack in ReleaseSafe (~75.5 KiB in Debug; measured in F0d as the
+  minimum stack for `()\1{N}`, N = 100/200/400, exactly linear). Reaching
+  the limit takes ~25 MiB (~75 MiB in Debug): with 64 MiB, `()\1{1000}`
+  returns `RecursionLimitExceeded` in ReleaseSafe, so the counter does cover
+  the path, but on an 8 MiB stack it crashes first, from ~320 repetitions
+  (~105 in Debug). Found by the F0d parser fuzzer (reduced from
+  `\2{9007199254740991}\[*`); skipped test in `tests/regression_tests.zig`
+  until F6a's explicit heap stack with a byte limit.
+- **Parser fuzzing coverage (F0d).** Parser and `analyze`: full coverage,
+  no crash or leak (20,000 patterns x 3 flag modes, plus 1.5 M in an
+  uncommitted ReleaseSafe run). Matcher: **partial until F6a**: patterns in
+  the expert tier (T2), and those `analyze` can't classify, are compiled but
+  not executed (1,757 of the 6,537 pattern x mode pairs that compile: 1,159
+  T2, 598 unclassifiable). So T0/T1 patterns have no fuzz crashes; T2 is not
+  covered by the fuzzer until F6a. The corpus part runs in `zig build test`;
+  the stress in `zig build test-fuzz-stress` (by hand or weekly CI).
 - Per-phase breakdown of the non-passing entries:
   `node scripts/test262/categorize.mjs` (explicit rules, no unclassified
   entries at this baseline): F1 115, F3 12, F5 122, F6a 2, F6b 18, and 15
