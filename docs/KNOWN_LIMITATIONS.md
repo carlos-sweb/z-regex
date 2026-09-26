@@ -759,6 +759,12 @@ starts inside a character. That also fixes captures that were silently wrong:
   `baseline.json` is regenerated with it, and WTF-8 runs as a cross-check with its own
   `baseline-wtf8.json`; a test whose status differs between the encodings is reported case
   by case. Today both give 2848, with identical statuses.
+- **Bench, lookbehind case `(?<=\$)\d+`:** 0.54–0.55 MB/s against 0.59–0.60 at
+  `35c4f79` (F3c(2)), measured interleaved. The cause is attributed to LLVM code layout:
+  between `35c4f79` and the commit that already shows 0.54–0.55 the only source changes
+  are `c_api.zig` (not part of the bench) and the lexer for bytes >= 0x80 (the pattern
+  has none), nothing the match loop runs. Revisit in F3e if it persists (compare the
+  assembly of the inner loop, inlining hints); otherwise in F4a with the Pike VM.
 - **Consumers:** z-string and z-interprete stay on their pinned versions (z-interprete on
   F1c); F3's changes reach them only when they move the pin. After F3d a consumer that
   doesn't set `CompileOptions.unicode` for a `u` pattern gets code-unit semantics.
