@@ -138,14 +138,16 @@ test "regression: D14 pattern answers on a 1 MiB stack" {
     try testing.expectEqual(@as(usize, 96), r[1]);
 }
 
-// Found by the parser fuzzer (F0d, tests/fuzz_parser.zig; original input
-// `\2{9007199254740991}\[*`). Each iteration of a quantified empty
-// backreference costs a recursive-matcher frame, so the recursion limit
-// (1000) doesn't protect the caller's stack: `()\1{1000}` overflows 8 MiB in
-// ReleaseSafe, `()\1{300}` already in Debug (D14). Crashes today, taking the
-// whole test process down. F6a fixes it (explicit heap stack with a byte
-// limit); when F6a closes, remove this skip and the test has to pass.
-test "regression: a chain of empty backreferences doesn't overflow the stack (fuzz, D14)" {
+// D15, found by the parser fuzzer (F0d, tests/fuzz_stress.zig; original
+// input `\2{9007199254740991}\[*`). The recursion limit (1000) does fire
+// here: with 64 MiB of stack this returns RecursionLimitExceeded. But each
+// level of the matchFrom -> matchBackRef chain costs ~25 KiB of stack in
+// ReleaseSafe (~75 KiB in Debug), so reaching the limit needs ~25 MiB
+// (~75 MiB): on an 8 MiB stack it crashes first, from ~320 repetitions
+// (~105 in Debug), taking the whole test process down. F6a fixes it
+// (explicit heap stack with a byte limit); when F6a closes, remove this skip
+// and the test has to pass (the spec answer is an empty match).
+test "regression: a chain of empty backreferences doesn't overflow the stack (fuzz, D15)" {
     if (true) return error.SkipZigTest;
     var re = try zregex.Regex.compile(testing.allocator, "()\\1{1000}");
     defer re.deinit();

@@ -105,6 +105,25 @@ pub fn build(b: *std.Build) void {
     const conformance_step = b.step("test-conformance", "Run test262-derived conformance sample");
     conformance_step.dependOn(&run_conformance_tests.step);
 
+    // Parser fuzz stress (tests/fuzz_stress.zig, docs/REGEX_TIERS_PLAN.md
+    // F0d): 20,000 generated patterns, ~16 s in Debug. Kept out of the
+    // default `test` step deliberately (run by hand or in weekly CI); the
+    // corpus part of the fuzzer stays in `test`.
+    const fuzz_stress_module = b.createModule(.{
+        .root_source_file = b.path("tests/fuzz_stress.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    fuzz_stress_module.addImport("zregex", lib_module);
+
+    const fuzz_stress_tests = b.addTest(.{
+        .root_module = fuzz_stress_module,
+    });
+    const run_fuzz_stress_tests = b.addRunArtifact(fuzz_stress_tests);
+
+    const fuzz_stress_step = b.step("test-fuzz-stress", "Parser fuzz stress: 20,000 generated patterns (manual or weekly CI)");
+    fuzz_stress_step.dependOn(&run_fuzz_stress_tests.step);
+
     // test262 gate (scripts/test262, docs/REGEX_TIERS_PLAN.md F0b). Opt-in: it
     // needs Node, `npm ci --prefix scripts/test262` and the pinned test262
     // checkout from scripts/test262/fetch.sh. Always runs against a

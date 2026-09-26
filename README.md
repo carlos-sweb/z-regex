@@ -183,6 +183,9 @@ cd zregex
 # Run tests
 zig build test
 
+# Parser fuzz stress (20,000 generated patterns; slow, not part of `test`)
+zig build test-fuzz-stress
+
 # Build (installs the shared library used internally by the conformance harness --
 # see the C/C++ note above; not a supported public build artifact)
 zig build
