@@ -175,3 +175,56 @@ test "\\xHH is the code point U+00HH, also above 0x7F" {
     try expectMatch("\\xFF", annex_b, "\xFF", null);
     try expectMatch("\\xe9", .{ .case_insensitive = true }, "\xC3\x89", "\xC3\x89"); // É
 }
+
+// --- D13: escaped surrogates ---
+
+test "u: an escaped surrogate pair is one code point, in a class too" {
+    const astral = "\xF0\x9D\x8C\x86"; // U+1D306
+    try expectMatch("^\\ud834\\udf06$", u, astral, astral);
+    try expectMatch("^[\\ud834\\udf06]$", u, astral, astral);
+    try expectMatch("^\\u{1d306}$", u, astral, astral);
+    // A class holding the pair doesn't match either half on its own.
+    try expectMatch("[\\ud800\\udc00]", u, "\xED\xA0\x80", null); // lone U+D800
+    try expectMatch("[\\ud800\\udc00]", u, "\xED\xB0\x80", null); // lone U+DC00
+    // Two leads, or a lead and a non-surrogate, don't combine.
+    try expectMatch("^\\ud834\\ud834$", u, "\xED\xA0\xB4\xED\xA0\xB4", "\xED\xA0\xB4\xED\xA0\xB4");
+}
+
+test "an escaped lone surrogate is its WTF-8 sequence, not a literal 'u'" {
+    for ([_]zregex.CompileOptions{ annex_b, u }) |opts| {
+        try expectMatch("\\ud800", opts, "a\xED\xA0\x80", "\xED\xA0\x80");
+        try expectMatch("[\\udc00-\\udfff]", opts, "\xED\xB0\x80", "\xED\xB0\x80");
+        try expectMatch("\\ud800", opts, "ud800", null);
+    }
+    // Without `u` the pair is two code units (not combined, D6).
+    try expectMatch("\\ud834\\udf06", annex_b, "\xF0\x9D\x8C\x86", null);
+}
+
+// --- D12 (start positions): a search never starts inside a character ---
+
+test "find never starts a match in the middle of a UTF-8 sequence" {
+    for ([_]zregex.CompileOptions{ annex_b, u }) |opts| {
+        // Before: the scan tried byte 1 of 💚 and `[^💚]` matched its tail.
+        try expectMatch("[^\xF0\x9F\x92\x9A]", opts, "\xF0\x9F\x92\x9A", null);
+        var re = try zregex.Regex.compileWithOptions(testing.allocator, "x", opts);
+        defer re.deinit();
+        const m = (try re.find("\xF0\x9F\x92\x9Ax")).?;
+        defer m.deinit();
+        try testing.expectEqual(@as(usize, 4), m.start);
+    }
+    // (.+).*\1 on "\u{10000}\ud800": \1 can't match a fragment of U+10000.
+    try expectMatch("(.+).*\\1", u, "\xF0\x90\x80\x80\xED\xA0\x80", null);
+}
+
+test "findAll steps over whole characters after an empty match" {
+    var re = try zregex.Regex.compile(testing.allocator, "");
+    defer re.deinit();
+    var all = try re.findAll("\xC3\xA9\xE2\x82\xAC"); // é€
+    defer {
+        for (all.items) |m| m.deinit();
+        all.deinit(testing.allocator);
+    }
+    try testing.expectEqual(@as(usize, 2), all.items.len);
+    try testing.expectEqual(@as(usize, 0), all.items[0].start);
+    try testing.expectEqual(@as(usize, 2), all.items[1].start);
+}

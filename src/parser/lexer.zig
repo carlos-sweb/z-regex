@@ -953,11 +953,32 @@ pub const Lexer = struct {
             var value: u32 = 0;
             for (0..4) |i| value = value * 16 + hexValue(self.pattern[self.pos + i]);
             self.pos += 4;
+            // Under `u`, `\uLead\uTrail` is one code point
+            // (RegExpUnicodeEscapeSequence), inside a class too.
+            if (self.unicode_mode and value >= 0xD800 and value <= 0xDBFF) {
+                if (self.trailSurrogateEscapeAt(self.pos)) |trail| {
+                    self.pos += 6;
+                    return codepointToken(0x10000 + ((value - 0xD800) << 10) + (trail - 0xDC00), start_pos);
+                }
+            }
             return codepointToken(value, start_pos);
         }
 
         if (self.unicode_mode) return error.InvalidEscape;
         return Token.escaped('u', start_pos);
+    }
+
+    /// The value of a `\uHHHH` trail surrogate escape (U+DC00-U+DFFF)
+    /// starting at `pos`, or null.
+    fn trailSurrogateEscapeAt(self: *const Self, pos: usize) ?u32 {
+        if (pos + 6 > self.pattern.len) return null;
+        if (self.pattern[pos] != '\\' or self.pattern[pos + 1] != 'u') return null;
+        var value: u32 = 0;
+        for (self.pattern[pos + 2 .. pos + 6]) |h| {
+            if (!isHexDigit(h)) return null;
+            value = value * 16 + hexValue(h);
+        }
+        return if (value >= 0xDC00 and value <= 0xDFFF) value else null;
     }
 
     /// Turn a decoded Unicode code point into a token: a single-byte
@@ -968,12 +989,11 @@ pub const Lexer = struct {
         if (value <= 0x7F) {
             return Token.escaped(value, start_pos);
         }
+        // WTF-8, so a lone surrogate half (U+D800-U+DFFF) becomes the same
+        // 3-byte sequence the ecosystem uses for it in subjects (see
+        // `recursive_matcher.zig`'s `decodeSurrogateWtf8`).
         var buf: [4]u8 = undefined;
-        const len = std.unicode.utf8Encode(@intCast(value), &buf) catch {
-            // Lone surrogate half (0xD800-0xDFFF) or otherwise unencodable:
-            // no valid byte representation, fall back to literal 'u'.
-            return Token.escaped('u', start_pos);
-        };
+        const len = std.unicode.wtf8Encode(@intCast(value), &buf) catch unreachable; // value <= 0x10FFFF
         return Token.multibyteChar(buf, len, start_pos);
     }
 

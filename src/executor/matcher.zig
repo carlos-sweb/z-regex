@@ -10,6 +10,7 @@ const format_mod = @import("../bytecode/format.zig");
 
 const RecursiveMatcher = recursive_mod.RecursiveMatcher;
 const Capture = thread_mod.Capture;
+const nextSearchStart = RecursiveMatcher.nextSearchStart;
 pub const NamedGroup = format_mod.NamedGroup;
 
 /// A capture's [start, end) byte offsets into the matched input (the JS `d`
@@ -161,7 +162,7 @@ pub const Matcher = struct {
     /// Find first match in input
     pub fn find(self: Self, input: []const u8) !?MatchResult {
         var start_pos: usize = 0;
-        while (start_pos <= input.len) : (start_pos += 1) {
+        while (start_pos <= input.len) : (start_pos = nextSearchStart(input, start_pos)) {
             if (try self.findAt(input, start_pos)) |m| return m;
         }
         return null;
@@ -188,15 +189,16 @@ pub const Matcher = struct {
                 const match_len = match_result.end - pos;
                 pos = pos + match_len;
                 if (match_len == 0) {
-                    // Empty match, advance by 1 to avoid infinite loop
-                    pos += 1;
+                    // Empty match: step over one character to avoid an
+                    // infinite loop (a whole UTF-8 sequence, not a byte).
+                    pos = nextSearchStart(input, pos);
                 }
             } else if (sticky) {
                 // Sticky: a gap here means stop entirely, don't scan ahead
                 break;
             } else {
-                // No match at this position, try next
-                pos += 1;
+                // No match at this position, try the next character
+                pos = nextSearchStart(input, pos);
             }
         }
 

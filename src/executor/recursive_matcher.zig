@@ -599,6 +599,13 @@ pub const RecursiveMatcher = struct {
     /// (see decodeSurrogateWtf8) counts as a valid 3-byte sequence too, so a
     /// string built from e.g. String.fromCharCode(0xDC00) is matched as one
     /// character, not three raw bytes.
+    /// Where the next search start after `pos` is: one whole UTF-8/WTF-8
+    /// sequence later (one byte for malformed input), so a search never
+    /// starts in the middle of a character (D12, start positions).
+    pub fn nextSearchStart(input: []const u8, pos: usize) usize {
+        return pos + utf8SeqLenAt(input, pos);
+    }
+
     fn utf8SeqLenAt(input: []const u8, pos: usize) usize {
         if (pos >= input.len) return 1;
         const len = std.unicode.utf8ByteSequenceLength(input[pos]) catch return 1;

@@ -8,6 +8,7 @@ const regex = @import("regex.zig");
 const Regex = regex.Regex;
 const MatchResult = regex.MatchResult;
 const Allocator = std.mem.Allocator;
+const nextSearchStart = @import("executor/recursive_matcher.zig").RecursiveMatcher.nextSearchStart;
 
 // =============================================================================
 // Global State
@@ -600,7 +601,9 @@ export fn zregex_search_n(re: *ZRegex, input: [*]const u8, len: usize, start: us
     clearError();
     const input_slice = input[0..len];
     var pos = start;
-    while (pos <= len) : (pos += 1) {
+    // Step by whole UTF-8/WTF-8 sequences, like `Regex.find`: a search never
+    // starts in the middle of a character.
+    while (pos <= len) : (pos = nextSearchStart(input_slice, pos)) {
         const result = re.findAt(input_slice, pos) catch |err| {
             setZigError(err);
             return null;

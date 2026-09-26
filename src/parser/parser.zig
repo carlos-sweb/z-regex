@@ -464,8 +464,9 @@ pub const Parser = struct {
                     try seq.appendChild(try Node.createChar(self.allocator, b));
                 }
                 // The lexer only ever produces multibyte_char tokens after
-                // successfully decoding them, so this can't fail here.
-                seq.char_value = std.unicode.utf8Decode(bytes[0..len]) catch unreachable;
+                // successfully decoding them (WTF-8: a lone surrogate from a
+                // `\uD800` escape included), so this can't fail here.
+                seq.char_value = std.unicode.wtf8Decode(bytes[0..len]) catch unreachable;
                 return seq;
             },
 
@@ -1090,8 +1091,9 @@ pub const Parser = struct {
         if (self.current_token.type == .multibyte_char) {
             const bytes = self.current_token.byte_seq[0..self.current_token.byte_seq_len];
             // The lexer only ever produces multibyte_char tokens after
-            // successfully decoding them, so this can't fail here.
-            return std.unicode.utf8Decode(bytes) catch unreachable;
+            // successfully decoding them (WTF-8, see `parseAtom`), so this
+            // can't fail here.
+            return std.unicode.wtf8Decode(bytes) catch unreachable;
         }
         return self.current_token.char_value;
     }
