@@ -128,25 +128,26 @@ test "regression: D14 pattern answers on an 8 MiB stack (test262 S15.10.2.8_A3_T
 }
 
 test "regression: D14 pattern answers on a 1 MiB stack" {
-    // Crashes today (D14): with 1 MiB of stack the recursive matcher
-    // overflows and takes the whole test process down. F6a fixes it
-    // (explicit heap stack with a byte limit); when F6a closes, remove this
-    // skip and the test has to pass.
-    if (true) return error.SkipZigTest;
+    // Crashed until F1c (D14): the recursive matcher needed more than 1 MiB
+    // here. D9's smaller MatchResult (captures out of every frame) brought
+    // it to ~103 KiB in ReleaseSafe and ~615 KiB in Debug, so it answers on
+    // 1 MiB in both. D14 itself stays open until F6a: the matcher still
+    // bounds recursion depth, not stack bytes.
     const r = (try d14OnStack(1 << 20)) orelse return error.TestExpectedMatch;
     try testing.expectEqual(@as(usize, 7), r[0]);
     try testing.expectEqual(@as(usize, 96), r[1]);
 }
 
 // D15, found by the parser fuzzer (F0d, tests/fuzz_stress.zig; original
-// input `\2{9007199254740991}\[*`). The recursion limit (1000) does fire
-// here: with 64 MiB of stack this returns RecursionLimitExceeded. But each
-// level of the matchFrom -> matchBackRef chain costs ~25 KiB of stack in
-// ReleaseSafe (~75 KiB in Debug), so reaching the limit needs ~25 MiB
-// (~75 MiB): on an 8 MiB stack it crashes first, from ~320 repetitions
-// (~105 in Debug), taking the whole test process down. F6a fixes it
-// (explicit heap stack with a byte limit); when F6a closes, remove this skip
-// and the test has to pass (the spec answer is an empty match).
+// input `\2{9007199254740991}\[*`). Each level of the matchFrom ->
+// matchBackRef chain cost ~25 KiB of stack in ReleaseSafe (~75 KiB in
+// Debug) until F1c, so the recursion limit (1000) needed ~25 MiB to fire.
+// Since D9 (F1c) a level costs ~1.8 KiB (~11 KiB in Debug): on 8 MiB,
+// ReleaseSafe now reaches the limit and returns RecursionLimitExceeded
+// instead of crashing, but Debug still overflows, and neither gives the
+// spec answer. F6a fixes it (explicit heap stack with a byte limit); when
+// F6a closes, remove this skip and the test has to pass (the spec answer is
+// an empty match).
 test "regression: a chain of empty backreferences doesn't overflow the stack (fuzz, D15)" {
     if (true) return error.SkipZigTest;
     var re = try zregex.Regex.compile(testing.allocator, "()\\1{1000}");

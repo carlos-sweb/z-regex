@@ -345,9 +345,10 @@ test "BytecodeWriter: emit instruction with operand" {
     try writer.emit1(.SAVE_START, 5);
 
     const code = writer.bytecode();
-    try std.testing.expectEqual(@as(usize, 2), code.len);
+    try std.testing.expectEqual(@as(usize, 3), code.len); // opcode + u16 group
     try std.testing.expectEqual(@as(u8, 0x20), code[0]);
     try std.testing.expectEqual(@as(u8, 5), code[1]);
+    try std.testing.expectEqual(@as(u8, 0), code[2]);
 }
 
 test "BytecodeWriter: emit instruction with 2 operands" {
@@ -449,11 +450,11 @@ test "BytecodeWriter: offset tracking" {
     try writer.emitSimple(.MATCH); // 1 byte
     try std.testing.expectEqual(@as(usize, 1), writer.offset());
 
-    try writer.emit1(.SAVE_START, 0); // 2 bytes
-    try std.testing.expectEqual(@as(usize, 3), writer.offset());
+    try writer.emit1(.SAVE_START, 0); // 3 bytes (u16 group)
+    try std.testing.expectEqual(@as(usize, 4), writer.offset());
 
     try writer.emit2(.CHAR_RANGE, 0, 0); // 9 bytes
-    try std.testing.expectEqual(@as(usize, 12), writer.offset());
+    try std.testing.expectEqual(@as(usize, 13), writer.offset());
 }
 
 test "BytecodeWriter: complex program" {

@@ -112,10 +112,10 @@ export function loadZRegex(libPath) {
     groupCount: lib.func('size_t zregex_group_count(void* re)'),
     namedCount: lib.func('size_t zregex_named_group_count(void* re)'),
     namedName: lib.func('void* zregex_named_group_name(void* re, size_t i)'),
-    namedIndex: lib.func('uint8_t zregex_named_group_index(void* re, size_t i)'),
+    namedIndex: lib.func('size_t zregex_named_group_index(void* re, size_t i)'),
     stringFree: lib.func('void zregex_string_free(void* s)'),
-    capStart: lib.func('size_t zregex_match_capture_start(void* m, uint8_t g)'),
-    capEnd: lib.func('size_t zregex_match_capture_end(void* m, uint8_t g)'),
+    capStart: lib.func('size_t zregex_match_capture_start(void* m, size_t g)'),
+    capEnd: lib.func('size_t zregex_match_capture_end(void* m, size_t g)'),
     matchFree: lib.func('void zregex_match_free(void* m)'),
     lastError: lib.func('int zregex_last_error()'),
     lastErrorName: lib.func('const char* zregex_last_error_name()'),
@@ -151,7 +151,7 @@ export function loadZRegex(libPath) {
     const n = Number(fn.namedCount(handle));
     for (let i = 0; i < n; i++) {
       const ptr = fn.namedName(handle, i);
-      names.push([koffi.decode(ptr, 'char', -1), fn.namedIndex(handle, i)]);
+      names.push([koffi.decode(ptr, 'char', -1), Number(fn.namedIndex(handle, i))]);
       fn.stringFree(ptr);
     }
     const entry = { handle, groupCount: Number(fn.groupCount(handle)), names };
@@ -204,10 +204,9 @@ export function loadZRegex(libPath) {
     try {
       const captures = [];
       for (let g = 0; g <= re.groupCount; g++) {
-        // The C API takes a u8 group index; groups past 255 can't exist
-        // there (and past 15 the engine doesn't track them at all: D9).
-        const s = g > 255 ? NO_CAPTURE_THRESHOLD : Number(fn.capStart(m, g));
-        const e = g > 255 ? NO_CAPTURE_THRESHOLD : Number(fn.capEnd(m, g));
+        // Every group the pattern has (D9, F1c: no fixed cap).
+        const s = Number(fn.capStart(m, g));
+        const e = Number(fn.capEnd(m, g));
         if (s >= NO_CAPTURE_THRESHOLD || e >= NO_CAPTURE_THRESHOLD) {
           captures.push(-1, -1);
         } else {

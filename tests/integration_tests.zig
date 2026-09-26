@@ -332,3 +332,6 @@ test {
 test {
     _ = @import("syntax_tests.zig");
 }
+test {
+    _ = @import("captures_tests.zig");
+}

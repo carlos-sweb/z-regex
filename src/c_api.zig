@@ -219,7 +219,7 @@ export fn zregex_named_group_name(re: *ZRegex, index: usize) ?[*:0]u8 {
     return @ptrCast(@constCast(buf.ptr));
 }
 
-export fn zregex_named_group_index(re: *ZRegex, index: usize) u8 {
+export fn zregex_named_group_index(re: *ZRegex, index: usize) usize {
     if (index >= re.compiled.named_groups.len) return 0;
     return re.compiled.named_groups[index].index;
 }
@@ -369,7 +369,7 @@ export fn zregex_match_end(match: *ZMatch) usize {
     return match.result.end;
 }
 
-export fn zregex_match_group(match: *ZMatch, group_index: u8) ?[*:0]u8 {
+export fn zregex_match_group(match: *ZMatch, group_index: usize) ?[*:0]u8 {
     // Group 0 is the full match; it isn't stored in the internal captures
     // array (which is 1-indexed by capture group number), so it needs its
     // own path rather than going through `MatchResult.getCapture`.
@@ -381,7 +381,9 @@ export fn zregex_match_group(match: *ZMatch, group_index: u8) ?[*:0]u8 {
         return @ptrCast(@constCast(buf.ptr));
     }
 
-    if (group_index >= 10) {
+    // Any group the pattern has (D9: no fixed cap); past the last one it's
+    // an invalid group, not merely an unmatched one.
+    if (group_index >= match.result.captures.len) {
         setError(.ZREGEXP_ERROR_INVALID_GROUP);
         return null;
     }
@@ -401,7 +403,7 @@ export fn zregex_match_group(match: *ZMatch, group_index: u8) ?[*:0]u8 {
 /// `ZREGEXP_NO_CAPTURE` in zregex.h.
 const NO_CAPTURE: usize = std.math.maxInt(usize);
 
-export fn zregex_match_capture_start(match: *ZMatch, group_index: u8) usize {
+export fn zregex_match_capture_start(match: *ZMatch, group_index: usize) usize {
     // See the comment in zregex_match_group: group 0 (the full match)
     // isn't in the internal captures array and needs its own path.
     if (group_index == 0) return match.result.start;
@@ -409,7 +411,7 @@ export fn zregex_match_capture_start(match: *ZMatch, group_index: u8) usize {
     return idx.start;
 }
 
-export fn zregex_match_capture_end(match: *ZMatch, group_index: u8) usize {
+export fn zregex_match_capture_end(match: *ZMatch, group_index: usize) usize {
     if (group_index == 0) return match.result.end;
     const idx = match.result.getCaptureIndices(group_index) orelse return NO_CAPTURE;
     return idx.end;

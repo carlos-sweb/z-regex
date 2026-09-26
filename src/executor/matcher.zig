@@ -93,30 +93,43 @@ pub const Matcher = struct {
     allocator: Allocator,
     bytecode: []const u8,
     named_groups: []const NamedGroup = &.{},
+    /// Capture slots per match: the pattern's group count + 1 (D9).
+    capture_slots: usize = 1,
 
     const Self = @This();
 
-    /// Initialize matcher with compiled bytecode
+    /// Initialize matcher with compiled bytecode (the group count is read
+    /// from the bytecode).
     pub fn init(allocator: Allocator, bytecode: []const u8) Self {
         return .{
             .allocator = allocator,
             .bytecode = bytecode,
+            .capture_slots = RecursiveMatcher.captureSlotsIn(bytecode),
         };
     }
 
     /// Initialize matcher with compiled bytecode and its named-group table,
     /// so `find`/`findAll` results support `MatchResult.getNamedCapture`.
     pub fn initWithNamedGroups(allocator: Allocator, bytecode: []const u8, named_groups: []const NamedGroup) Self {
+        var m = Self.init(allocator, bytecode);
+        m.named_groups = named_groups;
+        return m;
+    }
+
+    /// Like `initWithNamedGroups`, with the group count the compiler already
+    /// knows (`CompileResult.group_count`), so nothing is scanned.
+    pub fn initWithGroups(allocator: Allocator, bytecode: []const u8, named_groups: []const NamedGroup, group_count: u16) Self {
         return .{
             .allocator = allocator,
             .bytecode = bytecode,
             .named_groups = named_groups,
+            .capture_slots = @as(usize, group_count) + 1,
         };
     }
 
     /// Check if pattern matches entire input
     pub fn matchFull(self: Self, input: []const u8) !bool {
-        var matcher = RecursiveMatcher.init(self.allocator, self.bytecode, input);
+        var matcher = RecursiveMatcher.initWithSlots(self.allocator, self.bytecode, input, .{}, self.capture_slots);
         defer matcher.deinit();
 
         const result = try matcher.matchFrom(0, 0);
@@ -134,19 +147,18 @@ pub const Matcher = struct {
 
         // Pass the FULL input to matcher (not a slice)
         // This allows lookbehind to see content before start_pos
-        var matcher = RecursiveMatcher.init(self.allocator, self.bytecode, input);
+        var matcher = RecursiveMatcher.initWithSlots(self.allocator, self.bytecode, input, .{}, self.capture_slots);
         defer matcher.deinit();
 
         const result = try matcher.matchFrom(0, start_pos);
         if (!result.matched) return null;
 
-        // Copy captures (positions are already relative to original input)
-        const captures = try self.allocator.alloc(Capture, 16);
-        for (0..16) |i| {
-            captures[i] = Capture{
-                .start = result.captures[i].start,
-                .end = result.captures[i].end,
-            };
+        // Copy captures (positions are already relative to original input),
+        // one slot per group of the pattern (D9: no fixed cap).
+        const found = matcher.captureSlice();
+        const captures = try self.allocator.alloc(Capture, found.len);
+        for (found, captures) |c, *out| {
+            out.* = Capture{ .start = c.start, .end = c.end };
         }
 
         return MatchResult{

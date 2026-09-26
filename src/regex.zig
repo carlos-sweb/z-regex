@@ -87,7 +87,7 @@ pub const Regex = struct {
 
     /// Test if pattern matches entire input
     pub fn matchFull(self: Self, input: []const u8) RegexError!bool {
-        const m = Matcher.init(self.allocator, self.compiled.bytecode);
+        const m = Matcher.initWithGroups(self.allocator, self.compiled.bytecode, self.compiled.named_groups, self.compiled.group_count);
         return try m.matchFull(input);
     }
 
@@ -99,7 +99,7 @@ pub const Regex = struct {
     /// Find first match in input. If `sticky`, only matches at position 0
     /// (no scanning ahead) — use `findAt` directly to check a later position.
     pub fn find(self: Self, input: []const u8) RegexError!?MatchResult {
-        const m = Matcher.initWithNamedGroups(self.allocator, self.compiled.bytecode, self.compiled.named_groups);
+        const m = Matcher.initWithGroups(self.allocator, self.compiled.bytecode, self.compiled.named_groups, self.compiled.group_count);
         if (self.sticky) return try m.findAt(input, 0);
         return try m.find(input);
     }
@@ -109,14 +109,14 @@ pub const Regex = struct {
     /// iteration from a caller-tracked position, similar to how JS code
     /// tracks `lastIndex` when using a sticky regex.
     pub fn findAt(self: Self, input: []const u8, start_pos: usize) RegexError!?MatchResult {
-        const m = Matcher.initWithNamedGroups(self.allocator, self.compiled.bytecode, self.compiled.named_groups);
+        const m = Matcher.initWithGroups(self.allocator, self.compiled.bytecode, self.compiled.named_groups, self.compiled.group_count);
         return try m.findAt(input, start_pos);
     }
 
     /// Find all matches in input. If `sticky`, stops at the first position
     /// that doesn't match instead of scanning ahead for the next one.
     pub fn findAll(self: Self, input: []const u8) RegexError!std.ArrayListUnmanaged(MatchResult) {
-        const m = Matcher.initWithNamedGroups(self.allocator, self.compiled.bytecode, self.compiled.named_groups);
+        const m = Matcher.initWithGroups(self.allocator, self.compiled.bytecode, self.compiled.named_groups, self.compiled.group_count);
         return try m.findAll(input, self.sticky);
     }
 
@@ -189,7 +189,7 @@ fn expandReplacement(
     match: MatchResult,
     input: []const u8,
     named_groups: []const format_mod.NamedGroup,
-    group_count: u8,
+    group_count: u16,
 ) !void {
     var i: usize = 0;
     while (i < replacement.len) {

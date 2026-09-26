@@ -96,7 +96,7 @@ pub const Token = struct {
     repeat_max: u32 = 0,
 
     /// Backreference group number (for back_ref token)
-    backref_group: u8 = 0,
+    backref_group: u16 = 0,
 
     /// UTF-8 byte sequence (for multibyte_char token, e.g. a \u{...} escape
     /// whose code point doesn't fit in a single byte)
@@ -159,7 +159,7 @@ pub const Token = struct {
     }
 
     /// Create a backreference token
-    pub fn backref_token(group: u8, pos: usize) Token {
+    pub fn backref_token(group: u16, pos: usize) Token {
         return .{
             .type = .back_ref,
             .position = pos,
@@ -793,8 +793,9 @@ pub const Lexer = struct {
                     n = @min(n * 10 + (self.pattern[end] - '0'), std.math.maxInt(u32));
                 }
                 if (n <= self.group_total) {
-                    // Group indices are u8 until F1c (D9/D16).
-                    if (n > std.math.maxInt(u8)) return error.InvalidEscape;
+                    // `group_total` is capped by the parser's u16 counter
+                    // (TooManyCaptures), so a valid reference fits.
+                    if (n > std.math.maxInt(u16)) return error.InvalidEscape;
                     self.pos = end;
                     return Token.backref_token(@intCast(n), start_pos);
                 }

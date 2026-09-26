@@ -18,8 +18,9 @@ const properties = @import("../unicode/properties.zig");
 const Opcode = opcodes.Opcode;
 const Instruction = format.Instruction;
 
-/// Maximum number of capture groups supported
-const MAX_CAPTURE_GROUPS = 16;
+/// Capture slots kept inline in the matcher (no allocation); patterns with
+/// more groups use a heap buffer sized to the pattern (D9: no fixed cap).
+const INLINE_CAPTURES = 16;
 
 /// Default maximum recursion depth (protects against stack overflow)
 pub const DEFAULT_MAX_RECURSION_DEPTH: usize = 1000;
@@ -52,21 +53,13 @@ pub const ExecOptions = struct {
     }
 };
 
-/// Match result
+/// Match result. Captures are not part of it (F1c): they live in the matcher
+/// (`RecursiveMatcher.captureSlice`), which holds the successful path's
+/// values when the top-level `matchFrom` returns `matched`. Keeping this
+/// small matters: every recursion level returns one by value.
 pub const MatchResult = struct {
     matched: bool,
     end_pos: usize,
-
-    /// Capture groups (index 0 = whole match)
-    captures: [MAX_CAPTURE_GROUPS]CaptureGroup = [_]CaptureGroup{.{}} ** MAX_CAPTURE_GROUPS,
-
-    /// Get capture group by index
-    pub fn getCapture(self: MatchResult, group: usize, input: []const u8) ?[]const u8 {
-        if (group >= MAX_CAPTURE_GROUPS) return null;
-        const cap = self.captures[group];
-        if (!cap.isValid()) return null;
-        return input[cap.start.?..cap.end.?];
-    }
 };
 
 /// Capture group boundaries
@@ -93,7 +86,15 @@ pub const RecursiveMatcher = struct {
     allocator: Allocator,
     bytecode: []const u8,
     input: []const u8,
-    captures: [MAX_CAPTURE_GROUPS]CaptureGroup,
+    /// Capture slots in use: the pattern's group count + 1 (slot 0 unused).
+    capture_slots: usize,
+    inline_captures: [INLINE_CAPTURES]CaptureGroup,
+    /// Used instead of `inline_captures` when `capture_slots` exceeds it;
+    /// allocated on the first `matchFrom`.
+    heap_captures: []CaptureGroup,
+    /// Capture snapshots for lookarounds (LIFO; see `matchLookahead`), on the
+    /// heap rather than in each recursion frame.
+    snapshots: std.ArrayListUnmanaged(CaptureGroup),
     recursion_depth: usize,
     step_count: usize,
     exec_options: ExecOptions,
@@ -113,12 +114,21 @@ pub const RecursiveMatcher = struct {
         return Self.initWithOptions(allocator, bytecode, input, ExecOptions{});
     }
 
+    /// Sizes the captures by scanning `bytecode`; `initWithSlots` takes the
+    /// count directly (the hot path: `Matcher` computes it once per pattern).
     pub fn initWithOptions(allocator: Allocator, bytecode: []const u8, input: []const u8, options: ExecOptions) Self {
+        return Self.initWithSlots(allocator, bytecode, input, options, captureSlotsIn(bytecode));
+    }
+
+    pub fn initWithSlots(allocator: Allocator, bytecode: []const u8, input: []const u8, options: ExecOptions, capture_slots: usize) Self {
         return .{
             .allocator = allocator,
             .bytecode = bytecode,
             .input = input,
-            .captures = [_]CaptureGroup{.{}} ** MAX_CAPTURE_GROUPS,
+            .capture_slots = capture_slots,
+            .inline_captures = [_]CaptureGroup{.{}} ** INLINE_CAPTURES,
+            .heap_captures = &.{},
+            .snapshots = .empty,
             .recursion_depth = 0,
             .step_count = 0,
             .exec_options = options,
@@ -128,6 +138,37 @@ pub const RecursiveMatcher = struct {
 
     pub fn deinit(self: *Self) void {
         self.loop_guard.deinit(self.allocator);
+        self.snapshots.deinit(self.allocator);
+        self.allocator.free(self.heap_captures);
+    }
+
+    /// Capture slots a bytecode program needs: its highest group index + 1
+    /// (slot 0 is never written; group 0 is the match itself).
+    pub fn captureSlotsIn(bytecode: []const u8) usize {
+        var slots: usize = 1;
+        var pc: usize = 0;
+        while (pc < bytecode.len) {
+            const inst = format.decodeInstruction(bytecode, pc) catch break;
+            switch (inst.opcode) {
+                .SAVE_START, .SAVE_END, .SAVE_START_NAMED, .SAVE_END_NAMED, .CLEAR_CAPTURE, .BACK_REF, .BACK_REF_I => {
+                    slots = @max(slots, @as(usize, inst.operands[0]) + 1);
+                },
+                else => {},
+            }
+            pc += inst.size;
+        }
+        return slots;
+    }
+
+    /// The live capture slots (inline or heap, see `capture_slots`).
+    fn caps(self: *Self) []CaptureGroup {
+        if (self.capture_slots <= INLINE_CAPTURES) return self.inline_captures[0..self.capture_slots];
+        return self.heap_captures;
+    }
+
+    /// The captures of the last successful top-level `matchFrom`.
+    pub fn captureSlice(self: *Self) []const CaptureGroup {
+        return self.caps();
     }
 
     /// Follow a backward control-flow edge (a loop back-edge) into a loop
@@ -179,6 +220,11 @@ pub const RecursiveMatcher = struct {
             }
         }
 
+        if (self.capture_slots > INLINE_CAPTURES and self.heap_captures.len == 0) {
+            self.heap_captures = try self.allocator.alloc(CaptureGroup, self.capture_slots);
+            @memset(self.heap_captures, .{});
+        }
+
         self.recursion_depth += 1;
         defer self.recursion_depth -= 1;
 
@@ -192,12 +238,8 @@ pub const RecursiveMatcher = struct {
         switch (inst.opcode) {
             .MATCH => {
                 // Success!
-                var result = MatchResult{
-                    .matched = true,
-                    .end_pos = pos,
-                };
-                result.captures = self.captures;
-                return result;
+                // The captures stay in `self` (see `captureSlice`).
+                return MatchResult{ .matched = true, .end_pos = pos };
             },
 
             .CHAR32 => {
@@ -412,11 +454,11 @@ pub const RecursiveMatcher = struct {
                 // mutable matcher state with no other snapshot/rollback
                 // mechanism, so this has to happen at the point of mutation.
                 const group = @as(usize, @intCast(inst.operands[0]));
-                if (group < MAX_CAPTURE_GROUPS) {
-                    const prev = self.captures[group];
-                    self.captures[group].start = pos;
+                if (group < self.capture_slots) {
+                    const prev = self.caps()[group];
+                    self.caps()[group].start = pos;
                     const result = try self.matchFrom(pc + inst.size, pos);
-                    if (!result.matched) self.captures[group] = prev;
+                    if (!result.matched) self.caps()[group] = prev;
                     return result;
                 }
                 return self.matchFrom(pc + inst.size, pos);
@@ -426,11 +468,11 @@ pub const RecursiveMatcher = struct {
                 // Save capture group end (see SAVE_START for why this must
                 // roll back on failure too).
                 const group = @as(usize, @intCast(inst.operands[0]));
-                if (group < MAX_CAPTURE_GROUPS) {
-                    const prev = self.captures[group];
-                    self.captures[group].end = pos;
+                if (group < self.capture_slots) {
+                    const prev = self.caps()[group];
+                    self.caps()[group].end = pos;
                     const result = try self.matchFrom(pc + inst.size, pos);
-                    if (!result.matched) self.captures[group] = prev;
+                    if (!result.matched) self.caps()[group] = prev;
                     return result;
                 }
                 return self.matchFrom(pc + inst.size, pos);
@@ -443,11 +485,11 @@ pub const RecursiveMatcher = struct {
                 // consistent with SAVE_START/SAVE_END, so backtracking back
                 // out of this skip choice restores the prior state.
                 const group = @as(usize, @intCast(inst.operands[0]));
-                if (group < MAX_CAPTURE_GROUPS) {
-                    const prev = self.captures[group];
-                    self.captures[group] = .{};
+                if (group < self.capture_slots) {
+                    const prev = self.caps()[group];
+                    self.caps()[group] = .{};
                     const result = try self.matchFrom(pc + inst.size, pos);
-                    if (!result.matched) self.captures[group] = prev;
+                    if (!result.matched) self.caps()[group] = prev;
                     return result;
                 }
                 return self.matchFrom(pc + inst.size, pos);
@@ -478,11 +520,7 @@ pub const RecursiveMatcher = struct {
             .LOOKAHEAD_END => {
                 // End of lookahead body - this is like MATCH but for lookahead patterns
                 // We consider the lookahead pattern as successfully matched
-                return MatchResult{
-                    .matched = true,
-                    .end_pos = pos,
-                    .captures = self.captures,
-                };
+                return MatchResult{ .matched = true, .end_pos = pos };
             },
 
             .LOOKBEHIND => {
@@ -497,11 +535,7 @@ pub const RecursiveMatcher = struct {
 
             .LOOKBEHIND_END => {
                 // End of lookbehind body - this is like MATCH but for lookbehind patterns
-                return MatchResult{
-                    .matched = true,
-                    .end_pos = pos,
-                    .captures = self.captures,
-                };
+                return MatchResult{ .matched = true, .end_pos = pos };
             },
 
             .STRING_START => {
@@ -1324,7 +1358,11 @@ pub const RecursiveMatcher = struct {
         // function, not any SAVE instruction, that turns that success into
         // the assertion's failure -- so only a full snapshot/restore at
         // this boundary catches it.
-        const captures_snapshot = self.captures;
+        // On the heap, not in this frame: push the slots, restore from
+        // them, and pop on the way out (nested lookarounds nest LIFO).
+        const mark = self.snapshots.items.len;
+        try self.snapshots.appendSlice(self.allocator, self.caps());
+        defer self.snapshots.shrinkRetainingCapacity(mark);
 
         // Execute the lookahead pattern starting after the LOOKAHEAD opcode
         // This is a zero-width assertion, so we test at current position
@@ -1336,12 +1374,12 @@ pub const RecursiveMatcher = struct {
                 // Pattern didn't match, so negative lookahead succeeds.
                 // Discard any partial captures from the failed attempt,
                 // then continue after LOOKAHEAD_END without consuming input.
-                self.captures = captures_snapshot;
+                self.restoreSnapshot(mark);
                 return self.matchFrom(lookahead_end_pc + 1, pos);
             } else {
                 // Pattern matched, so negative lookahead fails. Discard its
                 // captures too -- this whole path is being abandoned.
-                self.captures = captures_snapshot;
+                self.restoreSnapshot(mark);
                 return MatchResult{ .matched = false, .end_pos = pos };
             }
         } else {
@@ -1353,10 +1391,14 @@ pub const RecursiveMatcher = struct {
                 return self.matchFrom(lookahead_end_pc + 1, pos);
             } else {
                 // Pattern didn't match, so positive lookahead fails.
-                self.captures = captures_snapshot;
+                self.restoreSnapshot(mark);
                 return MatchResult{ .matched = false, .end_pos = pos };
             }
         }
+    }
+
+    fn restoreSnapshot(self: *Self, mark: usize) void {
+        @memcpy(self.caps(), self.snapshots.items[mark..][0..self.capture_slots]);
     }
 
     /// Find the position of LOOKAHEAD_END opcode
@@ -1503,11 +1545,11 @@ pub const RecursiveMatcher = struct {
     /// -- callers that loop on this (e.g. `\1+`) must have their own
     /// zero-width-progress guard, same as any other quantified atom.
     fn checkBackRef(self: *Self, pos: usize, group: usize, case_insensitive: bool) struct { matched: bool, end_pos: usize } {
-        if (group >= MAX_CAPTURE_GROUPS) {
+        if (group >= self.capture_slots) {
             return .{ .matched = false, .end_pos = pos };
         }
 
-        const capture = self.captures[group];
+        const capture = self.caps()[group];
         if (!capture.isValid()) {
             // Per the ECMAScript spec, a backreference to a group that
             // hasn't participated in the match (e.g. an alternation branch
@@ -1520,6 +1562,13 @@ pub const RecursiveMatcher = struct {
 
         const cap_start = capture.start.?;
         const cap_end = capture.end.?;
+        // A group re-entered but not closed yet in this iteration holds the
+        // new start with the previous iteration's end (end < start): reached
+        // from inside the group itself (`(a\1)*`, `(?<n>\k<n>x)`). The spec
+        // clears the atom's captures at each iteration, so the group hasn't
+        // participated yet: match empty. (Before F1c this subtraction
+        // overflowed: a panic in safe builds; found by differential-v8.)
+        if (cap_end < cap_start) return .{ .matched = true, .end_pos = pos };
         const cap_len = cap_end - cap_start;
 
         if (pos + cap_len > self.input.len) {
@@ -1701,4 +1750,43 @@ test "RecursiveMatcher: ExecOptions - custom limits" {
     const options = ExecOptions.withLimits(100, 5000);
     try std.testing.expectEqual(@as(usize, 100), options.max_recursion_depth);
     try std.testing.expectEqual(@as(usize, 5000), options.max_steps);
+}
+
+test "RecursiveMatcher: 1000 groups capture exactly, and \\1000 matches (D9)" {
+    // Past the default recursion limit (3 levels per group), so the limit is
+    // lifted and the match runs on a 64 MiB thread: this checks the capture
+    // storage (heap slots, u16 indices), not the stack (F6a).
+    const Ctx = struct {
+        ok: bool = false,
+        fn run(ctx: *@This()) void {
+            ctx.ok = check() catch false;
+        }
+        fn check() !bool {
+            const gpa = std.heap.page_allocator;
+            var pattern: std.ArrayListUnmanaged(u8) = .empty;
+            defer pattern.deinit(gpa);
+            for (0..1000) |_| try pattern.appendSlice(gpa, "(.)");
+            try pattern.appendSlice(gpa, "\\1000");
+            var input: [1001]u8 = undefined;
+            for (input[0..1000], 0..) |*c, i| c.* = @intCast('!' + (i % 94));
+            input[1000] = input[999];
+
+            const compiled = try @import("../codegen/compiler.zig").compileSimple(gpa, pattern.items);
+            defer compiled.deinit();
+            var m = RecursiveMatcher.initWithOptions(gpa, compiled.bytecode, &input, ExecOptions.withLimits(0, 0));
+            defer m.deinit();
+            const r = try m.matchFrom(0, 0);
+            if (!r.matched or r.end_pos != 1001) return false;
+            const caps = m.captureSlice();
+            if (caps.len != 1001) return false;
+            for (1..1001) |g| {
+                if (caps[g].start != g - 1 or caps[g].end != g) return false;
+            }
+            return true;
+        }
+    };
+    var ctx: Ctx = .{};
+    const t = try std.Thread.spawn(.{ .stack_size = 64 << 20 }, Ctx.run, .{&ctx});
+    t.join();
+    try std.testing.expect(ctx.ok);
 }

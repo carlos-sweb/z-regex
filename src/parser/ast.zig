@@ -82,7 +82,7 @@ pub const Node = struct {
     children: std.ArrayListUnmanaged(*Node) = .empty,
 
     /// Group index (for capture groups and backreferences)
-    group_index: u8 = 0,
+    group_index: u16 = 0,
 
     /// Whether this is an inverted/negated character class
     inverted: bool = false,
@@ -263,7 +263,7 @@ pub const Node = struct {
     }
 
     /// Create a group node
-    pub fn createGroup(allocator: Allocator, child: *Node, index: u8) !*Node {
+    pub fn createGroup(allocator: Allocator, child: *Node, index: u16) !*Node {
         const node = try allocator.create(Node);
         errdefer allocator.destroy(node);
         node.* = .{
@@ -288,7 +288,7 @@ pub const Node = struct {
     }
 
     /// Create a backreference node
-    pub fn createBackRef(allocator: Allocator, group: u8) !*Node {
+    pub fn createBackRef(allocator: Allocator, group: u16) !*Node {
         const node = try allocator.create(Node);
         node.* = .{
             .type = .back_ref,
@@ -456,7 +456,7 @@ test "Node: createGroup" {
     defer node.deinit();
 
     try std.testing.expectEqual(NodeType.group, node.type);
-    try std.testing.expectEqual(@as(u8, 1), node.group_index);
+    try std.testing.expectEqual(@as(u16, 1), node.group_index);
     try std.testing.expectEqual(@as(usize, 1), node.children.items.len);
 }
 

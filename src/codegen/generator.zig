@@ -23,7 +23,7 @@ const CompileOptions = compiler.CompileOptions;
 /// Recursively collect the group indices of every `.group` node in `node`'s
 /// subtree (including `node` itself), used to know which captures a
 /// skipped optional atom would have set had it run.
-fn collectGroupIndices(node: *Node, list: *std.ArrayListUnmanaged(u8), allocator: Allocator) !void {
+fn collectGroupIndices(node: *Node, list: *std.ArrayListUnmanaged(u16), allocator: Allocator) !void {
     if (node.type == .group) {
         try list.append(allocator, node.group_index);
     }
@@ -52,7 +52,7 @@ const COLLECT_RANGES = 64;
 pub const CodeGenerator = struct {
     allocator: Allocator,
     writer: *BytecodeWriter,
-    group_count: u8,
+    group_count: u16,
     options: CompileOptions,
 
     const Self = @This();
@@ -629,7 +629,7 @@ pub const CodeGenerator = struct {
     /// into; when there's nothing to clear, this degenerates to the
     /// original plain fall-through/jump-target shape.
     fn emitClearCapturesOnSkip(self: *Self, atom: *Node, skip_label: *Label) !void {
-        var group_indices: std.ArrayListUnmanaged(u8) = .empty;
+        var group_indices: std.ArrayListUnmanaged(u16) = .empty;
         defer group_indices.deinit(self.allocator);
         try collectGroupIndices(atom, &group_indices, self.allocator);
 

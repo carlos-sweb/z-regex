@@ -32,7 +32,7 @@ pub const CompileResult = struct {
     /// distinguish "group N doesn't exist in this pattern" from "group N
     /// exists but didn't participate in this match" -- e.g. for `$N`
     /// substitution in `Regex.replace`/`replaceAll`.
-    group_count: u8,
+    group_count: u16,
     allocator: Allocator,
 
     /// Free the compilation result

@@ -47,3 +47,32 @@ test "fuzz: deterministic stress over 20,000 syntax-biased patterns" {
     // A broken execution filter must not leave the matcher untested unnoticed.
     try std.testing.expect(common.stats.executed > 0);
 }
+
+// F1c (D9/D16): the token alphabet can't build patterns with hundreds of
+// groups (at most 16 tokens), which is where the u8 group counter overflowed
+// (D16). This part repeats a group unit 1-300 times, sometimes with a
+// backreference to the last group, so group indices past 255 and the heap
+// capture slots are exercised on every run.
+test "fuzz: many-groups patterns (1-300 groups)" {
+    var prng = std.Random.DefaultPrng.init(0xF1C_D916);
+    const rand = prng.random();
+    var buf: std.ArrayListUnmanaged(u8) = .empty;
+    defer buf.deinit(std.testing.allocator);
+    for (0..300) |_| {
+        buf.clearRetainingCapacity();
+        const n = 1 + rand.uintLessThan(usize, 300);
+        const unit = rand.uintLessThan(u8, 3);
+        for (0..n) |i| {
+            switch (unit) {
+                0 => try buf.appendSlice(std.testing.allocator, "(a)"),
+                1 => try buf.appendSlice(std.testing.allocator, "(?:(a))"),
+                else => try buf.print(std.testing.allocator, "(?<g{d}>a)", .{i}),
+            }
+        }
+        if (rand.boolean()) try buf.print(std.testing.allocator, "\\{d}", .{n});
+        common.checkPattern(std.testing.allocator, buf.items) catch |err| {
+            std.debug.print("fuzz stress failed on a {d}-group pattern (unit {d})\n", .{ n, unit });
+            return err;
+        };
+    }
+}

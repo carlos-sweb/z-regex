@@ -77,7 +77,6 @@ pub const ParseError = error{
     // Named capture groups
     DuplicateGroupName,
     UnknownGroupName,
-    AlternationTooDeep,
     // Lexer errors
     InvalidEscape,
     InvalidRepeat,
@@ -90,22 +89,12 @@ pub const ParseError = error{
     ChainedClassSetOperatorNotSupported,
     // Parser nesting limit (see MAX_NESTING_DEPTH)
     NestingTooDeep,
+    // More than 65535 capturing groups (group indices are u16, D9/D16)
+    TooManyCaptures,
 };
 
 /// A named capturing group's name and numeric group index, in the order the
 /// names were encountered while parsing.
-/// Maximum nesting depth of alternations (`|` inside `|` inside a group
-/// inside `|`, ...) this parser's mutual-exclusion tracking supports for
-/// duplicate named groups -- see `BranchStep`. A fixed cap keeps
-/// `Parser`/`GroupNameEntry` allocation-free for this feature (like
-/// `MAX_CLASS_RANGES` elsewhere in this codebase) instead of needing a heap
-/// allocation (and therefore `Parser.deinit()`) for every pattern that goes
-/// through `parseAlternation` at all -- i.e. every pattern, not just ones
-/// with named groups. 32 levels of *nested* alternation (not a flat `a|b|c`
-/// chain, which is one level regardless of branch count) is far beyond any
-/// realistic pattern; exceeding it is `error.AlternationTooDeep`.
-pub const MAX_ALTERNATION_DEPTH = 32;
-
 /// Maximum nesting of constructs the parser recurses into: capturing and
 /// non-capturing groups, lookarounds and character classes (each counts one
 /// level; quantifiers don't nest on their own -- `(?:(?:a)*)*` nests through
@@ -115,20 +104,20 @@ pub const MAX_ALTERNATION_DEPTH = 32;
 /// ReleaseSafe, so 256 levels take ~318 KB, within half of a 1 MiB stack. In
 /// Debug a level costs ~15.5 KB, so 256 levels need ~4 MiB of stack and a
 /// smaller stack crashes before the limit is reached (docs/REGEX_TIERS_PLAN.md
-/// F0d/F2). Until F1 raises MAX_ALTERNATION_DEPTH, groups are effectively
-/// capped at 31 by `error.AlternationTooDeep` first.
+/// F0d/F2). Since F1c this is the only nesting limit: the branch tracking for
+/// duplicate named groups is heap-allocated, so it adds no cap of its own and
+/// no stack per level.
 pub const MAX_NESTING_DEPTH: u32 = 256;
 
 pub const GroupNameEntry = struct {
     name: []const u8,
-    index: u8,
+    index: u16,
     /// Snapshot of `Parser.branch_stack` at the moment this named group was
-    /// created, outermost-first, `branch_path[0..branch_path_len]` valid.
+    /// created, outermost-first; owned by the parser (freed in `deinit`).
     /// Used only to decide whether a *later* same-named group is allowed
     /// (JS permits duplicate names when every occurrence is in a mutually
     /// exclusive alternation branch).
-    branch_path: [MAX_ALTERNATION_DEPTH]BranchStep = undefined,
-    branch_path_len: usize = 0,
+    branch_path: []const BranchStep = &.{},
 };
 
 /// One step of a named group's position relative to the alternation
@@ -167,22 +156,21 @@ pub const Parser = struct {
     allocator: Allocator,
     lexer: *Lexer,
     current_token: Token,
-    group_counter: u8,
+    group_counter: u16,
     /// Current nesting of groups/lookarounds/classes (see MAX_NESTING_DEPTH).
     nesting_depth: u32 = 0,
-    /// Nesting limit; a field so tests can lower it below the
-    /// MAX_ALTERNATION_DEPTH cap that applies until F1.
+    /// Nesting limit; a field so tests can lower it.
     max_nesting_depth: u32 = MAX_NESTING_DEPTH,
     /// Names are slices into the original pattern (borrowed, valid only for
     /// the lifetime of the pattern passed to the lexer); callers that need
     /// them to outlive the parser must copy them (see `codegen/compiler.zig`).
     group_names: std.ArrayListUnmanaged(GroupNameEntry) = .empty,
     /// Live stack of the alternation branches currently being parsed --
-    /// pushed/popped by `parseAlternation`, `branch_stack[0..branch_stack_len]`
-    /// valid, snapshotted into a `GroupNameEntry.branch_path` whenever a
-    /// named group is created. See `BranchStep`/`branchPathsMutuallyExclusive`.
-    branch_stack: [MAX_ALTERNATION_DEPTH]BranchStep = undefined,
-    branch_stack_len: usize = 0,
+    /// pushed/popped by `parseAlternation`, snapshotted into a
+    /// `GroupNameEntry.branch_path` whenever a named group is created. See
+    /// `BranchStep`/`branchPathsMutuallyExclusive`. Heap-allocated (F1c), so
+    /// it neither caps the nesting nor grows the parser's stack frames.
+    branch_stack: std.ArrayListUnmanaged(BranchStep) = .empty,
     /// Next fresh id to hand out to a `parseAlternation` call (see
     /// `BranchStep`). Every call gets one, whether or not it turns out to
     /// contain a real `|` -- see `branchPathsMutuallyExclusive`'s doc
@@ -216,7 +204,9 @@ pub const Parser = struct {
     /// Free internal bookkeeping state (not the AST, which has its own
     /// `deinit`, and not the pattern-borrowed name strings).
     pub fn deinit(self: *Self) void {
+        for (self.group_names.items) |entry| self.allocator.free(entry.branch_path);
         self.group_names.deinit(self.allocator);
+        self.branch_stack.deinit(self.allocator);
     }
 
     /// Parse a complete regex pattern
@@ -322,14 +312,20 @@ pub const Parser = struct {
 
     /// Push one `BranchStep` onto `self.branch_stack`. See `parseAlternation`.
     fn pushBranch(self: *Self, alt_id: u32, branch_index: u32) !void {
-        if (self.branch_stack_len >= MAX_ALTERNATION_DEPTH) return error.AlternationTooDeep;
-        self.branch_stack[self.branch_stack_len] = .{ .alt_id = alt_id, .branch_index = branch_index };
-        self.branch_stack_len += 1;
+        try self.branch_stack.append(self.allocator, .{ .alt_id = alt_id, .branch_index = branch_index });
     }
 
     /// Pop the top of `self.branch_stack`. See `parseAlternation`.
     fn popBranch(self: *Self) void {
-        self.branch_stack_len -= 1;
+        _ = self.branch_stack.pop();
+    }
+
+    /// The next capturing group's index (1-based). Indices are u16 (D9);
+    /// past 65535 groups the pattern is rejected instead of wrapping (D16).
+    fn nextGroupIndex(self: *Self) error{TooManyCaptures}!u16 {
+        if (self.group_counter == std.math.maxInt(u16)) return error.TooManyCaptures;
+        self.group_counter += 1;
+        return self.group_counter;
     }
 
     /// Parse sequence: term*
@@ -555,8 +551,7 @@ pub const Parser = struct {
             .lparen => {
                 try self.advance(); // consume '('
 
-                self.group_counter += 1;
-                const group_index = self.group_counter;
+                const group_index = try self.nextGroupIndex();
 
                 const inner = try self.parseAlternation();
                 errdefer inner.deinit();
@@ -574,31 +569,30 @@ pub const Parser = struct {
                 // A duplicate name is only a SyntaxError if the two groups
                 // *aren't* provably mutually exclusive (different branches
                 // of a shared enclosing alternation) -- see
-                // `branchPathsMutuallyExclusive`. `self.branch_stack[0..
-                // self.branch_stack_len]` right now *is* this group's branch
-                // path (its own content hasn't been parsed yet, so nothing
+                // `branchPathsMutuallyExclusive`. `self.branch_stack.items`
+                // right now *is* this group's branch path (its own content hasn't been parsed yet, so nothing
                 // from inside it has pushed anything onto the stack).
-                const current_path = self.branch_stack[0..self.branch_stack_len];
+                const current_path = self.branch_stack.items;
                 for (self.group_names.items) |entry| {
                     if (std.mem.eql(u8, entry.name, name) and
-                        !branchPathsMutuallyExclusive(entry.branch_path[0..entry.branch_path_len], current_path))
+                        !branchPathsMutuallyExclusive(entry.branch_path, current_path))
                     {
                         return error.DuplicateGroupName;
                     }
                 }
-                var new_entry = GroupNameEntry{ .name = name, .index = 0, .branch_path_len = current_path.len };
-                @memcpy(new_entry.branch_path[0..current_path.len], current_path);
+                const path_copy = try self.allocator.dupe(BranchStep, current_path);
+                var path_owned = true; // until `group_names` takes it
+                errdefer if (path_owned) self.allocator.free(path_copy);
 
-                self.group_counter += 1;
-                const group_index = self.group_counter;
-                new_entry.index = group_index;
+                const group_index = try self.nextGroupIndex();
 
                 const inner = try self.parseAlternation();
                 errdefer inner.deinit();
 
                 _ = try self.consume(.rparen);
 
-                try self.group_names.append(self.allocator, new_entry);
+                try self.group_names.append(self.allocator, .{ .name = name, .index = group_index, .branch_path = path_copy });
+                path_owned = false;
 
                 return Node.createGroup(self.allocator, inner, group_index);
             },
@@ -1107,6 +1101,7 @@ test "Parser: simple character" {
     const pattern = "a";
     var lexer = Lexer.init(pattern);
     var parser = try Parser.init(std.testing.allocator, &lexer);
+    defer parser.deinit();
 
     const root = try parser.parse();
     defer root.deinit();
@@ -1119,6 +1114,7 @@ test "Parser: sequence" {
     const pattern = "abc";
     var lexer = Lexer.init(pattern);
     var parser = try Parser.init(std.testing.allocator, &lexer);
+    defer parser.deinit();
 
     const root = try parser.parse();
     defer root.deinit();
@@ -1134,6 +1130,7 @@ test "Parser: alternation" {
     const pattern = "a|b";
     var lexer = Lexer.init(pattern);
     var parser = try Parser.init(std.testing.allocator, &lexer);
+    defer parser.deinit();
 
     const root = try parser.parse();
     defer root.deinit();
@@ -1148,6 +1145,7 @@ test "Parser: star quantifier" {
     const pattern = "a*";
     var lexer = Lexer.init(pattern);
     var parser = try Parser.init(std.testing.allocator, &lexer);
+    defer parser.deinit();
 
     const root = try parser.parse();
     defer root.deinit();
@@ -1161,6 +1159,7 @@ test "Parser: plus quantifier" {
     const pattern = "a+";
     var lexer = Lexer.init(pattern);
     var parser = try Parser.init(std.testing.allocator, &lexer);
+    defer parser.deinit();
 
     const root = try parser.parse();
     defer root.deinit();
@@ -1173,6 +1172,7 @@ test "Parser: question quantifier" {
     const pattern = "a?";
     var lexer = Lexer.init(pattern);
     var parser = try Parser.init(std.testing.allocator, &lexer);
+    defer parser.deinit();
 
     const root = try parser.parse();
     defer root.deinit();
@@ -1185,6 +1185,7 @@ test "Parser: repeat quantifier" {
     const pattern = "a{2,5}";
     var lexer = Lexer.init(pattern);
     var parser = try Parser.init(std.testing.allocator, &lexer);
+    defer parser.deinit();
 
     const root = try parser.parse();
     defer root.deinit();
@@ -1198,6 +1199,7 @@ test "Parser: dot" {
     const pattern = ".";
     var lexer = Lexer.init(pattern);
     var parser = try Parser.init(std.testing.allocator, &lexer);
+    defer parser.deinit();
 
     const root = try parser.parse();
     defer root.deinit();
@@ -1210,6 +1212,7 @@ test "Parser: anchors" {
         const pattern = "^a";
         var lexer = Lexer.init(pattern);
         var parser = try Parser.init(std.testing.allocator, &lexer);
+        defer parser.deinit();
         const root = try parser.parse();
         defer root.deinit();
 
@@ -1221,6 +1224,7 @@ test "Parser: anchors" {
         const pattern = "a$";
         var lexer = Lexer.init(pattern);
         var parser = try Parser.init(std.testing.allocator, &lexer);
+        defer parser.deinit();
         const root = try parser.parse();
         defer root.deinit();
 
@@ -1233,6 +1237,7 @@ test "Parser: group" {
     const pattern = "(ab)";
     var lexer = Lexer.init(pattern);
     var parser = try Parser.init(std.testing.allocator, &lexer);
+    defer parser.deinit();
 
     const root = try parser.parse();
     defer root.deinit();
@@ -1249,6 +1254,7 @@ test "Parser: character class simple" {
     const pattern = "[abc]";
     var lexer = Lexer.init(pattern);
     var parser = try Parser.init(std.testing.allocator, &lexer);
+    defer parser.deinit();
 
     const root = try parser.parse();
     defer root.deinit();
@@ -1261,6 +1267,7 @@ test "Parser: character class range" {
     const pattern = "[a-z]";
     var lexer = Lexer.init(pattern);
     var parser = try Parser.init(std.testing.allocator, &lexer);
+    defer parser.deinit();
 
     const root = try parser.parse();
     defer root.deinit();
@@ -1279,6 +1286,7 @@ test "Parser: complex pattern" {
     const pattern = "(a|b)+";
     var lexer = Lexer.init(pattern);
     var parser = try Parser.init(std.testing.allocator, &lexer);
+    defer parser.deinit();
 
     const root = try parser.parse();
     defer root.deinit();
@@ -1296,6 +1304,7 @@ test "Parser: escaped characters" {
     const pattern = "\\n\\t\\.";
     var lexer = Lexer.init(pattern);
     var parser = try Parser.init(std.testing.allocator, &lexer);
+    defer parser.deinit();
 
     const root = try parser.parse();
     defer root.deinit();
@@ -1308,6 +1317,7 @@ test "Parser: digit class" {
     const pattern = "\\d";
     var lexer = Lexer.init(pattern);
     var parser = try Parser.init(std.testing.allocator, &lexer);
+    defer parser.deinit();
 
     const root = try parser.parse();
     defer root.deinit();
@@ -1321,6 +1331,7 @@ test "Parser: multiple alternations" {
     const pattern = "a|b|c";
     var lexer = Lexer.init(pattern);
     var parser = try Parser.init(std.testing.allocator, &lexer);
+    defer parser.deinit();
 
     const root = try parser.parse();
     defer root.deinit();
@@ -1333,6 +1344,7 @@ test "Parser: empty pattern" {
     const pattern = "";
     var lexer = Lexer.init(pattern);
     var parser = try Parser.init(std.testing.allocator, &lexer);
+    defer parser.deinit();
 
     const root = try parser.parse();
     defer root.deinit();
@@ -1346,6 +1358,7 @@ test "Parser: unmatched paren error" {
     const pattern = "(abc";
     var lexer = Lexer.init(pattern);
     var parser = try Parser.init(std.testing.allocator, &lexer);
+    defer parser.deinit();
 
     try std.testing.expectError(error.UnexpectedToken, parser.parse());
 }
@@ -1354,6 +1367,7 @@ test "Parser: invalid char range" {
     const pattern = "[z-a]";
     var lexer = Lexer.init(pattern);
     var parser = try Parser.init(std.testing.allocator, &lexer);
+    defer parser.deinit();
 
     try std.testing.expectError(error.InvalidCharRange, parser.parse());
 }
@@ -1362,6 +1376,7 @@ test "Parser: lazy star quantifier" {
     const pattern = "a*?";
     var lexer = Lexer.init(pattern);
     var parser = try Parser.init(std.testing.allocator, &lexer);
+    defer parser.deinit();
 
     const root = try parser.parse();
     defer root.deinit();
@@ -1375,6 +1390,7 @@ test "Parser: lazy plus quantifier" {
     const pattern = "a+?";
     var lexer = Lexer.init(pattern);
     var parser = try Parser.init(std.testing.allocator, &lexer);
+    defer parser.deinit();
 
     const root = try parser.parse();
     defer root.deinit();
@@ -1387,6 +1403,7 @@ test "Parser: lazy question quantifier" {
     const pattern = "a??";
     var lexer = Lexer.init(pattern);
     var parser = try Parser.init(std.testing.allocator, &lexer);
+    defer parser.deinit();
 
     const root = try parser.parse();
     defer root.deinit();
@@ -1400,6 +1417,7 @@ test "Parser: possessive star quantifier" {
     var lexer = Lexer.init(pattern);
     lexer.possessive = true; // opt-in extension (D8)
     var parser = try Parser.init(std.testing.allocator, &lexer);
+    defer parser.deinit();
 
     const root = try parser.parse();
     defer root.deinit();
@@ -1414,6 +1432,7 @@ test "Parser: possessive plus quantifier" {
     var lexer = Lexer.init(pattern);
     lexer.possessive = true; // opt-in extension (D8)
     var parser = try Parser.init(std.testing.allocator, &lexer);
+    defer parser.deinit();
 
     const root = try parser.parse();
     defer root.deinit();
@@ -1427,6 +1446,7 @@ test "Parser: possessive question quantifier" {
     var lexer = Lexer.init(pattern);
     lexer.possessive = true; // opt-in extension (D8)
     var parser = try Parser.init(std.testing.allocator, &lexer);
+    defer parser.deinit();
 
     const root = try parser.parse();
     defer root.deinit();
@@ -1479,8 +1499,8 @@ fn parseNestedOnStack(open: []const u8, depth: usize, limit: u32, stack_size: us
 
 test "Parser: nesting limit is enforced for groups and lookarounds (any build mode)" {
     // 30 levels (~487 KB of stack in Debug, ~41 KB in ReleaseSafe) fit on a
-    // 1 MiB thread in every build mode; the limit is lowered to 30 because
-    // groups are capped at 31 by AlternationTooDeep until F1.
+    // 1 MiB thread in every build mode, so the limit is lowered to 30 here to
+    // exercise it in Debug too.
     const opens = [_][]const u8{ "(", "(?:", "(?=", "(?<=" };
     for (opens) |open| {
         try std.testing.expectEqual(@as(?anyerror, null), try parseNestedOnStack(open, 30, 30, 1 << 20));
@@ -1497,9 +1517,7 @@ test "Parser: a character class counts as a nesting level" {
 }
 
 test "Parser: MAX_NESTING_DEPTH levels fit in a 1 MiB stack (release builds)" {
-    // Unreachable until F1: groups are capped at 31 by AlternationTooDeep
-    // before this limit; F1 raises MAX_ALTERNATION_DEPTH and enables it.
-    if (true) return error.SkipZigTest;
+    // Reachable since F1c, when the branch tracking left the stack.
     // Debug needs ~15.5 KB per level (~4 MiB for 256 levels), so there the
     // 1 MiB stack crashes before the limit; F2 makes the parser iterative or
     // brings a level under ~2 KB, and then this runs in Debug too.
