@@ -68,6 +68,7 @@ pub const compile = @import("codegen/compiler.zig").compile;
 pub const compileSimple = @import("codegen/compiler.zig").compileSimple;
 pub const CompileOptions = @import("codegen/compiler.zig").CompileOptions;
 pub const CompileResult = @import("codegen/compiler.zig").CompileResult;
+pub const CharSet = @import("ir/charset.zig").CharSet;
 pub const NamedGroup = @import("codegen/compiler.zig").NamedGroup;
 
 // Executor module exports
@@ -105,6 +106,9 @@ pub fn placeholder() void {
 // Test aggregation
 test {
     std.testing.refAllDecls(@This());
+
+    // IR (F2b: CharSet)
+    _ = @import("ir/charset.zig");
 
     // Utils module tests (implemented)
     _ = @import("utils/utils_tests.zig");
