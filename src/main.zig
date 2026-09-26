@@ -69,6 +69,9 @@ pub const compile = @import("compile.zig").compile;
 pub const compileSimple = @import("compile.zig").compileSimple;
 pub const CompileOptions = @import("compile.zig").CompileOptions;
 pub const CompileResult = @import("compile.zig").CompileResult;
+pub const compileTiers = @import("compile.zig").compileTiers;
+pub const Compiled = @import("compile.zig").Compiled;
+pub const TierUnavailable = @import("compile.zig").TierUnavailable;
 pub const CharSet = @import("ir").charset.CharSet;
 /// The input a regex runs over: WTF-8 or UTF-16, indices in its own units (F3).
 pub const subject = @import("subject");

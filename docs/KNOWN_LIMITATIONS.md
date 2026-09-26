@@ -847,6 +847,35 @@ T1+T2), not real-world regexes, which F0c measures.
 | T2 (lookaround, backreferences) | 11,762 | F6a |
 | Not classified (parse errors, D10) | 1,234 | — |
 
+**Dispatcher (F4a(3)).** `Regex.compileWithOptions` builds one front end, classifies
+its HIR with `analysis.analyzeFrontend` (the answer `analyze()` gives) and, for an
+eligible pattern, compiles T0's `Program` next to the backtracker's (`Regex.t0`). Every
+execution (`execAt` and the whole facade, so also the C API) goes to the VM when `t0` is
+set. An unclassifiable pattern goes to the backtracker without error.
+`zregex.Scratch` holds both executors' buffers (112 + 152 B), each empty until its first
+execution, under one `in_use` flag.
+
+- **Possessive quantifiers are a known deviation again (D8) on `compile`'s opt-in.**
+  `analyze()` never turns the opt-in on (`a*+` is a parse error there), so its walker
+  ignored them; over `compile`'s front end they would have classified as T0 and run
+  greedy on the VM. `analyzeFrontend` reports them as `known_deviation(.d8_possessive)`
+  and they stay on the backtracker (`tier0.check` also rejects them). A pattern compiled
+  with the opt-in that uses no possessive quantifier routes like any other.
+- **`CompileOptions.force_tier`** (tests and diagnostics): `.expert` forces the
+  backtracker; `.regular` forces the VM or fails with `error.TierUnavailable`, with the
+  reason in `CompileOptions.tier_diagnostic`: `not_classifiable` (a known deviation; a
+  parse error fails compilation first), `tier_too_high` (T1/T2), or `not_eligible`
+  (captures, iterated nullable bodies, raw pattern bytes); `.unicode` is
+  `not_built` until F5.
+- **Routing, measured.** Corpus (every line compiled with its own flags): 8,286 on the VM
+  (7,453 without `p`, the F4a(1) predicate exactly, and 833 with the opt-in but no
+  possessive quantifier). test262 (UTF-16): 714 of 4,294 unique pattern/mode pairs,
+  1,541 of 8,743 compilations; 3,289 of the pairs on the backtracker are `u`/`v`.
+- **Checks.** The fuzz stress runs every pattern the dispatcher sends to the VM on
+  the backtracker too (every index of every subject, sticky and not, both encodings):
+  2,868 of 8,533 executed patterns, no difference. `differential-v8` is identical to
+  `diff-F3d.json` in both encodings.
+
 ### test262 baseline (F0b)
 
 The real test262 measurement that replaces the sample above as the semantic

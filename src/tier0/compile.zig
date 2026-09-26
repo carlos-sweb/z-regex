@@ -38,6 +38,10 @@ pub const Ineligible = enum {
     non_ascii_fold,
     /// The unrolled program would exceed `max_insts`.
     too_large,
+    /// A possessive quantifier (D8's opt-in): the dispatcher never gets
+    /// here with one (it is a known deviation), and the VM has no atomic
+    /// repeat.
+    possessive,
 };
 
 /// Upper bound on a T0 program's instructions (the unrolled repeats).
@@ -61,6 +65,7 @@ fn checkNode(node: *const hir.Node, flags: hir.Flags) ?Ineligible {
             if (checkNode(item, flags)) |why| return why;
         },
         .repeat => |r| {
+            if (r.policy == .possessive) return .possessive;
             const iterates = r.max == null or r.max.? > 1;
             if (iterates and hir.nullable(r.body)) return .nullable_repeat;
             return checkNode(r.body, flags);
@@ -319,6 +324,8 @@ test "check: what stays on the backtracker in F4a" {
     try testing.expectEqual(@as(?Ineligible, .raw_byte), check(&raw));
     try testing.expectEqual(@as(?Ineligible, .non_ascii_fold), check(&fold));
     try testing.expectEqual(@as(?Ineligible, .too_large), check(&big));
+    const poss: hir.Node = .{ .repeat = .{ .min = 0, .max = null, .policy = .possessive, .syntax_form = .star, .body = &a } };
+    try testing.expectEqual(@as(?Ineligible, .possessive), check(&poss));
     try testing.expectError(error.Ineligible, compile(testing.allocator, &cap));
 }
 

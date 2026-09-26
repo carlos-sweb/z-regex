@@ -38,12 +38,46 @@ const CompileOptions = compiler.CompileOptions;
 const Matcher = matcher_mod.Matcher;
 pub const MatchResult = matcher_mod.MatchResult;
 const Subject = @import("subject").Subject;
+const tier0 = @import("tier0");
 
 /// Everything an execution allocates, reused across executions (F3c,
 /// docs/REGEX_TIERS_PLAN.md §4.2): one per thread; a second one for a
 /// match run from inside another's callback. Using one twice at once
 /// panics in safe builds.
-pub const Scratch = matcher_mod.Scratch;
+///
+/// Since F4a it holds the buffers of both executors, the backtracker's and
+/// T0's VM. Each starts empty (`init` allocates nothing) and grows on the
+/// first execution that runs on it, so a host that only ever runs one kind
+/// of pattern never pays for the other.
+pub const Scratch = struct {
+    bt: matcher_mod.Scratch,
+    vm: tier0.VmScratch,
+    /// One flag for the whole scratch, whichever executor runs.
+    in_use: bool = false,
+
+    pub fn init(gpa: Allocator) Scratch {
+        return .{ .bt = .init(gpa), .vm = .init(gpa) };
+    }
+
+    pub fn deinit(self: *Scratch) void {
+        self.bt.deinit();
+        self.vm.deinit();
+        self.* = undefined;
+    }
+
+    /// Marks the scratch in use for one execution; panics in safe builds if
+    /// it already is.
+    pub fn acquire(self: *Scratch) void {
+        if (std.debug.runtime_safety) {
+            if (self.in_use) @panic("zregex.Scratch used by two executions at once");
+            self.in_use = true;
+        }
+    }
+
+    pub fn release(self: *Scratch) void {
+        self.in_use = false;
+    }
+};
 /// Execution limits: the backtracker's recursion depth and step budget,
 /// per start position (F6a makes the budget per execution, D11).
 pub const ExecLimits = matcher_mod.ExecOptions;
@@ -67,12 +101,20 @@ pub const RegexError = parser_mod.ParseError || generator_mod.CodegenError || Al
     /// A CHAR_SET index outside the program's CharSet table (malformed
     /// program; never produced by `compile`).
     InvalidCharSet,
+    /// `CompileOptions.force_tier` asked for an executor the pattern can't
+    /// run on (the reason is in `CompileOptions.tier_diagnostic`).
+    TierUnavailable,
 };
 
 /// Main Regex type - represents a compiled regular expression
 pub const Regex = struct {
     allocator: Allocator,
+    /// The backtracker's program, always built (F4a).
     compiled: CompileResult,
+    /// T0's program, when the dispatcher runs the pattern on the VM (F4a:
+    /// T0 patterns without captures; `compiler.compileTiers`). Every
+    /// execution goes to it when set, to the backtracker otherwise.
+    t0: ?tier0.Program = null,
     pattern: []const u8,
     /// JS `y` flag: `find`/`findAll` only match starting exactly at the
     /// current position, never scanning ahead to find a match further in.
@@ -82,20 +124,16 @@ pub const Regex = struct {
 
     /// Compile a regex pattern
     pub fn compile(allocator: Allocator, pattern: []const u8) RegexError!Self {
-        const compiled = try compiler.compileSimple(allocator, pattern);
-        return .{
-            .allocator = allocator,
-            .compiled = compiled,
-            .pattern = pattern,
-        };
+        return compileWithOptions(allocator, pattern, .{});
     }
 
     /// Compile with custom options
     pub fn compileWithOptions(allocator: Allocator, pattern: []const u8, options: CompileOptions) RegexError!Self {
-        const compiled = try compiler.compile(allocator, pattern, options);
+        const both = try compiler.compileTiers(allocator, pattern, options);
         return .{
             .allocator = allocator,
-            .compiled = compiled,
+            .compiled = both.bt,
+            .t0 = both.t0,
             .pattern = pattern,
             .sticky = options.sticky,
         };
@@ -104,12 +142,16 @@ pub const Regex = struct {
     /// Free resources
     pub fn deinit(self: Self) void {
         self.compiled.deinit();
+        if (self.t0) |p| p.deinit(self.allocator);
     }
 
     /// Test if pattern matches entire input
     pub fn matchFull(self: Self, input: []const u8) RegexError!bool {
-        const m = Matcher.initCompiled(self.allocator, self.compiled);
-        return try m.matchFull(input);
+        var scratch = Scratch.init(self.allocator);
+        defer scratch.deinit();
+        const m = (try self.execResult(input, 0, true, &scratch)) orelse return false;
+        defer m.deinit();
+        return m.end == input.len;
     }
 
     /// Alias for matchFull (common in other regex libraries)
@@ -120,9 +162,9 @@ pub const Regex = struct {
     /// Find first match in input. If `sticky`, only matches at position 0
     /// (no scanning ahead) — use `findAt` directly to check a later position.
     pub fn find(self: Self, input: []const u8) RegexError!?MatchResult {
-        const m = Matcher.initCompiled(self.allocator, self.compiled);
-        if (self.sticky) return try m.findAt(input, 0);
-        return try m.find(input);
+        var scratch = Scratch.init(self.allocator);
+        defer scratch.deinit();
+        return self.execResult(input, 0, self.sticky, &scratch);
     }
 
     /// Try to match starting at exactly `start_pos`, with no scanning ahead
@@ -130,23 +172,76 @@ pub const Regex = struct {
     /// iteration from a caller-tracked position, similar to how JS code
     /// tracks `lastIndex` when using a sticky regex.
     pub fn findAt(self: Self, input: []const u8, start_pos: usize) RegexError!?MatchResult {
-        const m = Matcher.initCompiled(self.allocator, self.compiled);
-        return try m.findAt(input, start_pos);
+        var scratch = Scratch.init(self.allocator);
+        defer scratch.deinit();
+        return self.execResult(input, start_pos, true, &scratch);
     }
 
     /// The first match starting at `start_pos` or after (a search, whatever
     /// the `sticky` option), advancing one character at a time. A
     /// `start_pos` inside a character is no match.
     pub fn findFrom(self: Self, input: []const u8, start_pos: usize) RegexError!?MatchResult {
-        const m = Matcher.initCompiled(self.allocator, self.compiled);
-        return try m.findFrom(input, start_pos);
+        var scratch = Scratch.init(self.allocator);
+        defer scratch.deinit();
+        return self.execResult(input, start_pos, false, &scratch);
     }
 
     /// Find all matches in input. If `sticky`, stops at the first position
     /// that doesn't match instead of scanning ahead for the next one.
     pub fn findAll(self: Self, input: []const u8) RegexError!std.ArrayListUnmanaged(MatchResult) {
-        const m = Matcher.initCompiled(self.allocator, self.compiled);
-        return try m.findAll(input, self.sticky);
+        var matches: std.ArrayListUnmanaged(MatchResult) = .empty;
+        errdefer {
+            for (matches.items) |match| match.deinit();
+            matches.deinit(self.allocator);
+        }
+        var scratch = Scratch.init(self.allocator);
+        defer scratch.deinit();
+        var pos: usize = 0;
+        while (pos < input.len) {
+            const match = (try self.execResult(input, pos, self.sticky, &scratch)) orelse break;
+            // Never a match that starts at the end of the input.
+            if (match.start >= input.len) {
+                match.deinit();
+                break;
+            }
+            try matches.append(self.allocator, match);
+            // Past this match; after an empty one, over one character.
+            pos = match.end;
+            if (match.end == match.start) pos = self.advanceIndex(.{ .wtf8 = input }, pos);
+        }
+        return matches;
+    }
+
+    /// One execution on WTF-8 `input` into a new `MatchResult` (byte
+    /// offsets), for the facade above. An index inside a character is no
+    /// match.
+    fn execResult(self: Self, input: []const u8, index: usize, sticky: bool, scratch: *Scratch) RegexError!?MatchResult {
+        // Slots on the stack when they fit (most patterns), so a facade
+        // call allocates only its result.
+        var stack_slots: [64]?usize = undefined;
+        const n = self.slotCount();
+        const heap = n > stack_slots.len;
+        const slots = if (heap) try self.allocator.alloc(?usize, n) else stack_slots[0..n];
+        defer if (heap) self.allocator.free(slots);
+        const found = self.exec(.{ .wtf8 = input }, index, sticky, scratch, slots, .{}) catch |err| switch (err) {
+            error.InvalidIndex => return null,
+            error.SlotsTooSmall => unreachable,
+            else => |e| return e,
+        };
+        if (!found) return null;
+        const groups = @as(usize, self.compiled.group_count) + 1;
+        const captures = try self.allocator.alloc(@import("tier2").thread.Capture, groups);
+        // Slot 0 of `captures` is never a group (group 0 is the match).
+        captures[0] = .{};
+        for (captures[1..], 1..) |*c, g| c.* = .{ .start = slots[2 * g], .end = slots[2 * g + 1] };
+        return MatchResult{
+            .matched = true,
+            .start = slots[0].?,
+            .end = slots[1].?,
+            .captures = captures,
+            .allocator = self.allocator,
+            .named_groups = self.compiled.named_groups,
+        };
     }
 
     /// Get the original pattern string
@@ -173,10 +268,22 @@ pub const Regex = struct {
     /// character is `error.InvalidIndex`. With a warm `scratch` it doesn't
     /// allocate.
     pub fn execAt(self: Self, subject: Subject, index: usize, scratch: *Scratch, out: *MatchSlots, limits: ExecLimits) ExecError!bool {
+        return self.exec(subject, index, self.sticky, scratch, out.slots, limits);
+    }
+
+    /// The dispatcher (F4a): T0's VM when the pattern has a `t0` program,
+    /// the backtracker otherwise. The VM is linear and ignores `limits`.
+    fn exec(self: Self, subject: Subject, index: usize, sticky: bool, scratch: *Scratch, slots: []?usize, limits: ExecLimits) ExecError!bool {
+        scratch.acquire();
+        defer scratch.release();
+        if (self.t0) |*p| return switch (subject) {
+            .wtf8 => |s| tier0.exec(p, u8, s, self.compiled.mode, index, sticky, &scratch.vm, slots),
+            .utf16 => |s| tier0.exec(p, u16, s, self.compiled.mode, index, sticky, &scratch.vm, slots),
+        };
         const m = Matcher.initCompiled(self.allocator, self.compiled);
         return switch (subject) {
-            .wtf8 => |s| m.exec(u8, s, index, self.sticky, scratch, out.slots, limits),
-            .utf16 => |s| m.exec(u16, s, index, self.sticky, scratch, out.slots, limits),
+            .wtf8 => |s| m.exec(u8, s, index, sticky, &scratch.bt, slots, limits),
+            .utf16 => |s| m.exec(u16, s, index, sticky, &scratch.bt, slots, limits),
         };
     }
 

@@ -7,6 +7,11 @@
 //! subjects. A crash is a safety panic; a leak is caught by
 //! `std.testing.allocator`. Both fail the test.
 //!
+//! Since F4a, a pattern the dispatcher routes to T0's VM is also run on
+//! the backtracker (`force_tier = .expert`), and the two executors must
+//! give the same `[start, end]` at every index of every subject, sticky
+//! and not, in WTF-8 and UTF-16 (`compareEngines`).
+//!
 //! Coverage: the parser and `analyze` see every pattern. The matcher does
 //! not: patterns in the expert tier (T2: backreferences, lookarounds), or
 //! that `analyze` can't classify, are compiled but **not executed**, because
@@ -30,6 +35,8 @@ pub const subjects = [_][]const u8{ "", "a", "ab1_ \xC3\xA9", "aaaaab", "\u{1F60
 /// Pattern×mode pairs that compiled, by what happened to them next.
 pub const Stats = struct {
     executed: usize = 0,
+    /// Executed patterns that ran on T0's VM, compared with the backtracker.
+    engines_compared: usize = 0,
     skipped_expert: usize = 0,
     skipped_unclassifiable: usize = 0,
 };
@@ -82,6 +89,7 @@ pub fn checkPattern(gpa: std.mem.Allocator, pattern: []const u8) !void {
                 }
                 try sameInBoth(gpa, re, subject, pattern, mode);
             }
+            if (re.t0 != null) try compareEngines(gpa, re, pattern, options);
         } else |err| switch (err) {
             error.OutOfMemory => return err,
             else => {
@@ -120,6 +128,49 @@ fn sameInBoth(gpa: std.mem.Allocator, re: zregex.Regex, subject: []const u8, pat
     if (!same) {
         std.debug.print("\n/{s}/ ({s}) on {x}: WTF-8 and UTF-16 differ\n", .{ pattern, @tagName(mode), subject });
         return error.EncodingsDisagree;
+    }
+}
+
+/// F4a: T0's VM (`re`) and the backtracker give the same result.
+fn compareEngines(gpa: std.mem.Allocator, re: zregex.Regex, pattern: []const u8, options: zregex.CompileOptions) !void {
+    stats.engines_compared += 1;
+    var o = options;
+    o.force_tier = .expert;
+    var bt = try zregex.Regex.compileWithOptions(gpa, pattern, o);
+    defer bt.deinit();
+    var vm = re;
+    var scratch = zregex.Scratch.init(gpa);
+    defer scratch.deinit();
+    for (subjects) |s8| {
+        const s16 = try zregex.subject.utf16FromWtf8(gpa, s8);
+        defer gpa.free(s16);
+        for ([_]zregex.Subject{ .{ .wtf8 = s8 }, .{ .utf16 = s16 } }) |subj| {
+            for ([_]bool{ false, true }) |sticky| {
+                vm.sticky = sticky;
+                bt.sticky = sticky;
+                for (0..subj.len() + 1) |i| {
+                    var b1: [2]?usize = undefined;
+                    var b2: [2]?usize = undefined;
+                    var o1: zregex.MatchSlots = .{ .slots = &b1 };
+                    var o2: zregex.MatchSlots = .{ .slots = &b2 };
+                    const expected = bt.execAt(subj, i, &scratch, &o2, .{}) catch |err| switch (err) {
+                        error.OutOfMemory => return err,
+                        // The backtracker's limits; the VM has none.
+                        error.StepLimitExceeded, error.RecursionLimitExceeded => continue,
+                        error.InvalidIndex => {
+                            try std.testing.expectError(error.InvalidIndex, vm.execAt(subj, i, &scratch, &o1, .{}));
+                            continue;
+                        },
+                        else => return err,
+                    };
+                    const got = try vm.execAt(subj, i, &scratch, &o1, .{});
+                    if (got != expected or (got and (b1[0] != b2[0] or b1[1] != b2[1]))) {
+                        std.debug.print("\n/{s}/ on {x} ({s}) at {d}, sticky {}: the VM and the backtracker differ\n", .{ pattern, s8, @tagName(subj), i, sticky });
+                        return error.EnginesDisagree;
+                    }
+                }
+            }
+        }
     }
 }
 

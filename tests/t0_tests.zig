@@ -105,8 +105,11 @@ test "T0 VM matches the backtracker on eligible patterns" {
         };
         const prog = try tier0.compile(gpa, fe.root);
         defer prog.deinit(gpa);
-        var re = try zregex.Regex.compileWithOptions(gpa, pattern, .{ .case_insensitive = f.i, .multiline = f.m, .dot_all = f.s });
+        // The backtracker, forced: the dispatcher would route this pattern to
+        // the VM.
+        var re = try zregex.Regex.compileWithOptions(gpa, pattern, .{ .case_insensitive = f.i, .multiline = f.m, .dot_all = f.s, .force_tier = .expert });
         defer re.deinit();
+        try testing.expect(re.t0 == null);
         for (subjects) |s| {
             const s16 = try zregex.subject.utf16FromWtf8(gpa, s);
             defer gpa.free(s16);
@@ -114,4 +117,150 @@ test "T0 VM matches the backtracker on eligible patterns" {
             try compareAll(&re, &prog, .{ .utf16 = s16 }, &bt, &vs);
         }
     }
+}
+
+// ---------------------------------------------------------------- F4a(3)
+
+fn routedToVm(pattern: []const u8, options: zregex.CompileOptions) !bool {
+    const re = try zregex.Regex.compileWithOptions(testing.allocator, pattern, options);
+    defer re.deinit();
+    return re.t0 != null;
+}
+
+test "dispatcher: eligible T0 patterns go to the VM, the rest to the backtracker" {
+    for (cases) |c| try testing.expect(try routedToVm(c[0], .{ .case_insensitive = c[1].i, .multiline = c[1].m, .dot_all = c[1].s }));
+    // Captures (F4b), T2, T1, a raw pattern byte.
+    for ([_][]const u8{ "(a)", "(?<n>a)b", "a(?=b)", "(a)\\1", "(?<=a)b", "\xE9", "(?:a?)*" }) |p|
+        try testing.expect(!try routedToVm(p, .{}));
+    try testing.expect(!try routedToVm("a", .{ .unicode = true }));
+    try testing.expect(!try routedToVm("a", .{ .v = true }));
+    try testing.expect(!try routedToVm("\\u00e9", .{ .case_insensitive = true }));
+}
+
+test "dispatcher: an unclassifiable pattern goes to the backtracker, without error" {
+    // Known deviations: D10 (`{n}` above 65536, clamped) and D8 (possessive,
+    // compile's opt-in only). D1 was fixed in F1 and no longer exists.
+    const a = testing.allocator;
+    for ([_]struct { []const u8, zregex.CompileOptions }{
+        .{ "a{70000}", .{} },
+        .{ "x|a{65537}?", .{} },
+        .{ "a*+b", .{ .possessive = true } },
+        .{ "a?+", .{ .possessive = true } },
+    }) |c| {
+        const pattern, const options = c;
+        var re = try zregex.Regex.compileWithOptions(a, pattern, options);
+        defer re.deinit();
+        try testing.expect(re.t0 == null);
+    }
+    // And it still runs, on the backtracker: `a*+` never gives back.
+    var re = try zregex.Regex.compileWithOptions(a, "a*+a", .{ .possessive = true });
+    defer re.deinit();
+    try testing.expect(try re.find("aaa") == null);
+}
+
+fn expectUnavailable(pattern: []const u8, options: zregex.CompileOptions, expected: zregex.TierUnavailable) !void {
+    var diag: zregex.TierUnavailable = undefined;
+    var o = options;
+    o.force_tier = .regular;
+    o.tier_diagnostic = &diag;
+    try testing.expectError(error.TierUnavailable, zregex.Regex.compileWithOptions(testing.allocator, pattern, o));
+    try testing.expectEqualDeep(expected, diag);
+}
+
+test "force_tier .regular: the three reasons it can't be honored" {
+    // Not classifiable.
+    try expectUnavailable("a{70000}", .{}, .{ .not_classifiable = .{ .known_deviation = .d10_quantifier_min_clamped } });
+    try expectUnavailable("a*+", .{ .possessive = true }, .{ .not_classifiable = .{ .known_deviation = .d8_possessive } });
+    // A tier above T0.
+    try expectUnavailable("a", .{ .unicode = true }, .{ .tier_too_high = .unicode });
+    try expectUnavailable("\\p{L}", .{ .unicode = true }, .{ .tier_too_high = .unicode });
+    try expectUnavailable("a(?=b)", .{}, .{ .tier_too_high = .expert });
+    try expectUnavailable("(a)\\1", .{}, .{ .tier_too_high = .expert });
+    // T0, but not what the VM takes in F4a.
+    try expectUnavailable("(a)b", .{}, .{ .not_eligible = .capture });
+    try expectUnavailable("(?:a?)*", .{}, .{ .not_eligible = .nullable_repeat });
+    try expectUnavailable("\xE9", .{}, .{ .not_eligible = .raw_byte });
+    // An eligible pattern compiles onto the VM.
+    const re = try zregex.Regex.compileWithOptions(testing.allocator, "a+b", .{ .force_tier = .regular });
+    defer re.deinit();
+    try testing.expect(re.t0 != null);
+}
+
+test "force_tier .expert and .unicode" {
+    try testing.expect(!try routedToVm("abc", .{ .force_tier = .expert }));
+    try expectUnavailableTier("abc", .unicode, .{ .not_built = .unicode });
+}
+
+fn expectUnavailableTier(pattern: []const u8, tier: zregex.analysis.Tier, expected: zregex.TierUnavailable) !void {
+    var diag: zregex.TierUnavailable = undefined;
+    try testing.expectError(error.TierUnavailable, zregex.Regex.compileWithOptions(testing.allocator, pattern, .{ .force_tier = tier, .tier_diagnostic = &diag }));
+    try testing.expectEqualDeep(expected, diag);
+}
+
+test "the facade gives the same results on the VM and on the backtracker" {
+    const a = testing.allocator;
+    const inputs = [_][]const u8{ "", "abc aab ab", "\u{E9}ab\u{1F600}abab", "xxaaaa" };
+    for ([_][]const u8{ "ab", "a*", "a+?b", "(?:ab|a)", "\\bab", "$", "[^b]" }) |p| {
+        var vm_re = try zregex.Regex.compile(a, p);
+        defer vm_re.deinit();
+        try testing.expect(vm_re.t0 != null);
+        var bt_re = try zregex.Regex.compileWithOptions(a, p, .{ .force_tier = .expert });
+        defer bt_re.deinit();
+        for (inputs) |in| {
+            var ms1 = try vm_re.findAll(in);
+            defer {
+                for (ms1.items) |m| m.deinit();
+                ms1.deinit(a);
+            }
+            var ms2 = try bt_re.findAll(in);
+            defer {
+                for (ms2.items) |m| m.deinit();
+                ms2.deinit(a);
+            }
+            try testing.expectEqual(ms2.items.len, ms1.items.len);
+            for (ms1.items, ms2.items) |x, y| {
+                try testing.expectEqual(y.start, x.start);
+                try testing.expectEqual(y.end, x.end);
+                try testing.expectEqual(@as(usize, 1), x.captures.len);
+            }
+            try testing.expectEqual(try bt_re.matchFull(in), try vm_re.matchFull(in));
+            for (0..in.len + 1) |i| {
+                const f1 = try vm_re.findAt(in, i);
+                defer if (f1) |m| m.deinit();
+                const f2 = try bt_re.findAt(in, i);
+                defer if (f2) |m| m.deinit();
+                try testing.expectEqual(f2 == null, f1 == null);
+                if (f1) |m| try testing.expectEqual(f2.?.end, m.end);
+            }
+            const r1 = try vm_re.replaceAll(a, in, "<$&>");
+            defer a.free(r1);
+            const r2 = try bt_re.replaceAll(a, in, "<$&>");
+            defer a.free(r2);
+            try testing.expectEqualStrings(r2, r1);
+        }
+    }
+}
+
+test "execAt on the VM: a warm composite scratch allocates nothing" {
+    const a = testing.allocator;
+    var re = try zregex.Regex.compile(a, "a+b|c");
+    defer re.deinit();
+    try testing.expect(re.t0 != null);
+    var failing: std.testing.FailingAllocator = .init(a, .{});
+    var scratch = zregex.Scratch.init(failing.allocator());
+    defer scratch.deinit();
+    // `init` allocates nothing: each executor's buffers come on first use.
+    try testing.expectEqual(@as(usize, 0), failing.allocations);
+    var buf: [2]?usize = undefined;
+    var out: zregex.MatchSlots = .{ .slots = &buf };
+    _ = try re.execAt(.{ .wtf8 = "xaab c" }, 0, &scratch, &out, .{});
+    const warm = failing.allocations;
+    try testing.expect(warm > 0);
+    const s16 = [_]u16{ 'x', 'a', 'b', 'c' };
+    for (0..4) |i| {
+        _ = try re.execAt(.{ .wtf8 = "xaab c" }, i, &scratch, &out, .{});
+        _ = try re.execAt(.{ .utf16 = &s16 }, i, &scratch, &out, .{});
+    }
+    try testing.expectEqual(warm, failing.allocations);
+    try testing.expect(!scratch.in_use);
 }

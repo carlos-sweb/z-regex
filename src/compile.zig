@@ -13,6 +13,9 @@ const format_mod = @import("tier2").format;
 const charset_mod = @import("ir").charset;
 const lower_mod = @import("frontend").lower;
 const program_mod = @import("tier2").program;
+const tier0 = @import("tier0");
+const classify = @import("analysis/classify.zig");
+const Tier = classify.Tier;
 
 const CodeGenerator = generator_mod.CodeGenerator;
 const Optimizer = optimizer_mod.Optimizer;
@@ -79,6 +82,37 @@ pub const CompileOptions = struct {
     /// default, where `a*+` is a SyntaxError as in JS. Before F1b this was
     /// always on.
     possessive: bool = false,
+
+    /// Tests and diagnostics only (plan §4.2): which executor runs the
+    /// pattern. Null: the dispatcher decides (T0's VM when the pattern is
+    /// eligible, the backtracker otherwise). `.regular`: T0's VM, or
+    /// `error.TierUnavailable` when the pattern can't run on it. `.expert`:
+    /// the backtracker. `.unicode`: `error.TierUnavailable` until F5.
+    force_tier: ?Tier = null,
+
+    /// Where `compile` writes why it failed with `error.TierUnavailable`.
+    tier_diagnostic: ?*TierUnavailable = null,
+};
+
+/// Why `force_tier` can't be honored.
+pub const TierUnavailable = union(enum) {
+    /// `analyze()` gives the pattern no tier (a known deviation; also a
+    /// parse error, which fails compilation before this).
+    not_classifiable: classify.Unclassifiable,
+    /// The pattern needs this tier (T1 or T2), above T0.
+    tier_too_high: Tier,
+    /// T0, but not what the VM takes in F4a (captures, iterated nullable
+    /// bodies, raw pattern bytes).
+    not_eligible: tier0.Ineligible,
+    /// No executor for this tier exists yet (T1, F5).
+    not_built: Tier,
+};
+
+/// Both programs of a pattern (F4a): the backtracker's, always, and T0's
+/// when the dispatcher routes the pattern to the VM.
+pub const Compiled = struct {
+    bt: CompileResult,
+    t0: ?tier0.Program,
 };
 
 /// Compile a regex pattern to bytecode
@@ -86,7 +120,30 @@ pub fn compile(allocator: Allocator, pattern: []const u8, options: CompileOption
     // Phases 1-3: lex, parse and lower to the HIR (F2c), through the front
     // end `analyze()` shares (F2d). The HIR holds no pointer into the AST;
     // both, and the parser, die when this function returns.
-    const fe = try lower_mod.Frontend.init(allocator, pattern, .{
+    const fe = try frontend(allocator, pattern, options);
+    defer fe.deinit();
+    return generate(allocator, fe, options);
+}
+
+/// Both programs, from one front end (F4a): the dispatcher classifies the
+/// HIR with `analyzeFrontend` (the same answer `analyze()` gives) and,
+/// when the pattern is T0 and the VM takes it (`tier0.check`), compiles
+/// T0's `Program` too. `force_tier` overrides the choice (see there).
+pub fn compileTiers(allocator: Allocator, pattern: []const u8, options: CompileOptions) !Compiled {
+    const fe = try frontend(allocator, pattern, options);
+    defer fe.deinit();
+    const use_vm = try route(fe, options);
+    const bt = try generate(allocator, fe, options);
+    errdefer bt.deinit();
+    const t0: ?tier0.Program = if (use_vm) tier0.compile(allocator, fe.root) catch |err| switch (err) {
+        error.Ineligible => unreachable, // `route` checked
+        else => |e| return e,
+    } else null;
+    return .{ .bt = bt, .t0 = t0 };
+}
+
+fn frontend(allocator: Allocator, pattern: []const u8, options: CompileOptions) !*lower_mod.Frontend {
+    return lower_mod.Frontend.init(allocator, pattern, .{
         .unicode = options.unicode,
         .v = options.v,
         .possessive = options.possessive,
@@ -95,7 +152,38 @@ pub fn compile(allocator: Allocator, pattern: []const u8, options: CompileOption
         .multiline = options.multiline,
         .dot_all = options.dot_all,
     });
-    defer fe.deinit();
+}
+
+/// Whether the pattern runs on T0's VM, or `error.TierUnavailable` when
+/// `force_tier` asks for what it can't have.
+fn route(fe: *const lower_mod.Frontend, options: CompileOptions) error{TierUnavailable}!bool {
+    const force = options.force_tier;
+    if (force == .expert) return false;
+    if (force == .unicode) return unavailable(options, .{ .not_built = .unicode });
+    const analysis = classify.analyzeFrontend(fe, .{
+        .i = options.case_insensitive,
+        .m = options.multiline,
+        .s = options.dot_all,
+        .u = options.unicode,
+        .v = options.v,
+        .y = options.sticky,
+    });
+    const why: ?TierUnavailable = if (analysis.min_tier) |tier|
+        (if (tier != .regular) .{ .tier_too_high = tier } else if (tier0.check(fe.root)) |r| .{ .not_eligible = r } else null)
+    else
+        .{ .not_classifiable = analysis.unclassifiable.? };
+    const reason = why orelse return true;
+    if (force == .regular) return unavailable(options, reason);
+    return false;
+}
+
+fn unavailable(options: CompileOptions, reason: TierUnavailable) error{TierUnavailable} {
+    if (options.tier_diagnostic) |d| d.* = reason;
+    return error.TierUnavailable;
+}
+
+/// Phases 4-5 over the HIR: the backtracker's bytecode.
+fn generate(allocator: Allocator, fe: *const lower_mod.Frontend, options: CompileOptions) !CompileResult {
     const parser = &fe.parser;
 
     // Phase 4: Code generation, from the HIR only

@@ -118,6 +118,11 @@ pub const FeatureSet = std.EnumSet(Feature);
 pub const Deviation = enum {
     /// `{n}` with n > 65536 silently clamped.
     d10_quantifier_min_clamped,
+    /// A possessive quantifier (`a*+`), not ECMA-262. Only reachable
+    /// through `compile`'s opt-in (`CompileOptions.possessive`, D8), which
+    /// the dispatcher classifies with `analyzeFrontend` (F4a); `analyze`
+    /// never turns it on, so there `a*+` is a parse error.
+    d8_possessive,
 };
 
 pub const Unclassifiable = union(enum) {
@@ -203,7 +208,13 @@ pub fn analyze(gpa: Allocator, pattern: []const u8, flags: Flags) Allocator.Erro
         .dot_all = flags.s,
     }) catch |err| return parseFailure(err);
     defer fe.deinit();
+    return analyzeFrontend(fe, flags);
+}
 
+/// `analyze` over a front end already built, so the dispatcher classifies
+/// the HIR `compile` generates from without parsing twice (F4a). `flags`
+/// must be the ones `fe` was built with.
+pub fn analyzeFrontend(fe: *const lower_mod.Frontend, flags: Flags) Analysis {
     var walker: Walker = .{ .flags = flags };
     walker.visit(fe.root, 1);
 
@@ -232,6 +243,7 @@ pub fn analyze(gpa: Allocator, pattern: []const u8, flags: Flags) Allocator.Erro
             .min_clamped => .d10_quantifier_min_clamped,
         } } };
     }
+    if (walker.possessive) return .{ .features = features, .min_tier = null, .unclassifiable = .{ .known_deviation = .d8_possessive } };
 
     var tier: Tier = .regular;
     var it = features.iterator();
@@ -257,6 +269,8 @@ const Walker = struct {
     /// up to U+10FFFF, so it counts. Over-promoting only costs speed, never
     /// semantics.
     non_ascii: bool = false,
+    /// A possessive quantifier: only from `compile`'s opt-in (D8).
+    possessive: bool = false,
 
     /// `copies`: how many times this node gets unrolled by enclosing
     /// counted repeats (saturating).
@@ -281,13 +295,14 @@ const Walker = struct {
                     .star, .plus, .question => switch (r.policy) {
                         .greedy => self.features.insert(.greedy_quantifier),
                         .lazy => self.features.insert(.lazy_quantifier),
-                        // Never built here: `analyze` doesn't turn on the
-                        // possessive opt-in (D8), so `a*+` fails to parse.
-                        .possessive => {},
+                        // Only from `compile`'s opt-in (D8), through
+                        // `analyzeFrontend`: `analyze` never builds one.
+                        .possessive => self.possessive = true,
                     },
                     .counted => {
                         self.features.insert(.counted_repeat);
                         if (r.policy == .lazy) self.features.insert(.lazy_quantifier);
+                        if (r.policy == .possessive) self.possessive = true;
                         // An open-ended `{n,}` unrolls `n` copies plus one loop body.
                         const count: u64 = if (r.max) |max| max else @as(u64, r.min) + 1;
                         child_copies = std.math.mul(u64, copies, @max(count, 1)) catch std.math.maxInt(u64);
