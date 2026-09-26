@@ -82,6 +82,8 @@ pub const ParseError = error{
     // `v`-mode (Unicode Sets) class set operations (`[A--B]` / `[A&&B]`)
     InvalidClassSetOperand,
     ChainedClassSetOperatorNotSupported,
+    // Parser nesting limit (see MAX_NESTING_DEPTH)
+    NestingTooDeep,
 };
 
 /// A named capturing group's name and numeric group index, in the order the
@@ -97,6 +99,19 @@ pub const ParseError = error{
 /// chain, which is one level regardless of branch count) is far beyond any
 /// realistic pattern; exceeding it is `error.AlternationTooDeep`.
 pub const MAX_ALTERNATION_DEPTH = 32;
+
+/// Maximum nesting of constructs the parser recurses into: capturing and
+/// non-capturing groups, lookarounds and character classes (each counts one
+/// level; quantifiers don't nest on their own -- `(?:(?:a)*)*` nests through
+/// its groups). Exceeding it is `error.NestingTooDeep`, independent of the
+/// build mode. It bounds the native stack that `compile()` (parse, codegen and
+/// the recursive AST `deinit`) needs: measured in F0d at ~1.2 KB per level in
+/// ReleaseSafe, so 256 levels take ~318 KB, within half of a 1 MiB stack. In
+/// Debug a level costs ~15.5 KB, so 256 levels need ~4 MiB of stack and a
+/// smaller stack crashes before the limit is reached (docs/REGEX_TIERS_PLAN.md
+/// F0d/F2). Until F1 raises MAX_ALTERNATION_DEPTH, groups are effectively
+/// capped at 31 by `error.AlternationTooDeep` first.
+pub const MAX_NESTING_DEPTH: u32 = 256;
 
 pub const GroupNameEntry = struct {
     name: []const u8,
@@ -147,6 +162,11 @@ pub const Parser = struct {
     lexer: *Lexer,
     current_token: Token,
     group_counter: u8,
+    /// Current nesting of groups/lookarounds/classes (see MAX_NESTING_DEPTH).
+    nesting_depth: u32 = 0,
+    /// Nesting limit; a field so tests can lower it below the
+    /// MAX_ALTERNATION_DEPTH cap that applies until F1.
+    max_nesting_depth: u32 = MAX_NESTING_DEPTH,
     /// Names are slices into the original pattern (borrowed, valid only for
     /// the lifetime of the pattern passed to the lexer); callers that need
     /// them to outlive the parser must copy them (see `codegen/compiler.zig`).
@@ -246,6 +266,10 @@ pub const Parser = struct {
     /// while a branch is being parsed snapshots the live stack at that
     /// moment into its `GroupNameEntry.branch_path`.
     fn parseAlternation(self: *Self) ParseError!*Node {
+        // The root disjunction is level 0; each group/lookaround body adds one.
+        try self.enterNesting();
+        defer self.nesting_depth -= 1;
+
         const alt_id = self.next_alt_id;
         self.next_alt_id += 1;
 
@@ -274,6 +298,14 @@ pub const Parser = struct {
         }
 
         return result;
+    }
+
+    /// Enter one more nesting level (the caller undoes it with
+    /// `self.nesting_depth -= 1`). The root disjunction enters level 1 and
+    /// isn't counted, so `max_nesting_depth` counts nested constructs.
+    fn enterNesting(self: *Self) error{NestingTooDeep}!void {
+        if (self.nesting_depth > self.max_nesting_depth) return error.NestingTooDeep;
+        self.nesting_depth += 1;
     }
 
     /// Push one `BranchStep` onto `self.branch_stack`. See `parseAlternation`.
@@ -676,6 +708,9 @@ pub const Parser = struct {
     /// literal char) and must be re-fetched: rewind the lexer to that
     /// token's start position, switch modes, then advance again.
     fn parseCharClass(self: *Self) ParseError!*Node {
+        try self.enterNesting();
+        defer self.nesting_depth -= 1;
+
         // The token immediately after `[` is fetched by `consume(.lbracket)`
         // while still in normal (non-class) mode, purely to check whether
         // it's `^` -- if not, it's discarded and re-fetched in class mode
@@ -1335,4 +1370,77 @@ test "Parser: possessive question quantifier" {
 
     try std.testing.expectEqual(NodeType.possessive_question, root.type);
     try std.testing.expectEqual(@as(usize, 1), root.children.items.len);
+}
+
+// =============================================================================
+// Nesting limit (MAX_NESTING_DEPTH, docs/REGEX_TIERS_PLAN.md F0d)
+// =============================================================================
+
+const builtin = @import("builtin");
+
+/// `depth` nested `open ... )` around `a`, parsed with `limit` on a thread
+/// with `stack_size` bytes of stack. Returns the parse error, if any.
+fn parseNestedOnStack(open: []const u8, depth: usize, limit: u32, stack_size: usize) !?anyerror {
+    const Ctx = struct {
+        pattern: []const u8,
+        limit: u32,
+        result: ?anyerror = null,
+        setup_error: ?anyerror = null,
+
+        fn run(ctx: *@This()) void {
+            var lexer = Lexer.init(ctx.pattern);
+            var parser = Parser.init(std.testing.allocator, &lexer) catch |e| {
+                ctx.result = e;
+                return;
+            };
+            defer parser.deinit();
+            parser.max_nesting_depth = ctx.limit;
+            const root = parser.parse() catch |e| {
+                ctx.result = e;
+                return;
+            };
+            root.deinit();
+        }
+    };
+    var pattern: std.ArrayList(u8) = .empty;
+    defer pattern.deinit(std.testing.allocator);
+    for (0..depth) |_| try pattern.appendSlice(std.testing.allocator, open);
+    try pattern.append(std.testing.allocator, 'a');
+    for (0..depth) |_| try pattern.append(std.testing.allocator, ')');
+
+    var ctx = Ctx{ .pattern = pattern.items, .limit = limit };
+    const t = try std.Thread.spawn(.{ .stack_size = stack_size }, Ctx.run, .{&ctx});
+    t.join();
+    return ctx.result;
+}
+
+test "Parser: nesting limit is enforced for groups and lookarounds (any build mode)" {
+    // 30 levels (~487 KB of stack in Debug, ~41 KB in ReleaseSafe) fit on a
+    // 1 MiB thread in every build mode; the limit is lowered to 30 because
+    // groups are capped at 31 by AlternationTooDeep until F1.
+    const opens = [_][]const u8{ "(", "(?:", "(?=", "(?<=" };
+    for (opens) |open| {
+        try std.testing.expectEqual(@as(?anyerror, null), try parseNestedOnStack(open, 30, 30, 1 << 20));
+        try std.testing.expectEqual(@as(?anyerror, error.NestingTooDeep), try parseNestedOnStack(open, 31, 30, 1 << 20));
+    }
+}
+
+test "Parser: a character class counts as a nesting level" {
+    var lexer = Lexer.init("((([a])))");
+    var parser = try Parser.init(std.testing.allocator, &lexer);
+    defer parser.deinit();
+    parser.max_nesting_depth = 3;
+    try std.testing.expectError(error.NestingTooDeep, parser.parse());
+}
+
+test "Parser: MAX_NESTING_DEPTH levels fit in a 1 MiB stack (release builds)" {
+    // Unreachable until F1: groups are capped at 31 by AlternationTooDeep
+    // before this limit; F1 raises MAX_ALTERNATION_DEPTH and enables it.
+    if (true) return error.SkipZigTest;
+    // Debug needs ~15.5 KB per level (~4 MiB for 256 levels), so there the
+    // 1 MiB stack crashes before the limit; F2 makes the parser iterative or
+    // brings a level under ~2 KB, and then this runs in Debug too.
+    if (builtin.mode == .Debug) return error.SkipZigTest;
+    try std.testing.expectEqual(@as(?anyerror, null), try parseNestedOnStack("(", MAX_NESTING_DEPTH, MAX_NESTING_DEPTH, 1 << 20));
+    try std.testing.expectEqual(@as(?anyerror, error.NestingTooDeep), try parseNestedOnStack("(", MAX_NESTING_DEPTH + 1, MAX_NESTING_DEPTH, 1 << 20));
 }

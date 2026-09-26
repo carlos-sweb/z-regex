@@ -860,6 +860,12 @@ strictness is itself only the unrecognized-escape slice — see above).
   or more than 4 `\p{...}`/`\P{...}` tests (`error.TooManyClassProperties`)
 - Alternations nested more than 32 levels deep (`error.AlternationTooDeep`, needed for
   duplicate-named-group mutual-exclusion tracking) — far beyond any realistic pattern
+- Nesting of groups, lookarounds and classes deeper than 256 levels is
+  `error.NestingTooDeep` in every build mode (today groups hit the 31-level
+  `AlternationTooDeep` cap first, until F1). The stack that nesting needs does
+  depend on the build: ~1.2 KB per level in ReleaseSafe (256 levels ≈ 318 KB),
+  but ~15.5 KB per level in Debug, where deep nesting on a small stack crashes
+  before the limit is reached (see `docs/REGEX_TIERS_PLAN.md`, F0d/F2)
 
 ### ❌ Not Suitable For:
 - `case_insensitive` matching of non-ASCII character *ranges* (`[À-Ö]`) or
