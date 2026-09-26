@@ -143,6 +143,17 @@ pub fn build(b: *std.Build) void {
     const test262_step = b.step("test262", "Run test262 against the committed baseline (needs Node + scripts/test262/fetch.sh)");
     test262_step.dependOn(&run_test262.step);
 
+    // Differential test against V8 (scripts/test262/differential.mjs,
+    // docs/REGEX_TIERS_PLAN.md F1c): generated patterns with captures and
+    // backreferences, compared with Node's own RegExp. A manual tool for
+    // suspected capture regressions, not a gate: known deviations show up
+    // too, so compare against a reference run.
+    const run_differential = b.addSystemCommand(&.{ "node", "scripts/test262/differential.mjs", "--lib" });
+    run_differential.addArtifactArg(test262_lib);
+    run_differential.has_side_effects = true;
+    const differential_step = b.step("differential-v8", "Compare zregex with V8 on generated patterns (needs Node + koffi)");
+    differential_step.dependOn(&run_differential.step);
+
     // Performance baseline (bench/bench.zig, docs/REGEX_TIERS_PLAN.md F0d).
     // Always ReleaseFast, whatever -Doptimize says, so numbers are comparable.
     const bench_zregex = b.createModule(.{
