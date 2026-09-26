@@ -112,6 +112,7 @@ test {
     // IR (F2b: CharSet)
     _ = @import("ir/charset.zig");
     _ = @import("ir/hir.zig");
+    _ = @import("lower/lower.zig");
 
     // Utils module tests (implemented)
     _ = @import("utils/utils_tests.zig");
