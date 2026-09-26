@@ -824,6 +824,29 @@ starts inside a character. That also fixes captures that were silently wrong:
 | F3c | none | 0 | — |
 | F3d | Without `u`/`v` an astral pattern character is two `CHAR32`, its UTF-16 halves | 4 | `4d6aa33` |
 
+### F4a: linear VM without captures (in progress)
+
+F4a adds T0's Pike VM for the patterns it can run exactly; everything else stays on the
+backtracker with unchanged behavior. A pattern is eligible (`tier0.check`) when
+`analyze()` gives `min_tier == .regular` and its HIR has no capture, backreference,
+lookaround or raw pattern byte, and no iterating repeat over a nullable body (`{0,1}` and
+`{1,1}` are allowed: they don't iterate, so the spec's empty-iteration rule never applies).
+
+**Coverage over the 40,636-pattern corpus of F2c** (measured in F4a(1)). The metric is
+T0 coverage; the share of the corpus reflects this corpus (test262-derived and fuzz, 65%
+T1+T2), not real-world regexes, which F0c measures.
+
+| Group | Patterns | Recovered by |
+|---|---|---|
+| T0-eligible (on the VM in F4a) | **7,453 = 79.5% of T0 (9,376), 18.3% of the corpus** | F4a |
+| T0 with captures | 1,797 (19.2% of T0) | F4b: T0 coverage → 98.7% |
+| T0 with an iterating repeat over a nullable body | 122 (1.3% of T0) | F4b (empty-iteration rule) |
+| T0 with a raw pattern byte (WTF-8 only) | 4 | stays on the backtracker |
+| T1 (`u`/`v`, `i` over non-ASCII, `\p`) | 14,799 | F5 |
+| Possessive (compile opt-in, D8) | 3,465 | F5 |
+| T2 (lookaround, backreferences) | 11,762 | F6a |
+| Not classified (parse errors, D10) | 1,234 | — |
+
 ### test262 baseline (F0b)
 
 The real test262 measurement that replaces the sample above as the semantic
