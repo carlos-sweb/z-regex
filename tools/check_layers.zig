@@ -4,6 +4,7 @@
 //! this also catches a forbidden import in dead code or private declarations.
 //!
 //!   check_layers <src-dir> <name>=<root-file>=<dep,dep,...> ...
+//!                          [+<name>=<file>=<leaf,leaf,...>]
 //!
 //! A file belongs to the layer whose root directory is the deepest one
 //! containing it (a root may also name a single file, like `src/c_api.zig`,
@@ -11,6 +12,11 @@
 //! - `std`, `builtin` and `root` are always allowed;
 //! - another module name must be one of the file's layer's deps;
 //! - a relative `.zig` path must resolve to a file of the same layer.
+//!
+//! A `+` argument names a test aggregator (F4a step 0, src/leaves_tests.zig):
+//! a single file that may import, by relative path, exactly the root files
+//! of the listed layers, each of which must have no deps (a leaf), and
+//! nothing else but `std`. The aggregator has to import every one of them.
 
 const std = @import("std");
 
@@ -21,6 +27,9 @@ const Layer = struct {
     /// Single-file layers (c_api) own only this file.
     file: ?[]const u8,
     deps: []const []const u8,
+    root: []const u8,
+    /// A test aggregator: `deps` are the leaf layers it includes.
+    aggregator: bool = false,
 };
 
 pub fn main(init: std.process.Init) !void {
@@ -31,7 +40,9 @@ pub fn main(init: std.process.Init) !void {
     const src_dir = args.next() orelse return error.MissingSrcDir;
 
     var layers: std.ArrayListUnmanaged(Layer) = .empty;
-    while (args.next()) |arg| {
+    while (args.next()) |raw_arg| {
+        const aggregator = raw_arg.len > 0 and raw_arg[0] == '+';
+        const arg = if (aggregator) raw_arg[1..] else raw_arg;
         var it = std.mem.splitScalar(u8, arg, '=');
         const name = it.next() orelse return error.BadLayerArg;
         const root = it.next() orelse return error.BadLayerArg;
@@ -40,12 +51,14 @@ pub fn main(init: std.process.Init) !void {
         var dit = std.mem.splitScalar(u8, deps_text, ',');
         while (dit.next()) |d| if (d.len > 0) try deps.append(gpa, d);
         const dir = std.fs.path.dirname(root) orelse "";
-        const is_single_file = !std.mem.eql(u8, std.fs.path.basename(root), "root.zig") and !std.mem.eql(u8, std.fs.path.basename(root), "main.zig");
+        const is_single_file = aggregator or (!std.mem.eql(u8, std.fs.path.basename(root), "root.zig") and !std.mem.eql(u8, std.fs.path.basename(root), "main.zig"));
         try layers.append(gpa, .{
             .name = name,
             .dir = if (is_single_file) "" else dir,
             .file = if (is_single_file) root else null,
             .deps = deps.items,
+            .root = root,
+            .aggregator = aggregator,
         });
     }
 
@@ -56,6 +69,7 @@ pub fn main(init: std.process.Init) !void {
 
     var violations: usize = 0;
     var files: usize = 0;
+    aggregated = .empty;
     var out: std.Io.Writer.Allocating = .init(gpa);
     const w = &out.writer;
     while (try walker.next(io)) |entry| {
@@ -86,6 +100,18 @@ pub fn main(init: std.process.Init) !void {
             }
         }
     }
+    // An aggregator must include every layer it lists.
+    for (layers.items) |*l| if (l.aggregator) for (l.deps) |d| {
+        const leaf = findLayer(layers.items, d) orelse continue;
+        var found = false;
+        for (aggregated.items) |seen| if (seen == leaf) {
+            found = true;
+        };
+        if (!found) {
+            try w.print("{s}: test aggregator doesn't include leaf layer '{s}' ({s})\n", .{ l.root, d, leaf.root });
+            violations += 1;
+        }
+    };
     try w.print("check-layers: {d} files, {d} violation(s)\n", .{ files, violations });
     try std.Io.File.stderr().writeStreamingAll(io, out.written());
     if (violations > 0) std.process.exit(1);
@@ -104,9 +130,30 @@ fn layerOf(layers: []const Layer, path: []const u8) ?*const Layer {
     return best;
 }
 
+/// The leaf layers an aggregator was seen to include.
+var aggregated: std.ArrayListUnmanaged(*const Layer) = .empty;
+
+fn findLayer(layers: []const Layer, name: []const u8) ?*const Layer {
+    for (layers) |*l| if (!l.aggregator and std.mem.eql(u8, l.name, name)) return l;
+    return null;
+}
+
 /// Why `target`, imported from `path` in layer `owner`, is not allowed, or
 /// null if it is.
 fn check(gpa: std.mem.Allocator, layers: []const Layer, owner: *const Layer, path: []const u8, target: []const u8) !?[]const u8 {
+    if (owner.aggregator) {
+        if (std.mem.eql(u8, target, "std")) return null;
+        if (!std.mem.endsWith(u8, target, ".zig")) return "a test aggregator imports only std and leaf roots";
+        const resolved = try std.fs.path.resolve(gpa, &.{ std.fs.path.dirname(path) orelse ".", target });
+        for (owner.deps) |d| {
+            const leaf = findLayer(layers, d) orelse return try std.fmt.allocPrint(gpa, "unknown layer '{s}'", .{d});
+            if (!std.mem.eql(u8, leaf.root, resolved)) continue;
+            if (leaf.deps.len != 0) return try std.fmt.allocPrint(gpa, "layer '{s}' is not a leaf", .{d});
+            try aggregated.append(gpa, leaf);
+            return null;
+        }
+        return "a test aggregator imports only the roots of the leaf layers it lists";
+    }
     if (std.mem.endsWith(u8, target, ".zig")) {
         const resolved = try std.fs.path.resolve(gpa, &.{ std.fs.path.dirname(path) orelse ".", target });
         const target_owner = layerOf(layers, resolved) orelse return "relative import outside every layer";

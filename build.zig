@@ -11,6 +11,9 @@ pub const Layer = struct {
     deps: []const []const u8,
 };
 
+/// The test aggregator of the leaf layers (see `test-leaves` below).
+const leaves_tests_root = "src/leaves_tests.zig";
+
 pub const layers = [_]Layer{
     .{ .name = "ir", .root = "src/ir/root.zig", .deps = &.{} },
     .{ .name = "unicode", .root = "src/unicode/root.zig", .deps = &.{} },
@@ -170,14 +173,26 @@ pub fn build(b: *std.Build) void {
 
     // Unit tests: one test binary per layer module, compiled with only the
     // modules that layer may import, so the tests obey the layering too.
+    // The leaf layers (no deps) share one binary, `test-leaves`
+    // (src/leaves_tests.zig): each binary costs ~25 s to compile in
+    // ReleaseSafe whatever its size (F4a step 0).
     const test_step = b.step("test", "Run all tests");
     const unit_test_step = b.step("test-unit", "Run unit tests only");
     for (layers) |layer| {
+        if (layer.deps.len == 0) continue;
         const layer_tests = b.addTest(.{ .name = b.fmt("test-{s}", .{layer.name}), .root_module = mods.get(layer.name) });
         const run_layer_tests = b.addRunArtifact(layer_tests);
         test_step.dependOn(&run_layer_tests.step);
         unit_test_step.dependOn(&run_layer_tests.step);
     }
+    const leaves_tests = b.addTest(.{ .name = "test-leaves", .root_module = b.createModule(.{
+        .root_source_file = b.path(leaves_tests_root),
+        .target = target,
+        .optimize = optimize,
+    }) });
+    const run_leaves_tests = b.addRunArtifact(leaves_tests);
+    test_step.dependOn(&run_leaves_tests.step);
+    unit_test_step.dependOn(&run_leaves_tests.step);
 
     // Tests for the exported C ABI (src/c_api.zig), which has its own root.
     const c_api_tests = b.addTest(.{
@@ -197,10 +212,14 @@ pub fn build(b: *std.Build) void {
     const run_lint = b.addRunArtifact(lint_exe);
     run_lint.setCwd(b.path("."));
     run_lint.addArg("src");
+    var leaf_names: std.ArrayListUnmanaged([]const u8) = .empty;
     for (layers) |layer| {
         const deps = std.mem.join(b.allocator, ",", layer.deps) catch @panic("OOM");
         run_lint.addArg(b.fmt("{s}={s}={s}", .{ layer.name, layer.root, deps }));
+        if (layer.deps.len == 0) leaf_names.append(b.allocator, layer.name) catch @panic("OOM");
     }
+    const leaves = std.mem.join(b.allocator, ",", leaf_names.items) catch @panic("OOM");
+    run_lint.addArg(b.fmt("+test-leaves={s}={s}", .{ leaves_tests_root, leaves }));
     run_lint.addArg("c_api=src/c_api.zig=zregex");
     run_lint.has_side_effects = true;
     check_layers_step.dependOn(&run_lint.step);
