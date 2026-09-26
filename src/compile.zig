@@ -136,6 +136,7 @@ pub fn compile(allocator: Allocator, pattern: []const u8, options: CompileOption
         .named_groups = try named_groups.toOwnedSlice(allocator),
         .group_count = parser.group_counter,
         .charsets = charsets,
+        .mode = if (options.unicode or options.v) .code_point else .code_unit,
         .allocator = allocator,
     };
 }

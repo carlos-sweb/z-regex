@@ -80,9 +80,52 @@ pub const CaptureGroup = struct {
 /// head's PC and the input position at which it was (re)entered. Used to
 /// detect zero-progress iterations of a nullable quantifier (see
 /// `matchBackEdge`).
-const LoopState = struct {
+pub const LoopState = struct {
     pc: usize,
     pos: usize,
+};
+
+/// Everything a match allocates, kept between executions so a warm
+/// `Scratch` runs without allocating (F3c; docs/REGEX_TIERS_PLAN.md §4.2).
+/// Not thread-safe and not reentrant: one per thread, and a second one for
+/// a match run from inside another's callback. In safe builds, using one
+/// twice at once panics.
+pub const Scratch = struct {
+    gpa: Allocator,
+    /// Capture slots for patterns with more groups than the matcher keeps
+    /// inline.
+    captures: []CaptureGroup = &.{},
+    snapshots: std.ArrayListUnmanaged(CaptureGroup) = .empty,
+    loop_guard: std.ArrayListUnmanaged(LoopState) = .empty,
+    /// Positions of the greedy star fast path (a stack: nested stars push
+    /// above the outer one's).
+    positions: std.ArrayListUnmanaged(usize) = .empty,
+    in_use: bool = false,
+
+    pub fn init(gpa: Allocator) Scratch {
+        return .{ .gpa = gpa };
+    }
+
+    pub fn deinit(self: *Scratch) void {
+        self.gpa.free(self.captures);
+        self.snapshots.deinit(self.gpa);
+        self.loop_guard.deinit(self.gpa);
+        self.positions.deinit(self.gpa);
+        self.* = undefined;
+    }
+
+    /// Marks the scratch in use for one execution; panics in safe builds if
+    /// it already is.
+    pub fn acquire(self: *Scratch) void {
+        if (std.debug.runtime_safety) {
+            if (self.in_use) @panic("zregex.Scratch used by two executions at once");
+            self.in_use = true;
+        }
+    }
+
+    pub fn release(self: *Scratch) void {
+        self.in_use = false;
+    }
 };
 
 /// The recursive matcher over a WTF-8 subject (bytes).
@@ -120,6 +163,12 @@ pub fn RecursiveMatcherFor(comptime Unit: type) type {
         /// entries are pushed before recursing into a back-edge and popped on
         /// the way out, so only loops on the *active* recursion chain are seen.
         loop_guard: std.ArrayListUnmanaged(LoopState),
+        /// Positions of the greedy star fast path (see `Scratch.positions`).
+        positions: std.ArrayListUnmanaged(usize) = .empty,
+        /// Whether the buffers above belong to a `Scratch` (`initScratch`):
+        /// then `releaseScratch` hands them back instead of `deinit` freeing
+        /// them.
+        borrowed: bool = false,
 
         const Self = @This();
 
@@ -153,9 +202,51 @@ pub fn RecursiveMatcherFor(comptime Unit: type) type {
         }
 
         pub fn deinit(self: *Self) void {
+            std.debug.assert(!self.borrowed);
             self.loop_guard.deinit(self.allocator);
             self.snapshots.deinit(self.allocator);
+            self.positions.deinit(self.allocator);
             self.allocator.free(self.heap_captures);
+        }
+
+        /// A matcher that runs on `scratch`'s buffers: nothing is allocated
+        /// unless a buffer has to grow. Hand them back with `releaseScratch`.
+        pub fn initScratch(bytecode: []const u8, input: []const Unit, options: ExecOptions, capture_slots: usize, scratch: *Scratch) Allocator.Error!Self {
+            var self = Self.initWithSlots(scratch.gpa, bytecode, input, options, capture_slots);
+            if (capture_slots > INLINE_CAPTURES) {
+                if (scratch.captures.len < capture_slots) {
+                    scratch.gpa.free(scratch.captures);
+                    scratch.captures = &.{};
+                    scratch.captures = try scratch.gpa.alloc(CaptureGroup, capture_slots);
+                }
+                self.heap_captures = scratch.captures[0..capture_slots];
+                @memset(self.heap_captures, .{});
+            }
+            self.snapshots = scratch.snapshots;
+            self.loop_guard = scratch.loop_guard;
+            self.positions = scratch.positions;
+            self.snapshots.clearRetainingCapacity();
+            self.loop_guard.clearRetainingCapacity();
+            self.positions.clearRetainingCapacity();
+            scratch.snapshots = .empty;
+            scratch.loop_guard = .empty;
+            scratch.positions = .empty;
+            self.borrowed = true;
+            return self;
+        }
+
+        /// Give the buffers of an `initScratch` matcher back to `scratch`,
+        /// keeping their capacity.
+        pub fn releaseScratch(self: *Self, scratch: *Scratch) void {
+            std.debug.assert(self.borrowed);
+            scratch.snapshots = self.snapshots;
+            scratch.loop_guard = self.loop_guard;
+            scratch.positions = self.positions;
+            self.borrowed = false;
+            self.snapshots = .empty;
+            self.loop_guard = .empty;
+            self.positions = .empty;
+            self.heap_captures = &.{};
         }
 
         /// Capture slots a bytecode program needs: its highest group index + 1
@@ -803,11 +894,13 @@ pub fn RecursiveMatcherFor(comptime Unit: type) type {
         fn matchStarGreedy(self: *Self, pc_char: usize, pc_rest: usize, pos: usize) MatchError!MatchResult {
             var current_pos = pos;
 
-            // PHASE 1: Greedy consumption - match as many as possible
-            var positions: std.ArrayList(usize) = .empty;
-            defer positions.deinit(self.allocator);
+            // PHASE 1: Greedy consumption - match as many as possible. The
+            // positions go on the shared stack above `mark` (nested stars push
+            // above this one's while phase 2 runs).
+            const mark = self.positions.items.len;
+            defer self.positions.shrinkRetainingCapacity(mark);
 
-            try positions.append(self.allocator, current_pos); // Include zero matches
+            try self.positions.append(self.allocator, current_pos); // Include zero matches
 
             // Get the character instruction to match
             const char_inst = try format.decodeInstruction(self.bytecode, pc_char);
@@ -821,14 +914,14 @@ pub fn RecursiveMatcherFor(comptime Unit: type) type {
                 if (matched.end_pos == current_pos) break;
 
                 current_pos = matched.end_pos;
-                try positions.append(self.allocator, current_pos);
+                try self.positions.append(self.allocator, current_pos);
             }
 
             // PHASE 2: Try rest of pattern from each position (longest first)
-            var i: usize = positions.items.len;
+            var i: usize = self.positions.items.len - mark;
             while (i > 0) {
                 i -= 1;
-                const try_pos = positions.items[i];
+                const try_pos = self.positions.items[mark + i];
 
                 const rest_result = try self.matchFrom(pc_rest, try_pos);
                 if (rest_result.matched) {

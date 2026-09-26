@@ -93,6 +93,10 @@ pub const analyze = analysis.analyze;
 
 // High-level Regex API
 pub const Regex = @import("regex.zig").Regex;
+pub const Scratch = @import("regex.zig").Scratch;
+pub const MatchSlots = @import("regex.zig").MatchSlots;
+pub const ExecLimits = @import("regex.zig").ExecLimits;
+pub const ExecError = @import("regex.zig").ExecError;
 pub const test_ = @import("regex.zig").test_;
 pub const find = @import("regex.zig").find;
 pub const findAll = @import("regex.zig").findAll;

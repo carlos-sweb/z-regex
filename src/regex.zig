@@ -37,6 +37,24 @@ const CompileResult = compiler.CompileResult;
 const CompileOptions = compiler.CompileOptions;
 const Matcher = matcher_mod.Matcher;
 pub const MatchResult = matcher_mod.MatchResult;
+const Subject = @import("subject").Subject;
+
+/// Everything an execution allocates, reused across executions (F3c,
+/// docs/REGEX_TIERS_PLAN.md §4.2): one per thread; a second one for a
+/// match run from inside another's callback. Using one twice at once
+/// panics in safe builds.
+pub const Scratch = matcher_mod.Scratch;
+/// Execution limits: the backtracker's recursion depth and step budget,
+/// per start position (F6a makes the budget per execution, D11).
+pub const ExecLimits = matcher_mod.ExecOptions;
+/// What `Regex.execAt` can fail with.
+pub const ExecError = matcher_mod.ExecError;
+
+/// Where `Regex.execAt` writes a match: `slots[2g]` and `slots[2g + 1]` are
+/// the start and end of group `g` in the subject's units (group 0 is the
+/// match), null for a group that didn't take part. At least
+/// `Regex.slotCount()` long.
+pub const MatchSlots = struct { slots: []?usize };
 
 /// Error set for regex operations (includes all possible compilation and execution errors)
 pub const RegexError = parser_mod.ParseError || generator_mod.CodegenError || Allocator.Error || error{
@@ -116,6 +134,14 @@ pub const Regex = struct {
         return try m.findAt(input, start_pos);
     }
 
+    /// The first match starting at `start_pos` or after (a search, whatever
+    /// the `sticky` option), advancing one character at a time. A
+    /// `start_pos` inside a character is no match.
+    pub fn findFrom(self: Self, input: []const u8, start_pos: usize) RegexError!?MatchResult {
+        const m = Matcher.initCompiled(self.allocator, self.compiled);
+        return try m.findFrom(input, start_pos);
+    }
+
     /// Find all matches in input. If `sticky`, stops at the first position
     /// that doesn't match instead of scanning ahead for the next one.
     pub fn findAll(self: Self, input: []const u8) RegexError!std.ArrayListUnmanaged(MatchResult) {
@@ -126,6 +152,40 @@ pub const Regex = struct {
     /// Get the original pattern string
     pub fn getPattern(self: Self) []const u8 {
         return self.pattern;
+    }
+
+    /// Number of capturing groups in the pattern.
+    pub fn groupCount(self: Self) u32 {
+        return self.compiled.group_count;
+    }
+
+    /// Slots `execAt` fills: `2 * (groupCount() + 1)`.
+    pub fn slotCount(self: Self) usize {
+        return 2 * (@as(usize, self.compiled.group_count) + 1);
+    }
+
+    /// The execution primitive for a host (RegExpBuiltinExec without the
+    /// JS objects, F3c): with the `sticky` option, a match starting exactly
+    /// at `index`; otherwise the first match at `index` or after, advancing
+    /// with `advanceIndex`. Indices are in the subject's units (bytes of
+    /// WTF-8, or UTF-16 units; see the `subject` module for the WTF-8
+    /// positions). An `index` past the end is no match; one inside a
+    /// character is `error.InvalidIndex`. With a warm `scratch` it doesn't
+    /// allocate.
+    pub fn execAt(self: Self, subject: Subject, index: usize, scratch: *Scratch, out: *MatchSlots, limits: ExecLimits) ExecError!bool {
+        const m = Matcher.initCompiled(self.allocator, self.compiled);
+        return switch (subject) {
+            .wtf8 => |s| m.exec(u8, s, index, self.sticky, scratch, out.slots, limits),
+            .utf16 => |s| m.exec(u16, s, index, self.sticky, scratch, out.slots, limits),
+        };
+    }
+
+    /// AdvanceStringIndex: the position after the character at `index`
+    /// (`index + 1` at or past the end). Until F3d every pattern steps one
+    /// code point, as before F3.
+    pub fn advanceIndex(self: Self, subject: Subject, index: usize) usize {
+        _ = self;
+        return subject.advanceIndex(.code_point, index);
     }
 
     /// Replace the first match with `replacement` (JS `String.prototype.replace`

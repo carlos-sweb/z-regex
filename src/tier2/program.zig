@@ -6,6 +6,7 @@ const std = @import("std");
 const Allocator = std.mem.Allocator;
 const format_mod = @import("bytecode/format.zig");
 const charset_mod = @import("ir").charset;
+const Mode = @import("subject").Mode;
 
 pub const NamedGroup = format_mod.NamedGroup;
 pub const CharSet = charset_mod.CharSet;
@@ -25,6 +26,11 @@ pub const CompileResult = struct {
     /// of the bytecode: the bytecode alone isn't executable, and isn't a
     /// stable serialization format (docs/REGEX_TIERS_PLAN.md, F2b).
     charsets: []const CharSet = &.{},
+    /// What one character of the subject is (F3c): `code_point` when the
+    /// pattern was compiled with `u` or `v`, `code_unit` otherwise. The
+    /// matcher follows it from F3d; until then every pattern decodes code
+    /// points, as before F3.
+    mode: Mode = .code_unit,
     allocator: Allocator,
 
     /// Free the compilation result

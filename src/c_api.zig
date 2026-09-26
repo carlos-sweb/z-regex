@@ -8,7 +8,6 @@ const regex = @import("zregex");
 const Regex = regex.Regex;
 const MatchResult = regex.MatchResult;
 const Allocator = std.mem.Allocator;
-const nextSearchStart = regex.tier2.RecursiveMatcher.nextSearchStart;
 
 // =============================================================================
 // Global State
@@ -595,23 +594,22 @@ export fn zregex_match_at_n(re: *ZRegex, input: [*]const u8, len: usize, start: 
     return null;
 }
 
-/// First match starting at or after byte `start`, trying each start
-/// position in turn exactly like `Matcher.find` does from 0 (including its
-/// byte-at-a-time stepping). Returns null on no match; see
+/// First match starting at or after byte `start`, advancing one character
+/// at a time exactly like `Regex.find` does from 0. Returns null on no match; see
 /// `zregex_match_at_n` for telling failures apart.
 export fn zregex_search_n(re: *ZRegex, input: [*]const u8, len: usize, start: usize) ?*ZMatch {
     clearError();
     const input_slice = input[0..len];
+    // A search never starts in the middle of a character (F3c): from a
+    // `start` inside one, it starts at the next position.
     var pos = start;
-    // Step by whole UTF-8/WTF-8 sequences, like `Regex.find`: a search never
-    // starts in the middle of a character.
-    while (pos <= len) : (pos = nextSearchStart(input_slice, pos)) {
-        const result = re.findAt(input_slice, pos) catch |err| {
-            setZigError(err);
-            return null;
-        };
-        if (result) |match| return wrapMatch(input_slice, match);
-    }
+    const subject: regex.Subject = .{ .wtf8 = input_slice };
+    while (pos <= len and !subject.isPosition(pos)) pos += 1;
+    const result = re.findFrom(input_slice, pos) catch |err| {
+        setZigError(err);
+        return null;
+    };
+    if (result) |match| return wrapMatch(input_slice, match);
     return null;
 }
 
@@ -731,4 +729,29 @@ test "zregex_last_error_name reports the precise compile error" {
     const re = zregex_compile_n(ok.ptr, ok.len, null).?;
     zregex_free(re);
     try std.testing.expectEqualStrings("", std.mem.span(zregex_last_error_name()));
+}
+
+test "zregex_compile / zregex_compile_n carry u and v to CompileResult.mode (F3c)" {
+    const Mode = regex.subject.Mode;
+    const Case = struct { unicode: bool, v: bool, mode: Mode };
+    const cases = [_]Case{
+        .{ .unicode = false, .v = false, .mode = .code_unit },
+        .{ .unicode = true, .v = false, .mode = .code_point },
+        .{ .unicode = false, .v = true, .mode = .code_point },
+        .{ .unicode = true, .v = true, .mode = .code_point },
+    };
+    for (cases) |c| {
+        var opts = zregex_default_options();
+        opts.unicode = c.unicode;
+        opts.v = c.v;
+        const re = zregex_compile("a", &opts).?;
+        defer zregex_free(re);
+        try std.testing.expectEqual(c.mode, re.compiled.mode);
+        const re_n = zregex_compile_n("a", 1, &opts).?;
+        defer zregex_free(re_n);
+        try std.testing.expectEqual(c.mode, re_n.compiled.mode);
+    }
+    const plain = zregex_compile("a", null).?;
+    defer zregex_free(plain);
+    try std.testing.expectEqual(Mode.code_unit, plain.compiled.mode);
 }

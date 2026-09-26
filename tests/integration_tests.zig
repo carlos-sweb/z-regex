@@ -344,3 +344,6 @@ test {
 test {
     _ = @import("tier2_pipeline_tests.zig");
 }
+test {
+    _ = @import("exec_tests.zig");
+}
