@@ -274,8 +274,23 @@ const Lowerer = struct {
     /// `members` is the set before the node's own negation; `set` (what
     /// matches) is its complement when `inverted`.
     fn charSetNode(self: *Lowerer, members: CharSet, inverted: bool, hint: hir.EncodingHint) LowerError!*const Node {
+        return self.charSetNodeFrom(members, inverted, hint, .{});
+    }
+
+    fn charSetNodeFrom(self: *Lowerer, members: CharSet, inverted: bool, hint: hir.EncodingHint, origin: hir.AnalysisOrigin) LowerError!*const Node {
         const set = if (inverted) try members.complement(self.arena) else members;
-        return self.make(.{ .char_set = .{ .set = set, .inverted = inverted, .encoding_hint = hint } });
+        return self.make(.{ .char_set = .{ .set = set, .inverted = inverted, .encoding_hint = hint, .analysis_origin = origin } });
+    }
+
+    /// Whether a class or a set-operation operand has a `\p`/`\P` member.
+    fn hasProperty(n: *const AstNode) bool {
+        return switch (n.type) {
+            .unicode_property, .unicode_script, .unicode_script_extensions => true,
+            .char_class, .class_set_op => for (n.children.items) |child| {
+                if (hasProperty(child)) break true;
+            } else false,
+            else => false,
+        };
     }
 
     noinline fn lowerDot(self: *Lowerer) LowerError!*const Node {
@@ -311,11 +326,11 @@ const Lowerer = struct {
             else => unreachable,
         };
         if (n.char_value > 0xFF) return error.InvalidPattern;
-        return self.charSetNode(members, n.inverted, .{ .property = .{ .kind = kind, .value = @intCast(n.char_value) } });
+        return self.charSetNodeFrom(members, n.inverted, .{ .property = .{ .kind = kind, .value = @intCast(n.char_value) } }, .{ .property = true });
     }
 
     noinline fn lowerClassSetOp(self: *Lowerer, n: *const AstNode) LowerError!*const Node {
-        return self.charSetNode(try self.classSetOpMembers(n), n.inverted, .set);
+        return self.charSetNodeFrom(try self.classSetOpMembers(n), n.inverted, .set, .{ .property = hasProperty(n), .set_operation = true });
     }
 
     /// A `[...]` class, routed exactly as the code generator did before F2c.
@@ -325,7 +340,7 @@ const Lowerer = struct {
         if (children.len == 0 and !n.inverted) return self.charSetNode(try CharSet.fromRanges(self.arena, &.{}), false, .set);
 
         for (children) |child| switch (child.type) {
-            .unicode_property, .unicode_script, .unicode_script_extensions => return self.charSetNode(try self.classMembers(n, self.flags.ignore_case), n.inverted, .set),
+            .unicode_property, .unicode_script, .unicode_script_extensions => return self.charSetNodeFrom(try self.classMembers(n, self.flags.ignore_case), n.inverted, .set, .{ .property = true }),
             else => {},
         };
         var needs_set = false;
@@ -602,24 +617,43 @@ test "lower: classes keep their pre-F2c encoding and folding path" {
     );
     try expectLowered("\\p{Lu}", .{ .unicode = true },
         \\scope
-        \\  char_set property ranges=655 41-5A C0-D6 D8-DE 100-100 ...
+        \\  char_set property +property ranges=655 41-5A C0-D6 D8-DE 100-100 ...
         \\
     );
     // A standalone \P: its set is the complement (applied once).
     try expectLowered("\\P{ASCII}", .{ .unicode = true },
         \\scope
-        \\  char_set property inv ranges=1 80-10FFFF
+        \\  char_set property inv +property ranges=1 80-10FFFF
         \\
     );
     // A \P member inside a class, under the class's own [^...].
     try expectLowered("[^\\P{ASCII}]", .{ .unicode = true },
         \\scope
-        \\  char_set set inv ranges=1 0-7F
+        \\  char_set set inv +property ranges=1 0-7F
         \\
     );
     try expectLowered("[\\p{L}--[a-z]]", .{ .v = true },
         \\scope
-        \\  char_set set ranges=683 41-5A AA-AA B5-B5 BA-BA ...
+        \\  char_set set +property +set_op ranges=683 41-5A AA-AA B5-B5 BA-BA ...
+        \\
+    );
+}
+
+test "lower: analysis_origin records property members and set operations" {
+    // Its set is ASCII-only, but a property still needs the Unicode tables.
+    try expectLowered("[\\p{ASCII}]", .{ .unicode = true },
+        \\scope
+        \\  char_set set +property ranges=1 0-7F
+        \\
+    );
+    try expectLowered("[[a-c]--[b]]", .{ .v = true },
+        \\scope
+        \\  char_set set +set_op ranges=2 61-61 63-63
+        \\
+    );
+    try expectLowered("[a\u{E9}]", .{ .unicode = true },
+        \\scope
+        \\  char_set set ranges=2 61-61 E9-E9
         \\
     );
 }

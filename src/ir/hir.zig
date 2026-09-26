@@ -95,6 +95,18 @@ pub const CharSetNode = struct {
     /// exact, so the table entry is the same as before F2c). COSMETIC.
     inverted: bool,
     encoding_hint: EncodingHint,
+    /// For `analyze()` only (F2d); neither matching nor the bytecode
+    /// encoding reads it.
+    analysis_origin: AnalysisOrigin = .{},
+};
+
+/// Where a CharSet came from, as far as the Tier classifier needs and the
+/// set can't show: a `\p`/`\P` (standalone or a class member) always needs
+/// the Unicode tables, even when its set is ASCII (`[\p{ASCII}]`); a `v` set
+/// operation is its own feature. Scalars only, no pointer into the AST.
+pub const AnalysisOrigin = packed struct {
+    property: bool = false,
+    set_operation: bool = false,
 };
 
 pub const Policy = enum { greedy, lazy, possessive };
@@ -199,7 +211,7 @@ pub fn dump(node: *const Node, w: *std.Io.Writer, indent: usize) std.Io.Writer.E
             try w.writeAll("\n");
         },
         .char_set => |c| {
-            try w.print("char_set {s}{s} ranges={d}", .{ @tagName(c.encoding_hint), if (c.inverted) " inv" else "", c.set.ranges.len });
+            try w.print("char_set {s}{s}{s}{s} ranges={d}", .{ @tagName(c.encoding_hint), if (c.inverted) " inv" else "", if (c.analysis_origin.property) " +property" else "", if (c.analysis_origin.set_operation) " +set_op" else "", c.set.ranges.len });
             for (c.set.ranges[0..@min(c.set.ranges.len, 4)]) |r| try w.print(" {X}-{X}", .{ r.lo, r.hi });
             if (c.set.ranges.len > 4) try w.writeAll(" ...");
             try w.writeAll("\n");
