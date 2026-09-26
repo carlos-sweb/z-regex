@@ -91,6 +91,12 @@ pub const CompileOptions = struct {
     /// see `docs/KNOWN_LIMITATIONS.md` for the authoritative list of what
     /// this flag does and doesn't cover.
     v: bool = false,
+
+    /// Opt-in extension, not ECMA-262 (D8, F1b): read `*+`, `++` and `?+` as
+    /// possessive quantifiers (match greedily, never give back). Off by
+    /// default, where `a*+` is a SyntaxError as in JS. Before F1b this was
+    /// always on.
+    possessive: bool = false,
 };
 
 /// Compile a regex pattern to bytecode
@@ -99,6 +105,7 @@ pub fn compile(allocator: Allocator, pattern: []const u8, options: CompileOption
     var lexer = Lexer.init(pattern);
     lexer.unicode_mode = options.unicode;
     lexer.v_mode = options.v;
+    lexer.possessive = options.possessive;
 
     // Phase 2: Parsing
     var parser = try Parser.init(allocator, &lexer);

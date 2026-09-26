@@ -395,3 +395,19 @@ test "Annex B \\k without named groups is the text k" {
     try expectRejected("\\k<a>", u);
     try expectRejected("(?<b>.)\\k<a>", annex_b);
 }
+
+// --- D8 (F1b): possessive quantifiers are an opt-in extension ---
+
+test "D8: *+ ++ ?+ are SyntaxErrors by default and possessive with the opt-in" {
+    for ([_][]const u8{ "a*+", "a++", "a?+", "(?:ab)*+c", "a{2}+" }) |p| {
+        try expectRejected(p, annex_b);
+        try expectRejected(p, u);
+    }
+    const poss: zregex.CompileOptions = .{ .possessive = true };
+    try expectMatch("a*+", poss, "aaab", "aaa");
+    // Possessive never gives back: a++a can't match "aaaa".
+    try expectMatch("a++a", poss, "aaaa", null);
+    try expectMatch("a+a", annex_b, "aaaa", "aaaa");
+    // Lazy quantifiers are unaffected.
+    try expectMatch("a+?", annex_b, "aaa", "a");
+}

@@ -41,7 +41,9 @@ older internal notes had previously (incorrectly) listed as broken:
 - **`\W`, `\S` negation** — correctly inverted (an older internal note claimed these were
   "parsed but not correctly inverted"; that is no longer true).
 - **Counted quantifiers** `{n}`, `{n,}`, `{n,m}` and their lazy forms `{n,m}?`.
-- **Possessive quantifiers** `*+`, `++`, `?+` — verified non-backtracking (`a++a` correctly
+- **Possessive quantifiers** `*+`, `++`, `?+` — an opt-in extension since F1b
+  (`CompileOptions.possessive = true`; by default `a*+` is a SyntaxError, as in JS). With the
+  opt-in, verified non-backtracking (`a++a` correctly
   fails to match `"aaaa"` because the possessive `a++` consumes all four `a`s and refuses
   to give any back).
 - **Character classes** `\d \D \w \W \s \S`, `[abc]`, `[^abc]`, `[a-z]`.
@@ -693,6 +695,21 @@ is, run z-string's `zig build test`. Changes so far (F1a):
 - **Search start positions:** `find`/`findAll` (and the C API search) no longer start a
   match inside a UTF-8 sequence (part of D12).
 - **A hyphen where a class atom is expected starts a range:** `[--0]` is `-`..`0`.
+
+F1b:
+
+- **Braces and brackets (D1, D2):** `{,5}`, `{}`, a `{` that doesn't start a quantifier,
+  and a lone `}` or `]` are literal text (Annex B); `{,5}` used to mean `{0,5}`. With `u`
+  they are SyntaxErrors.
+- **`[]` (D3)** is valid and never matches (it was `error.EmptyCharClass`).
+- **Annex B escapes:** an invalid `\c` is a literal backslash (`/\c0/` matches "\c0", it
+  used to drop the backslash); `\0<digit>` and a `\N` past the group count are legacy
+  octal (`\1` with no groups is U+0001; it used to be a backreference that matched
+  empty), `\8`/`\9` past it are "8"/"9"; `\10` with ten groups is a backreference; in a
+  class `\1`-`\7` are octal; `\k<a>` with no named group in the pattern is the text
+  "k<a>" (it was `error.UnknownGroupName`).
+- **Possessive quantifiers (D8)** are opt-in (`CompileOptions.possessive`); by default
+  `a*+` is a SyntaxError. **Callers that relied on them must set the option.**
 
 Two bugs fixed in F1a were **pre-existing, not covered by the F0d baseline, and found
 by F1a's tests**:

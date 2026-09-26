@@ -36,7 +36,7 @@ A powerful, feature-rich regular expression engine written in Zig with JavaScrip
 - ✅ `*?`, `+?`, `??` Lazy quantifiers
 - ✅ `{n}`, `{n,}`, `{n,m}` Counted quantifiers
 - ✅ `{n}?`, `{n,}?`, `{n,m}?` Lazy counted quantifiers
-- ✅ `*+`, `++`, `?+` Possessive quantifiers (extension)
+- ✅ `*+`, `++`, `?+` Possessive quantifiers (extension, opt-in with `CompileOptions.possessive`; a SyntaxError by default, as in JS)
 
 ### Character Classes
 - ✅ `[abc]`, `[^abc]` Character sets

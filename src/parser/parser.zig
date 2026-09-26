@@ -1398,6 +1398,7 @@ test "Parser: lazy question quantifier" {
 test "Parser: possessive star quantifier" {
     const pattern = "a*+";
     var lexer = Lexer.init(pattern);
+    lexer.possessive = true; // opt-in extension (D8)
     var parser = try Parser.init(std.testing.allocator, &lexer);
 
     const root = try parser.parse();
@@ -1411,6 +1412,7 @@ test "Parser: possessive star quantifier" {
 test "Parser: possessive plus quantifier" {
     const pattern = "a++";
     var lexer = Lexer.init(pattern);
+    lexer.possessive = true; // opt-in extension (D8)
     var parser = try Parser.init(std.testing.allocator, &lexer);
 
     const root = try parser.parse();
@@ -1423,6 +1425,7 @@ test "Parser: possessive plus quantifier" {
 test "Parser: possessive question quantifier" {
     const pattern = "a?+";
     var lexer = Lexer.init(pattern);
+    lexer.possessive = true; // opt-in extension (D8)
     var parser = try Parser.init(std.testing.allocator, &lexer);
 
     const root = try parser.parse();

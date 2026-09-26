@@ -222,6 +222,12 @@ pub const Lexer = struct {
     /// escape.
     named_groups: bool = false,
 
+    /// Opt-in extension (D8, F1b): read `*+`, `++`, `?+` as possessive
+    /// quantifiers. Off by default, as in ECMA-262, where `a*+` is a
+    /// SyntaxError (the `+` has nothing to repeat). Set by `compile()` from
+    /// `CompileOptions.possessive`.
+    possessive: bool = false,
+
     /// Total number of capturing groups in the whole pattern (from
     /// `scanGroups`, so it counts groups that appear after a reference).
     /// Under `unicode_mode` a `\N` with N greater than this is a SyntaxError.
@@ -333,7 +339,7 @@ pub const Lexer = struct {
                     if (next_char == '?') {
                         self.pos += 1;
                         return Token.simple(.lazy_star, start_pos);
-                    } else if (next_char == '+') {
+                    } else if (next_char == '+' and self.possessive) {
                         self.pos += 1;
                         return Token.simple(.possessive_star, start_pos);
                     }
@@ -348,7 +354,7 @@ pub const Lexer = struct {
                     if (next_char == '?') {
                         self.pos += 1;
                         return Token.simple(.lazy_plus, start_pos);
-                    } else if (next_char == '+') {
+                    } else if (next_char == '+' and self.possessive) {
                         self.pos += 1;
                         return Token.simple(.possessive_plus, start_pos);
                     }
@@ -363,7 +369,7 @@ pub const Lexer = struct {
                     if (next_char == '?') {
                         self.pos += 1;
                         return Token.simple(.lazy_question, start_pos);
-                    } else if (next_char == '+') {
+                    } else if (next_char == '+' and self.possessive) {
                         self.pos += 1;
                         return Token.simple(.possessive_question, start_pos);
                     }
@@ -1231,6 +1237,7 @@ test "Lexer: distinguish greedy from lazy" {
 
 test "Lexer: possessive quantifiers" {
     var lexer = Lexer.init("a*+b++c?+");
+    lexer.possessive = true; // opt-in extension (D8)
 
     _ = try lexer.next(); // 'a'
     try std.testing.expectEqual(TokenType.possessive_star, (try lexer.next()).type);
@@ -1254,7 +1261,15 @@ test "Lexer: distinguish greedy/lazy/possessive" {
     }
     {
         var lexer = Lexer.init("a*+");
+        lexer.possessive = true;
         _ = try lexer.next();
         try std.testing.expectEqual(TokenType.possessive_star, (try lexer.next()).type);
+    }
+    // Without the opt-in (the default, as in ECMA-262) `*+` is `*` then `+`.
+    {
+        var lexer = Lexer.init("a*+");
+        _ = try lexer.next();
+        try std.testing.expectEqual(TokenType.star, (try lexer.next()).type);
+        try std.testing.expectEqual(TokenType.plus, (try lexer.next()).type);
     }
 }

@@ -15,9 +15,11 @@
 //! Patterns whose current compile semantics is *known* to deviate from
 //! ECMA-262 are reported as unclassifiable instead of being classified on
 //! top of a wrong meaning (plan §6.3, "decisión de F0a"): D10 (recorded by
-//! the lexer), D8 (possessive quantifiers), and anything the current parser
-//! rejects. D1 left this list in F1b, when the lexer started reading `{,5}`
-//! per ECMA-262 (a deliberate change of the F0a contract, plan §5.2).
+//! the lexer) and anything the current parser rejects. D1 and D8 left this
+//! list in F1b: the lexer reads `{,5}` per ECMA-262, and possessive
+//! quantifiers are an opt-in of `compile` only, so `analyze` (which follows
+//! the spec) sees `a*+` as a SyntaxError. A deliberate change of the F0a
+//! contract (plan §5.2).
 
 const std = @import("std");
 const Allocator = std.mem.Allocator;
@@ -114,8 +116,6 @@ pub const FeatureSet = std.EnumSet(Feature);
 /// Known ECMA-262 deviations of the current parser that make a pattern
 /// unclassifiable in F0a (numbering from plan §2.3).
 pub const Deviation = enum {
-    /// Possessive quantifiers (`*+`, `++`, `?+`) enabled by default.
-    d8_possessive_quantifier,
     /// `{n}` with n > 65536 silently clamped.
     d10_quantifier_min_clamped,
 };
@@ -212,7 +212,6 @@ pub fn analyze(gpa: Allocator, pattern: []const u8, flags: Flags) Allocator.Erro
 
     var walker: Walker = .{ .flags = flags };
     walker.visit(root, 1);
-    if (walker.possessive) return unclassifiable(.{ .known_deviation = .d8_possessive_quantifier });
 
     var features = walker.features;
     if (parser.group_names.items.len > 0) features.insert(.named_group);
@@ -251,11 +250,10 @@ const Walker = struct {
     flags: Flags,
     features: FeatureSet = FeatureSet.initEmpty(),
     /// Any literal/class content >= U+0080. Conservative: a negated
-    /// shorthand spliced into a class (`[\W]`) is stored by the parser as a
-    /// byte range up to 0xFF, indistinguishable from a real non-ASCII range,
+    /// shorthand spliced into a class (`[\W]`) is stored by the parser as
+    /// ranges up to U+10FFFF, indistinguishable from real non-ASCII content,
     /// so it also counts. Over-promoting only costs speed, never semantics.
     non_ascii: bool = false,
-    possessive: bool = false,
 
     /// `copies`: how many times this node gets unrolled by enclosing
     /// counted repeats (saturating).
@@ -288,7 +286,9 @@ const Walker = struct {
                 child_copies = std.math.mul(u64, copies, @max(count, 1)) catch std.math.maxInt(u64);
                 if (child_copies > UNROLL_BUDGET) self.features.insert(.large_counted_repeat);
             },
-            .possessive_star, .possessive_plus, .possessive_question => self.possessive = true,
+            // Never built here: `analyze` doesn't turn on the possessive
+            // opt-in (D8), so `a*+` fails to parse instead.
+            .possessive_star, .possessive_plus, .possessive_question => {},
             .group => self.features.insert(.capturing_group),
             .non_capturing_group => self.features.insert(.non_capturing_group),
             .alternation => self.features.insert(.alternation),
@@ -425,9 +425,10 @@ test "D10: clamped minimum is unclassifiable" {
     try expectDeviation("a{70000,}", "", .d10_quantifier_min_clamped);
 }
 
-test "D8: possessive quantifiers are unclassifiable" {
-    try expectDeviation("a++", "", .d8_possessive_quantifier);
-    try expectDeviation("(?:ab)*+c", "", .d8_possessive_quantifier);
+test "D8: possessive syntax is a SyntaxError for analyze (compile's opt-in only, F1b)" {
+    try expectParseError("a++", "");
+    try expectParseError("(?:ab)*+c", "");
+    try expectParseError("a?+", "u");
 }
 
 test "parser rejections are reported, not raised" {

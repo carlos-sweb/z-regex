@@ -512,9 +512,18 @@ test "Regex: greedy vs lazy comparison" {
 }
 
 test "Regex: possessive quantifiers" {
+    // An opt-in extension since F1b (D8): by default, as in ECMA-262, the
+    // second quantifier has nothing to repeat.
+    for ([_][]const u8{ "a*+", "a++", "a?+" }) |p| {
+        if (Regex.compile(std.testing.allocator, p)) |re| {
+            re.deinit();
+            return error.TestExpectedError;
+        } else |_| {}
+    }
+
     // Possessive star: consumes all without backtracking
     {
-        var re = try Regex.compile(std.testing.allocator, "a*+");
+        var re = try Regex.compileWithOptions(std.testing.allocator, "a*+", .{ .possessive = true });
         defer re.deinit();
         try std.testing.expect(try re.test_(""));
         try std.testing.expect(try re.test_("aaa"));
@@ -528,7 +537,7 @@ test "Regex: possessive quantifiers" {
 
     // Possessive plus: at least one, then all without backtracking
     {
-        var re = try Regex.compile(std.testing.allocator, "a++");
+        var re = try Regex.compileWithOptions(std.testing.allocator, "a++", .{ .possessive = true });
         defer re.deinit();
         try std.testing.expect(!try re.test_(""));
         try std.testing.expect(try re.test_("aaa"));
@@ -542,7 +551,7 @@ test "Regex: possessive quantifiers" {
 
     // Possessive question: 0 or 1 without backtracking
     {
-        var re = try Regex.compile(std.testing.allocator, "a?+");
+        var re = try Regex.compileWithOptions(std.testing.allocator, "a?+", .{ .possessive = true });
         defer re.deinit();
         try std.testing.expect(try re.test_(""));
         try std.testing.expect(try re.test_("a"));
@@ -568,7 +577,7 @@ test "Regex: greedy vs lazy vs possessive comparison" {
     }
 
     {
-        var possessive = try Regex.compile(std.testing.allocator, "a*+");
+        var possessive = try Regex.compileWithOptions(std.testing.allocator, "a*+", .{ .possessive = true });
         defer possessive.deinit();
         const match3 = try possessive.find("aaa");
         defer if (match3) |m| m.deinit();
