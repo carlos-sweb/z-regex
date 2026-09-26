@@ -252,7 +252,7 @@ pub const Parser = struct {
     }
 
     /// Check if current token matches expected type
-    fn check(self: Self, token_type: TokenType) bool {
+    fn check(self: *const Self, token_type: TokenType) bool {
         return self.current_token.type == token_type;
     }
 
@@ -382,8 +382,19 @@ pub const Parser = struct {
     }
 
     /// Parse term: atom quantifier?
+    ///
+    /// On the recursive path (`parseAlternation` -> `parseSequence` ->
+    /// `parseTerm` -> `parseAtom` -> group -> `parseAlternation`), so it
+    /// stays thin: the quantifier work lives in `parseQuantifierSuffix`,
+    /// whose frame is only on the stack while it runs (F2a).
     fn parseTerm(self: *Self) ParseError!*Node {
         const atom = try self.parseAtom();
+        return self.parseQuantifierSuffix(atom);
+    }
+
+    /// Wrap `atom` in the quantifier that follows it, if any. Owns `atom`:
+    /// on error it is freed.
+    noinline fn parseQuantifierSuffix(self: *Self, atom: *Node) ParseError!*Node {
         errdefer atom.deinit();
 
         // A lookbehind is never quantifiable; a lookahead only in Annex B
@@ -444,7 +455,7 @@ pub const Parser = struct {
         return atom;
     }
 
-    fn isQuantifierToken(self: Self) bool {
+    fn isQuantifierToken(self: *const Self) bool {
         return switch (self.current_token.type) {
             .star, .plus, .question, .repeat, .lazy_star, .lazy_plus, .lazy_question, .possessive_star, .possessive_plus, .possessive_question => true,
             else => false,
@@ -452,7 +463,100 @@ pub const Parser = struct {
     }
 
     /// Parse atom: char | '.' | group | charclass | anchor | escape
+    ///
+    /// Only dispatches (F2a). In Debug every branch's locals get their own
+    /// stack slot, so a single switch holding both the recursive branches
+    /// (groups, lookarounds) and the leaf ones (escapes, properties, names)
+    /// put the whole switch's frame on the stack once per nesting level.
+    /// Leaf tokens go to `parseLeafAtom` (`noinline`, off the recursive
+    /// path); groups to `parseGroupAtom`, which keeps a small frame.
     fn parseAtom(self: *Self) ParseError!*Node {
+        return switch (self.current_token.type) {
+            .lparen,
+            .named_group_start,
+            .lookahead_start,
+            .negative_lookahead_start,
+            .non_capturing_group_start,
+            .lookbehind_start,
+            .negative_lookbehind_start,
+            => self.parseGroupAtom(),
+            .lbracket => self.parseCharClass(),
+            else => self.parseLeafAtom(),
+        };
+    }
+
+    /// Parse a group or lookaround: the opening token, its body (a nested
+    /// disjunction) and the `)`. On the recursive path, so the per-kind
+    /// work that isn't recursion (a named group's registration) lives in
+    /// `noinline` helpers.
+    fn parseGroupAtom(self: *Self) ParseError!*Node {
+        const kind = self.current_token.type;
+        const group_index: u16 = switch (kind) {
+            .lparen => try self.nextGroupIndex(),
+            .named_group_start => try self.registerNamedGroup(),
+            else => 0,
+        };
+        // Named groups advanced past their opening token already
+        // (`registerNamedGroup`).
+        if (kind != .named_group_start) try self.advance();
+
+        const inner = try self.parseAlternation();
+        errdefer inner.deinit();
+
+        _ = try self.consume(.rparen);
+
+        return switch (kind) {
+            .lparen, .named_group_start => Node.createGroup(self.allocator, inner, group_index),
+            // Non-capturing groups don't take a group index.
+            .non_capturing_group_start => Node.createNonCapturingGroup(self.allocator, inner),
+            .lookahead_start => Node.createLookahead(self.allocator, inner, false),
+            .negative_lookahead_start => Node.createLookahead(self.allocator, inner, true),
+            .lookbehind_start => Node.createLookbehind(self.allocator, inner, false),
+            .negative_lookbehind_start => Node.createLookbehind(self.allocator, inner, true),
+            else => unreachable,
+        };
+    }
+
+    /// Consume a `(?<name>` token and register the name, returning the
+    /// group's index. Registered before its body, in source order.
+    noinline fn registerNamedGroup(self: *Self) ParseError!u16 {
+        const raw = self.lexer.pattern[self.current_token.name_start..self.current_token.name_end];
+        const name = try Lexer.decodeGroupName(self.allocator, raw);
+        var name_owned = true; // until `group_names` takes it
+        errdefer if (name_owned) self.allocator.free(name);
+        try self.advance(); // consume '(?<name>'
+
+        // A duplicate name is only a SyntaxError if the two groups
+        // *aren't* provably mutually exclusive (different branches of a
+        // shared enclosing alternation) -- see
+        // `branchPathsMutuallyExclusive`. `self.branch_stack.items` right
+        // now *is* this group's branch path (its own content hasn't been
+        // parsed yet, so nothing from inside it has pushed anything onto
+        // the stack).
+        const current_path = self.branch_stack.items;
+        for (self.group_names.items) |entry| {
+            if (std.mem.eql(u8, entry.name, name) and
+                !branchPathsMutuallyExclusive(entry.branch_path, current_path))
+            {
+                return error.DuplicateGroupName;
+            }
+        }
+        const path_copy = try self.allocator.dupe(BranchStep, current_path);
+        var path_owned = true; // until `group_names` takes it
+        errdefer if (path_owned) self.allocator.free(path_copy);
+
+        const group_index = try self.nextGroupIndex();
+
+        try self.group_names.append(self.allocator, .{ .name = name, .index = group_index, .branch_path = path_copy });
+        name_owned = false;
+        path_owned = false;
+        return group_index;
+    }
+
+    /// Parse an atom that doesn't recurse: characters, escapes, class
+    /// shorthands, properties, anchors, backreferences. `noinline` keeps
+    /// its frame off the recursive path (see `parseAtom`).
+    noinline fn parseLeafAtom(self: *Self) ParseError!*Node {
         switch (self.current_token.type) {
             // Simple character
             .char => {
@@ -569,127 +673,6 @@ pub const Parser = struct {
             .not_word_boundary => {
                 try self.advance();
                 return Node.createAnchor(self.allocator, .not_word_boundary);
-            },
-
-            // Groups
-            .lparen => {
-                try self.advance(); // consume '('
-
-                const group_index = try self.nextGroupIndex();
-
-                const inner = try self.parseAlternation();
-                errdefer inner.deinit();
-
-                _ = try self.consume(.rparen);
-
-                return Node.createGroup(self.allocator, inner, group_index);
-            },
-
-            // Named capturing group (?<name>...)
-            .named_group_start => {
-                const raw = self.lexer.pattern[self.current_token.name_start..self.current_token.name_end];
-                const name = try Lexer.decodeGroupName(self.allocator, raw);
-                var name_owned = true; // until `group_names` takes it
-                errdefer if (name_owned) self.allocator.free(name);
-                try self.advance(); // consume '(?<name>'
-
-                // A duplicate name is only a SyntaxError if the two groups
-                // *aren't* provably mutually exclusive (different branches
-                // of a shared enclosing alternation) -- see
-                // `branchPathsMutuallyExclusive`. `self.branch_stack.items`
-                // right now *is* this group's branch path (its own content hasn't been parsed yet, so nothing
-                // from inside it has pushed anything onto the stack).
-                const current_path = self.branch_stack.items;
-                for (self.group_names.items) |entry| {
-                    if (std.mem.eql(u8, entry.name, name) and
-                        !branchPathsMutuallyExclusive(entry.branch_path, current_path))
-                    {
-                        return error.DuplicateGroupName;
-                    }
-                }
-                const path_copy = try self.allocator.dupe(BranchStep, current_path);
-                var path_owned = true; // until `group_names` takes it
-                errdefer if (path_owned) self.allocator.free(path_copy);
-
-                const group_index = try self.nextGroupIndex();
-
-                // Registered before its body, in source order.
-                try self.group_names.append(self.allocator, .{ .name = name, .index = group_index, .branch_path = path_copy });
-                name_owned = false;
-                path_owned = false;
-
-                const inner = try self.parseAlternation();
-                errdefer inner.deinit();
-
-                _ = try self.consume(.rparen);
-
-                return Node.createGroup(self.allocator, inner, group_index);
-            },
-
-            // Positive lookahead (?=...)
-            .lookahead_start => {
-                try self.advance(); // consume '(?='
-
-                const inner = try self.parseAlternation();
-                errdefer inner.deinit();
-
-                _ = try self.consume(.rparen);
-
-                return Node.createLookahead(self.allocator, inner, false);
-            },
-
-            // Negative lookahead (?!...)
-            .negative_lookahead_start => {
-                try self.advance(); // consume '(?!'
-
-                const inner = try self.parseAlternation();
-                errdefer inner.deinit();
-
-                _ = try self.consume(.rparen);
-
-                return Node.createLookahead(self.allocator, inner, true);
-            },
-
-            // Non-capturing group (?:...)
-            .non_capturing_group_start => {
-                try self.advance(); // consume '(?:'
-
-                const inner = try self.parseAlternation();
-                errdefer inner.deinit();
-
-                _ = try self.consume(.rparen);
-
-                // Note: We don't increment group_counter for non-capturing groups
-                return Node.createNonCapturingGroup(self.allocator, inner);
-            },
-
-            // Positive lookbehind (?<=...)
-            .lookbehind_start => {
-                try self.advance(); // consume '(?<='
-
-                const inner = try self.parseAlternation();
-                errdefer inner.deinit();
-
-                _ = try self.consume(.rparen);
-
-                return Node.createLookbehind(self.allocator, inner, false);
-            },
-
-            // Negative lookbehind (?<!...)
-            .negative_lookbehind_start => {
-                try self.advance(); // consume '(?<!'
-
-                const inner = try self.parseAlternation();
-                errdefer inner.deinit();
-
-                _ = try self.consume(.rparen);
-
-                return Node.createLookbehind(self.allocator, inner, true);
-            },
-
-            // Character class
-            .lbracket => {
-                return self.parseCharClass();
             },
 
             // Literal '-'. The lexer always tokenizes '-' as .hyphen (it has
@@ -1489,8 +1472,6 @@ test "Parser: possessive question quantifier" {
 // Nesting limit (MAX_NESTING_DEPTH, docs/REGEX_TIERS_PLAN.md F0d)
 // =============================================================================
 
-const builtin = @import("builtin");
-
 /// `depth` nested `open ... )` around `a`, parsed with `limit` on a thread
 /// with `stack_size` bytes of stack. Returns the parse error, if any.
 fn parseNestedOnStack(open: []const u8, depth: usize, limit: u32, stack_size: usize) !?anyerror {
@@ -1546,12 +1527,12 @@ test "Parser: a character class counts as a nesting level" {
     try std.testing.expectError(error.NestingTooDeep, parser.parse());
 }
 
-test "Parser: MAX_NESTING_DEPTH levels fit in a 1 MiB stack (release builds)" {
-    // Reachable since F1c, when the branch tracking left the stack.
-    // Debug needs ~15.5 KB per level (~4 MiB for 256 levels), so there the
-    // 1 MiB stack crashes before the limit; F2 makes the parser iterative or
-    // brings a level under ~2 KB, and then this runs in Debug too.
-    if (builtin.mode == .Debug) return error.SkipZigTest;
+test "Parser: MAX_NESTING_DEPTH levels fit in a 1 MiB stack" {
+    // Reachable since F1c, when the branch tracking left the stack. Since
+    // F2a a level takes ~1.7 KiB in Debug and ~0.5 KiB in ReleaseSafe
+    // (~440 / ~125 KiB for 256 levels), so this runs in every mode.
     try std.testing.expectEqual(@as(?anyerror, null), try parseNestedOnStack("(", MAX_NESTING_DEPTH, MAX_NESTING_DEPTH, 1 << 20));
     try std.testing.expectEqual(@as(?anyerror, error.NestingTooDeep), try parseNestedOnStack("(", MAX_NESTING_DEPTH + 1, MAX_NESTING_DEPTH, 1 << 20));
+    try std.testing.expectEqual(@as(?anyerror, null), try parseNestedOnStack("(?:", MAX_NESTING_DEPTH, MAX_NESTING_DEPTH, 1 << 20));
+    try std.testing.expectEqual(@as(?anyerror, null), try parseNestedOnStack("(?<=", MAX_NESTING_DEPTH, MAX_NESTING_DEPTH, 1 << 20));
 }

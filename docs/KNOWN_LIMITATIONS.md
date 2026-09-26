@@ -526,12 +526,12 @@ pattern and subject (not bugs introduced by F1):
   not cleared at the start of each iteration. 326 differ only in captures,
   68 in the overall match too. Fixed by F4b (spec RepeatMatcher).
 
-**Skipped tests:** `zig build test` skips 3 tests in Debug and 1 in
-ReleaseSafe. Only two tests are skipped in source: D15 (`()\1{1000}`, until
-F6a) and "MAX_NESTING_DEPTH levels fit in a 1 MiB stack", which skips in
-Debug only (until F2) and is counted twice because `src/parser/parser.zig`
-is compiled into two test binaries (the library's and the C API's). So
-Debug = D15 + 2x nesting, ReleaseSafe = D15.
+**Skipped tests:** `zig build test` skips 1 test in Debug and 1 in
+ReleaseSafe: D15 (`()\1{1000}`, until F6a). Until F2a the Debug run also
+skipped "MAX_NESTING_DEPTH levels fit in a 1 MiB stack" (twice, since
+`src/parser/parser.zig` is compiled into two test binaries); F2a brought
+the parser under 2 KB per nesting level in Debug and that test now runs in
+every mode.
 
 **PatternTooLarge:** compiled bytecode is capped at `MAX_PROGRAM_BYTES` =
 16 MiB (`src/codegen/generator.zig`); a larger program is
@@ -1007,16 +1007,15 @@ strictness is itself only the unrecognized-escape slice — see above).
 - Patterns requiring ReDoS protection guarantees
 
 ### ⚠️ Use with Caution:
-- Character classes needing more than 8 non-ASCII ranges/members (`error.TooManyRanges`)
-  or more than 4 `\p{...}`/`\P{...}` tests (`error.TooManyClassProperties`)
-- Alternations nested more than 32 levels deep (`error.AlternationTooDeep`, needed for
-  duplicate-named-group mutual-exclusion tracking) — far beyond any realistic pattern
+- Character classes needing more than 30 non-ASCII ranges/members after merging
+  (`error.TooManyRanges`) or more than 4 `\p{...}`/`\P{...}` tests
+  (`error.TooManyClassProperties`), until F2b (dynamic CharSet)
 - Nesting of groups, lookarounds and classes deeper than 256 levels is
-  `error.NestingTooDeep` in every build mode (today groups hit the 31-level
-  `AlternationTooDeep` cap first, until F1). The stack that nesting needs does
-  depend on the build: ~1.2 KB per level in ReleaseSafe (256 levels ≈ 318 KB),
-  but ~15.5 KB per level in Debug, where deep nesting on a small stack crashes
-  before the limit is reached (see `docs/REGEX_TIERS_PLAN.md`, F0d/F2)
+  `error.NestingTooDeep` in every build mode. Parsing 256 levels fits in a
+  1 MiB stack in every mode: since F2a a level takes ~0.5 KiB in ReleaseSafe
+  (~125 KiB for 256 levels) and ~1.7 KiB in Debug (~440 KiB); before F2a it
+  was ~1.0 and ~9.2 KiB (see `docs/REGEX_TIERS_PLAN.md`, F2). Matching deep
+  nesting still uses the recursive matcher's stack (D14/D15, until F6a)
 
 ### ❌ Not Suitable For:
 - `case_insensitive` matching of non-ASCII character *ranges* (`[À-Ö]`) or
