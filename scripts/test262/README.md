@@ -78,6 +78,40 @@ only for a new pinned test262 revision. With
 
 The pinned test262 revision is in `TEST262_SHA`.
 
+### test262-wtf8 at a phase gate
+
+`zig build test262-wtf8` has three outcomes:
+
+- **No status differs between the encodings:** green.
+- **Differences that are documented and justified:** accepted. They are recorded in
+  `docs/KNOWN_LIMITATIONS.md` and `baseline-wtf8.json` is updated.
+- **Undocumented differences:** they block the phase.
+
+A test that passes with WTF-8 and fails with UTF-16 is an engine bug; the other way
+round, a harness bug.
+
+## The V8 differential reference
+
+`zig build differential-v8` (`differential.mjs`) is compared against a committed
+reference run, not against zero:
+
+- **Current reference:** `tests/differential/reference/diff-F3d.json`, generated with
+  UTF-16 subjects (the WTF-8 run is identical). It has 536 different results, all
+  quantifier iteration semantics (F4b), and 17 `StepLimitExceeded`. The F1 run (642
+  different) is superseded: 106 of its 248 "D6" entries were pure D6 and are gone, and
+  142 belonged to F4b.
+- **Lifecycle:**
+  - The current reference is the entry reference of the next phase. `diff-F3d.json` is
+    F4a's.
+  - A phase that changes the executor but not the semantics (F4a) must not add any
+    divergence against it. That is its gate.
+  - When the phase closes, a new reference (`diff-F4a.json`, ...) is generated only if
+    something changed. Otherwise the current one stays in force (until F4b, for F4a).
+  - A replaced reference moves to `tests/differential/reference/archive/`.
+- **Comparing:** group divergences by (flags, pattern, subject), counting repeats, and
+  classify each one as gone, appeared or changed. Every appeared or changed entry is
+  explained one by one before a phase closes.
+
 ## Statuses
 
 | Status | Meaning |

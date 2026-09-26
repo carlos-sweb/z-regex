@@ -188,7 +188,10 @@ Could be added in 2.0 as extension
 ### Code Style
 
 **Follow Zig's standard style**:
-- Use `zig fmt` for formatting (no exceptions)
+- Use `zig fmt` for formatting, except for generated files,
+  which keep their generator's layout: `tests/test262_data.zig`
+  (`scripts/gen_test262_data.py`) is marked `linguist-generated` in `.gitattributes`.
+  Format the files you touch, not `tests/*.zig` wholesale.
 - 4-space indentation (enforced by `zig fmt`)
 - No trailing whitespace
 

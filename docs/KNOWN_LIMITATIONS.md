@@ -514,6 +514,8 @@ pattern and subject (not bugs introduced by F1):
 - **248: D6** (a subject with an astral character matched without `u`: `.`
   consumes the whole code point instead of one UTF-16 code unit). Fixed by
   F3 (abstract Subject, WTF-8/UTF-16).
+- *(F3d reclassified these: the 248 were counted by condition, not by cause; 106 were
+  D6 alone and 142 are quantifier iteration semantics too. See "F3d" below.)*
 - **394: quantifier iteration semantics**, all on patterns with a quantified
   group: an iteration that matches empty is accepted where ECMA-262 discards
   it (`(a*?){1,2}` on "a" gives [0,0], V8 [0,1]), and a group's captures are
@@ -759,7 +761,8 @@ starts inside a character. That also fixes captures that were silently wrong:
   `baseline.json` is regenerated with it, and WTF-8 runs as a cross-check with its own
   `baseline-wtf8.json`; a test whose status differs between the encodings is reported case
   by case. Today both give 2848, with identical statuses.
-- **Bench, lookbehind case `(?<=\$)\d+`:** 0.54–0.55 MB/s against 0.59–0.60 at
+- **Bench, lookbehind case `(?<=\$)\d+`** *(resolved in F3d(1): back to 0.59 MB/s without
+  touching its path, which confirms code layout; closed)*: 0.54–0.55 MB/s against 0.59–0.60 at
   `35c4f79` (F3c(2)), measured interleaved. The cause is attributed to LLVM code layout:
   between `35c4f79` and the commit that already shows 0.54–0.55 the only source changes
   are `c_api.zig` (not part of the bench) and the lexer for bytes >= 0x80 (the pattern
@@ -773,6 +776,45 @@ starts inside a character. That also fixes captures that were silently wrong:
 - **Consumers:** z-string and z-interprete stay on their pinned versions (z-interprete on
   F1c); F3's changes reach them only when they move the pin. After F3d a consumer that
   doesn't set `CompileOptions.unicode` for a `u` pattern gets code-unit semantics.
+
+### F3d: code units without `u` (F3 closed)
+
+- **Semantics (D6, D12 closed):** without `u` or `v` a character is one UTF-16 code unit,
+  as in ECMA-262; with them, one code point. `/^.$/.test("😀")` is false and `/^..$/`
+  true; a lone half (`\ud83d`) matches half of a pair; a capture can hold half a pair
+  (in WTF-8 its bounds use `b+2`). Search, `findAll` and `advanceIndex` step one code unit
+  without `u` (through `b+2` in WTF-8).
+- **Pattern side:** without `u`, an astral pattern character (literal or `\u{...}`, an
+  extension) is two code units. A class range between astral characters is therefore
+  between units and, as in V8, `[😀-🙏]` without `u` is a SyntaxError (`InvalidCharRange`).
+  Astral characters in group names are not split.
+- **Harness:** test262 runs on UTF-16 subjects by default (`zig build test262`, 2856/3017);
+  `zig build test262-wtf8` runs the same on WTF-8 against `baseline-wtf8.json`, with the
+  same status for every test, as a phase-closing gate.
+- **V8 differential, reclassified.** F1's classification of the D6 divergences was by
+  condition (an astral subject without `u`), not by cause. Of the 248, 106 were pure D6
+  and are gone with F3d; 142 also have a quantified group (F4b) and are reclassified there.
+  The 7 of them whose result changed with F3d differ now only in captures: F4b alone.
+  Current numbers (`tests/differential/reference/diff-F3d.json`, UTF-16 and WTF-8
+  identical): 11,041 compared, 10,505 identical, **536 different, all quantifier
+  iteration semantics (F4b: 394 + 142)**, 17 `StepLimitExceeded`, 0 D6.
+- **2 new `StepLimitExceeded`:** without `u` an astral character is two characters, and
+  two exponential patterns reach the per-start-position step budget (D11) sooner (worst
+  start: 228,780 → 1,589,290 and 692,785 → 1,294,156 steps, over the 1,000,000 limit).
+  The semantics are right: with an unlimited budget both give no match, like V8. F6a fixes
+  them when the budget becomes per execution.
+- **Consumers:** after F3d a consumer that doesn't set `CompileOptions.unicode` (or `v`)
+  for a `u` pattern gets code-unit semantics. z-string and z-interprete stay on their
+  pins until they move them.
+
+#### Bytecode snapshot: justified changes per phase
+
+| Phase | Change | Pairs affected | Commit |
+|---|---|---|---|
+| F2b | Classes that don't fit the ASCII bitmap compile to `CHAR_SET idx` over a table (removes `MAX_CLASS_RANGES`) | baseline: the snapshot was taken after F2b (679 pairs; 699 since `0a43ff0`) | `74ac6d1` |
+| F3b | A literal above U+007F is one `CHAR32` with its code point (was one per UTF-8 byte); a raw pattern byte is `BYTE` | 73 | `39765b7` |
+| F3c | none | 0 | — |
+| F3d | Without `u`/`v` an astral pattern character is two `CHAR32`, its UTF-16 halves | 4 | `4d6aa33` |
 
 ### test262 baseline (F0b)
 

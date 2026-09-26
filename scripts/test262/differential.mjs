@@ -10,8 +10,8 @@
 // {"", i, m, s, u}. For every pattern V8 accepts, each subject is run through
 // both engines (exec from index 0, `d` flag on the V8 side for the indices),
 // and the match, every group's [start, end] and the name -> group map are
-// compared. Known deviations (D6/D7...) show up too: compare a run against a
-// reference run, not against zero.
+// compared. Known deviations show up too: compare a run against the current
+// reference (tests/differential/reference/, see README.md), not against zero.
 
 import fs from 'node:fs';
 import path from 'node:path';
