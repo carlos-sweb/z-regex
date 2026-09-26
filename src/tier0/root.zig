@@ -10,13 +10,18 @@ const ir = @import("ir");
 pub const hir = ir.hir;
 pub const program = @import("program.zig");
 pub const compile_mod = @import("compile.zig");
+pub const pikevm = @import("pikevm.zig");
 
 pub const Program = program.Program;
 pub const Ineligible = compile_mod.Ineligible;
 pub const check = compile_mod.check;
 pub const compile = compile_mod.compile;
+pub const VmScratch = pikevm.VmScratch;
+pub const exec = pikevm.exec;
+pub const existsAnchoredMatch = pikevm.existsAnchoredMatch;
 
 test {
     _ = program;
     _ = compile_mod;
+    _ = pikevm;
 }

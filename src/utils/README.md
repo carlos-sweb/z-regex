@@ -12,6 +12,7 @@ Provides common utilities used across multiple modules.
 - **BitSet**: Bit set for fast character lookups
 - **Pool**: Object pooling for performance
 - **Debug**: Debug utilities (dumpers, formatters)
+- **Budget**: Step budget shared between executors (T2 → T0 delegation, F4a)
 
 ## Files
 
@@ -20,6 +21,7 @@ Provides common utilities used across multiple modules.
 - `bittable.zig` - Fixed-size bit table (used for character class opcodes)
 - `pool.zig` - Object pool
 - `debug.zig` - Debug utilities
+- `budget.zig` - Step budget
 - `utils_tests.zig` - Test aggregation
 
 ## Usage

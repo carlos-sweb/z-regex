@@ -356,3 +356,6 @@ test {
 test {
     _ = @import("code_unit_tests.zig");
 }
+test {
+    _ = @import("t0_tests.zig");
+}

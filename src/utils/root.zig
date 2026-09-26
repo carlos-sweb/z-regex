@@ -6,9 +6,11 @@ pub const bittable = @import("bittable.zig");
 pub const pool = @import("pool.zig");
 pub const debug = @import("debug.zig");
 pub const config = @import("config.zig");
+pub const budget = @import("budget.zig");
 
 test {
     _ = @import("utils_tests.zig");
     _ = bittable;
     _ = config;
+    _ = budget;
 }
