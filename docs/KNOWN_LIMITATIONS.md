@@ -614,8 +614,11 @@ the code space), which dominate run time:
   accepts). See `docs/REGEX_TIERS_PLAN.md` §2.3.
 - The recursive matcher bounds recursion depth, not stack bytes (D14): some
   patterns (e.g. `/<body.*>((.*\n?)*?)<\/body>/i`) crash on a 1 MiB native
-  stack and pass on 8 MiB. The harness uses 8 MiB; F6a's explicit stack
-  addresses it.
+  stack and pass on 8 MiB. Measured in F0d: the adversarial `(a+)+b` and
+  `(a|aa)*c` on 41 bytes segfault with 1 MiB of stack and return
+  `StepLimitExceeded` in 44-48 ms with 8 MiB. **The caller's stack is the
+  line between answering and crashing.** The harness uses 8 MiB; F6a's
+  explicit stack addresses it.
 - Per-phase breakdown of the non-passing entries:
   `node scripts/test262/categorize.mjs` (explicit rules, no unclassified
   entries at this baseline): F1 115, F3 12, F5 122, F6a 2, F6b 18, and 15
