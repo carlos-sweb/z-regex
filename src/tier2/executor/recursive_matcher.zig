@@ -256,7 +256,13 @@ pub const RecursiveMatcher = struct {
                 return self.matchFrom(pc + inst.size, d.pos);
             },
 
-            .BYTE, .CHAR_RANGE, .CHAR_RANGE_INV, .CHAR_CLASS, .CHAR_CLASS_INV => {
+            .CHAR_RANGE, .CHAR_RANGE_INV, .CHAR_CLASS, .CHAR_CLASS_INV => {
+                const d = self.decodeAt(pos) orelse return MatchResult{ .matched = false, .end_pos = pos };
+                if (!try self.charMatches(inst, pc, d)) return MatchResult{ .matched = false, .end_pos = pos };
+                return self.matchFrom(pc + inst.size, d.pos);
+            },
+
+            .BYTE => {
                 const r = try self.matchSingleInstruction(inst, pc, pos);
                 if (!r.matched) return MatchResult{ .matched = false, .end_pos = pos };
                 return self.matchFrom(pc + inst.size, r.end_pos);
@@ -611,6 +617,25 @@ pub const RecursiveMatcher = struct {
         return self.matchFrom(pc + inst_size, d.pos);
     }
 
+    /// Whether the decoded character `d` matches a single-character
+    /// instruction (CHAR32, dot, CHAR_RANGE/CHAR_CLASS and their `_INV`).
+    inline fn charMatches(self: *const Self, inst: Instruction, pc: usize, d: Decoded) MatchError!bool {
+        const c = d.value;
+        return switch (inst.opcode) {
+            .CHAR32 => !d.invalid and c == inst.operands[0],
+            .CHAR => !isLineTerminator(c),
+            .CHAR_ANY => true,
+            .CHAR_RANGE => c >= inst.operands[0] and c <= inst.operands[1],
+            .CHAR_RANGE_INV => c < inst.operands[0] or c > inst.operands[1],
+            .CHAR_CLASS, .CHAR_CLASS_INV => blk: {
+                if (pc + 33 > self.bytecode.len) return error.UnexpectedEndOfBytecode;
+                const in_class = inBitTable(self.bytecode[pc + 1 ..][0..32], c);
+                break :blk if (inst.opcode == .CHAR_CLASS) in_class else !in_class;
+            },
+            else => unreachable,
+        };
+    }
+
     /// Whether `c` is in a CHAR_CLASS(_INV) bit table (bits 0-255; the
     /// generator only sets ASCII bits).
     fn inBitTable(table: *const [32]u8, c: u32) bool {
@@ -870,20 +895,7 @@ pub const RecursiveMatcher = struct {
 
             .CHAR32, .CHAR, .CHAR_ANY, .CHAR_RANGE, .CHAR_RANGE_INV, .CHAR_CLASS, .CHAR_CLASS_INV => {
                 const d = self.decodeAt(pos) orelse return .{ .matched = false, .end_pos = pos };
-                const c = d.value;
-                const matched = switch (inst.opcode) {
-                    .CHAR32 => !d.invalid and c == inst.operands[0],
-                    .CHAR => !isLineTerminator(c),
-                    .CHAR_ANY => true,
-                    .CHAR_RANGE => c >= inst.operands[0] and c <= inst.operands[1],
-                    .CHAR_RANGE_INV => c < inst.operands[0] or c > inst.operands[1],
-                    .CHAR_CLASS, .CHAR_CLASS_INV => blk: {
-                        if (pc + 33 > self.bytecode.len) return error.UnexpectedEndOfBytecode;
-                        const in_class = inBitTable(self.bytecode[pc + 1 ..][0..32], c);
-                        break :blk if (inst.opcode == .CHAR_CLASS) in_class else !in_class;
-                    },
-                    else => unreachable,
-                };
+                const matched = try self.charMatches(inst, pc, d);
                 return .{ .matched = matched, .end_pos = if (matched) d.pos else pos };
             },
 
