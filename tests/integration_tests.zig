@@ -353,3 +353,6 @@ test {
 test {
     _ = @import("differential.zig");
 }
+test {
+    _ = @import("code_unit_tests.zig");
+}

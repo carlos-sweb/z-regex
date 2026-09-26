@@ -15,6 +15,7 @@ const nextSearchStart = RecursiveMatcher.nextSearchStart;
 pub const Scratch = recursive_mod.Scratch;
 pub const ExecOptions = recursive_mod.ExecOptions;
 const Subject = @import("subject").Subject;
+const Mode = @import("subject").Mode;
 
 /// What `Matcher.exec` can fail with: the matcher's errors, an `index`
 /// that isn't a position of the subject (F3a: inside a character), and
@@ -110,6 +111,9 @@ pub const Matcher = struct {
     capture_slots: usize = 1,
     /// The program's CharSet table (`CompileResult.charsets`, F2b).
     charsets: []const CharSet = &.{},
+    /// Code units or code points (`CompileResult.mode`, F3d). Bytecode
+    /// without a `CompileResult` (`init`) keeps the pre-F3d code points.
+    mode: Mode = .code_point,
 
     const Self = @This();
 
@@ -147,6 +151,7 @@ pub const Matcher = struct {
     pub fn initCompiled(allocator: Allocator, compiled: CompileResult) Self {
         var m = Self.initWithGroups(allocator, compiled.bytecode, compiled.named_groups, compiled.group_count);
         m.charsets = compiled.charsets;
+        m.mode = compiled.mode;
         return m;
     }
 
@@ -176,9 +181,10 @@ pub const Matcher = struct {
 
         var m = try RecursiveMatcherFor(Unit).initScratch(self.bytecode, input, limits, self.capture_slots, scratch);
         m.charsets = self.charsets;
+        m.mode = self.mode;
         defer m.releaseScratch(scratch);
         var pos = index;
-        while (pos <= input.len) : (pos = subject.advanceIndex(.code_point, pos)) {
+        while (pos <= input.len) : (pos = subject.advanceIndex(self.mode, pos)) {
             if (pos != index) m.reset();
             const r = try m.matchFrom(0, pos);
             if (r.matched) {
@@ -285,7 +291,7 @@ pub const Matcher = struct {
             // Advance past this match; after an empty match, step over one
             // character to avoid an infinite loop.
             pos = match_result.end;
-            if (match_result.end == match_result.start) pos = nextSearchStart(input, pos);
+            if (match_result.end == match_result.start) pos = subjectOf(u8, input).advanceIndex(self.mode, pos);
         }
 
         return matches;

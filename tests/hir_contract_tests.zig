@@ -3,6 +3,8 @@
 //! bytecode follows `encoding_hint`, so the two must agree: for a pattern that
 //! lowers to one char_set node, `set.contains(cp)` must equal "the compiled
 //! program matches the encoding of cp at position 0 and consumes all of it".
+//! F3d: without `u` a character is a UTF-16 code unit, so for a code point
+//! above U+FFFF the check is on its lead half (see `check`).
 
 const std = @import("std");
 const zregex = @import("zregex");
@@ -30,6 +32,7 @@ fn check(pattern: []const u8, flags: []const u8) !void {
     var lexer = zregex.Lexer.init(pattern);
     lexer.unicode_mode = u;
     lexer.v_mode = has(flags, 'v');
+    lexer.code_units = !u;
     var parser = try zregex.Parser.init(a, &lexer);
     defer parser.deinit();
     const ast = try parser.parse();
@@ -61,12 +64,18 @@ fn check(pattern: []const u8, flags: []const u8) !void {
             break :blk enc[0..3];
         } else enc[0 .. std.unicode.utf8Encode(@intCast(p), &enc) catch unreachable];
         const m = try re.findAt(input, 0);
+        // Without `u` (F3d) a code point above U+FFFF is two characters, its
+        // UTF-16 halves: the node matches its lead half alone (the WTF-8
+        // position b+2) exactly when the set holds the lead.
+        const astral_units = !u and p > 0xFFFF;
+        const unit = if (astral_units) 0xD800 + ((p - 0x10000) >> 10) else p;
+        const end = if (astral_units) 2 else input.len;
         const matched = if (m) |x| blk: {
             defer x.deinit();
-            break :blk x.start == 0 and x.end == input.len;
+            break :blk x.start == 0 and x.end == end;
         } else false;
-        if (matched != set.contains(p)) {
-            std.debug.print("\n/{s}/{s} U+{X:0>4}: matcher {}, HIR set {} (hint {s})\n", .{ pattern, flags, p, matched, set.contains(p), @tagName(body.char_set.encoding_hint) });
+        if (matched != set.contains(unit)) {
+            std.debug.print("\n/{s}/{s} U+{X:0>4} (unit {X:0>4}): matcher {}, HIR set {} (hint {s})\n", .{ pattern, flags, p, unit, matched, set.contains(unit), @tagName(body.char_set.encoding_hint) });
             return error.TestUnexpectedResult;
         }
     }

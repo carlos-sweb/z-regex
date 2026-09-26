@@ -208,8 +208,9 @@ test "an escaped lone surrogate is its WTF-8 sequence, not a literal 'u'" {
         try expectMatch("[\\udc00-\\udfff]", opts, "\xED\xB0\x80", "\xED\xB0\x80");
         try expectMatch("\\ud800", opts, "ud800", null);
     }
-    // Without `u` the pair is two code units (not combined, D6).
-    try expectMatch("\\ud834\\udf06", annex_b, "\xF0\x9D\x8C\x86", null);
+    // Without `u` the escapes are two code units, which match the two
+    // halves of the subject's pair (F3d, D6; V8: /\ud834\udf06/.test("𝌆")).
+    try expectMatch("\\ud834\\udf06", annex_b, "\xF0\x9D\x8C\x86", "\xF0\x9D\x8C\x86");
 }
 
 // --- D12 (start positions): a search never starts inside a character ---
@@ -263,11 +264,13 @@ test "\\s and \\S follow ECMA-262 WhiteSpace + LineTerminator, standalone and in
             try expectMatch("^[^\\s]$", opts, ws, null);
         }
         for (not_whitespace) |c| {
+            // Without `u` an astral character (💚) is two characters (F3d).
+            const one: ?[]const u8 = if (opts.unicode or c.len < 4) c else null;
             try expectMatch("^\\s$", opts, c, null);
             try expectMatch("^[\\s]$", opts, c, null);
-            try expectMatch("^\\S$", opts, c, c);
-            try expectMatch("^[\\S]$", opts, c, c);
-            try expectMatch("^[^\\s]$", opts, c, c);
+            try expectMatch("^\\S$", opts, c, one);
+            try expectMatch("^[\\S]$", opts, c, one);
+            try expectMatch("^[^\\s]$", opts, c, one);
         }
     }
 }
@@ -276,8 +279,10 @@ test "negated shorthands in a class cover every code point, not just 0-255" {
     for ([_]zregex.CompileOptions{ annex_b, u }) |opts| {
         // Before F1a these missed everything above U+00FF.
         for ([_][]const u8{ "\xE2\x82\xAC", "\xF0\x9F\x92\x9A", "\xEF\xBB\xBF" }) |c| {
-            try expectMatch("^[\\D]$", opts, c, c);
-            try expectMatch("^[\\W]$", opts, c, c);
+            // Without `u` an astral character is two characters (F3d).
+            const one: ?[]const u8 = if (opts.unicode or c.len < 4) c else null;
+            try expectMatch("^[\\D]$", opts, c, one);
+            try expectMatch("^[\\W]$", opts, c, one);
         }
         try expectMatch("^[\\s\\S]+$", opts, "a \xE2\x82\xAC\n", "a \xE2\x82\xAC\n");
         try expectMatch("^[\\s\\d\\w-]+$", opts, "a-1\xC2\xA0", "a-1\xC2\xA0");

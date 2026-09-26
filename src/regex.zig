@@ -181,11 +181,10 @@ pub const Regex = struct {
     }
 
     /// AdvanceStringIndex: the position after the character at `index`
-    /// (`index + 1` at or past the end). Until F3d every pattern steps one
-    /// code point, as before F3.
+    /// (`index + 1` at or past the end): one code unit for a pattern
+    /// without `u`/`v`, one code point with it (F3d).
     pub fn advanceIndex(self: Self, subject: Subject, index: usize) usize {
-        _ = self;
-        return subject.advanceIndex(.code_point, index);
+        return subject.advanceIndex(self.compiled.mode, index);
     }
 
     /// Replace the first match with `replacement` (JS `String.prototype.replace`
@@ -1691,7 +1690,18 @@ test "Regex: dot consumes one Unicode scalar value, not one byte" {
         try std.testing.expect(!try re.test_("\u{E9}")); // one character, not two
     }
     {
+        // Without `u` an astral character is two code units (F3d, D6), as
+        // in V8: `/^.$/.test("😀")` is false, `/^..$/` true.
         var re = try Regex.compile(allocator, "^.$");
+        defer re.deinit();
+        try std.testing.expect(!try re.test_("\u{1F600}"));
+        var two = try Regex.compile(allocator, "^..$");
+        defer two.deinit();
+        try std.testing.expect(try two.test_("\u{1F600}"));
+    }
+    {
+        // With `u`, one code point.
+        var re = try Regex.compileWithOptions(allocator, "^.$", .{ .unicode = true });
         defer re.deinit();
         try std.testing.expect(try re.test_("\u{1F600}")); // emoji, 4 bytes
     }
@@ -1929,7 +1939,10 @@ test "Regex: unknown named backreference is rejected" {
 test "Regex: character class range with multi-byte endpoints" {
     const allocator = std.testing.allocator;
 
-    var re = try Regex.compile(allocator, "[\u{1F600}-\u{1F64F}]");
+    // Without `u` the range is between code units, `\ude00-\ud83d`: out of
+    // order, a SyntaxError as in V8 (F3d).
+    try std.testing.expectError(error.InvalidCharRange, Regex.compile(allocator, "[\u{1F600}-\u{1F64F}]"));
+    var re = try Regex.compileWithOptions(allocator, "[\u{1F600}-\u{1F64F}]", .{ .unicode = true });
     defer re.deinit();
     try std.testing.expect(try re.test_("\u{1F600}")); // range start
     try std.testing.expect(try re.test_("\u{1F64F}")); // range end
@@ -1950,7 +1963,8 @@ test "Regex: character class mixing ASCII and multi-byte members" {
 test "Regex: negated character class with multi-byte range" {
     const allocator = std.testing.allocator;
 
-    var re = try Regex.compile(allocator, "^[^\u{1F600}-\u{1F64F}]$");
+    try std.testing.expectError(error.InvalidCharRange, Regex.compile(allocator, "^[^\u{1F600}-\u{1F64F}]$"));
+    var re = try Regex.compileWithOptions(allocator, "^[^\u{1F600}-\u{1F64F}]$", .{ .unicode = true });
     defer re.deinit();
     try std.testing.expect(try re.test_("a"));
     try std.testing.expect(!try re.test_("\u{1F600}"));
@@ -1980,7 +1994,8 @@ test "Regex: a class with many non-ASCII members compiles and matches each one (
     // Before F2b the fixed range table held 30 ranges (error.TooManyRanges).
     const allocator = std.testing.allocator;
     var buf: [1024]u8 = undefined;
-    var re = try Regex.compile(allocator, buildSpacedClass(&buf, 0x1F600, 100, 2));
+    // Astral members are code points only with `u` (F3d).
+    var re = try Regex.compileWithOptions(allocator, buildSpacedClass(&buf, 0x1F600, 100, 2), .{ .unicode = true });
     defer re.deinit();
     try std.testing.expectEqual(@as(usize, 1), re.compiled.charsets.len);
     try std.testing.expectEqual(@as(usize, 100), re.compiled.charsets[0].ranges.len);
@@ -2874,7 +2889,8 @@ test "Regex: expanded Unicode binary properties (Hex_Digit, Dash, Math, Quotatio
 test "Regex: \\p{Emoji} matches a real emoji codepoint, not ASCII text" {
     const allocator = std.testing.allocator;
 
-    var re = try Regex.compile(allocator, "\\p{Emoji}");
+    // With `u`: an astral code point is one character only there (F3d).
+    var re = try Regex.compileWithOptions(allocator, "\\p{Emoji}", .{ .unicode = true });
     defer re.deinit();
 
     const input = "a\u{1F600}b"; // a + GRINNING FACE + b

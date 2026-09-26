@@ -18,6 +18,7 @@ const CharSet = @import("ir").charset.CharSet;
 const subject_mod = @import("subject");
 const Subject = subject_mod.Subject;
 const Decoded = subject_mod.Decoded;
+const Mode = subject_mod.Mode;
 
 const Opcode = opcodes.Opcode;
 const Instruction = format.Instruction;
@@ -169,6 +170,11 @@ pub fn RecursiveMatcherFor(comptime Unit: type) type {
         /// then `releaseScratch` hands them back instead of `deinit` freeing
         /// them.
         borrowed: bool = false,
+        /// What one character is (F3d): a code unit for a pattern without
+        /// `u`/`v`, a code point with it (`CompileResult.mode`). Only
+        /// surrogates and astral characters decode differently, so the
+        /// inline ASCII path doesn't depend on it.
+        mode: Mode = .code_point,
 
         const Self = @This();
 
@@ -694,12 +700,12 @@ pub fn RecursiveMatcherFor(comptime Unit: type) type {
         /// character, and never next to a `b+2` position.
         inline fn decodeAt(self: *const Self, pos: usize) ?Decoded {
             if (pos < self.input.len and isSingle(self.input[pos])) return .{ .value = self.input[pos], .pos = pos + 1 };
-            return self.subject().decodeAt(.code_point, pos);
+            return self.subject().decodeAt(self.mode, pos);
         }
 
         inline fn decodeBefore(self: *const Self, pos: usize) ?Decoded {
             if (pos > 0 and pos <= self.input.len and isSingle(self.input[pos - 1])) return .{ .value = self.input[pos - 1], .pos = pos - 1 };
-            return self.subject().decodeBefore(.code_point, pos);
+            return self.subject().decodeBefore(self.mode, pos);
         }
 
         /// Where the next search start after `pos` is: one whole character

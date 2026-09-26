@@ -832,8 +832,15 @@ test "zregex_exec_wtf8 / zregex_exec_utf16 agree and report errors (F3c)" {
     try std.testing.expectEqualStrings("InvalidIndex", std.mem.span(zregex_last_error_name()));
     try std.testing.expectEqual(@as(c_int, -1), zregex_exec_wtf8(re, w.ptr, w.len, 0, false, &slots, 3));
     try std.testing.expectEqualStrings("SlotsTooSmall", std.mem.span(zregex_last_error_name()));
-    try std.testing.expectEqual(@as(usize, 5), zregex_advance_index_wtf8(re, w.ptr, w.len, 1));
-    try std.testing.expectEqual(@as(usize, 3), zregex_advance_index_utf16(re, &u, u.len, 1));
+    // Without `u` one code unit (b+2 in WTF-8, F3d); with `u` one code point.
+    try std.testing.expectEqual(@as(usize, 3), zregex_advance_index_wtf8(re, w.ptr, w.len, 1));
+    try std.testing.expectEqual(@as(usize, 2), zregex_advance_index_utf16(re, &u, u.len, 1));
+    var uopts = zregex_default_options();
+    uopts.unicode = true;
+    const re_u = zregex_compile("(b)|x", &uopts).?;
+    defer zregex_free(re_u);
+    try std.testing.expectEqual(@as(usize, 5), zregex_advance_index_wtf8(re_u, w.ptr, w.len, 1));
+    try std.testing.expectEqual(@as(usize, 3), zregex_advance_index_utf16(re_u, &u, u.len, 1));
     try std.testing.expectEqual(@as(c_int, 0), zregex_exec_utf16(re, &u, u.len, 5, false, &slots, slots.len));
     // No group taking part is NO_CAPTURE.
     const x = "x";

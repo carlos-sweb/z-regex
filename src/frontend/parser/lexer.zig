@@ -207,6 +207,19 @@ pub const Lexer = struct {
     /// `.class_minus_minus`/`.class_and_and`.
     v_mode: bool = false,
 
+    /// Set by `lower.Frontend` for a pattern without `u` or `v` (F3d): a
+    /// pattern character above U+FFFF is two UTF-16 code units there, so it
+    /// is returned as two tokens, its lead and its trail surrogate. The
+    /// point between them is `pos` = `b+2` of the 4-byte sequence at `b`
+    /// (the `subject` module's convention), so `rewindTo` needs no extra
+    /// state. Separate from `unicode_mode`, which the parser switches off
+    /// for its lookahead after `[` and a nested `]`.
+    code_units: bool = false,
+
+    /// The trail half still to return after a `\u{...}` escape above U+FFFF
+    /// in `code_units` mode (0: none). Cleared by `rewindTo`.
+    pending_trail: u16 = 0,
+
     /// First quantifier this lexer accepted whose current meaning is known
     /// to deviate from ECMA-262 (see `QuantifierDeviation`), and where it
     /// starts. Pure instrumentation for `analysis/classify.zig`: tokenization
@@ -296,6 +309,7 @@ pub const Lexer = struct {
     /// or after it -- it belonged to a token that is being discarded.
     pub fn rewindTo(self: *Self, pos: usize) void {
         self.pos = pos;
+        self.pending_trail = 0;
         if (self.deviation != null and self.deviation_pos >= pos) self.deviation = null;
     }
 
@@ -308,6 +322,7 @@ pub const Lexer = struct {
 
     /// Get the next token
     pub fn next(self: *Self) !Token {
+        if (self.pending_trail != 0) return self.takePendingTrail();
         if (self.in_char_class) {
             return self.nextInClass();
         }
@@ -483,6 +498,18 @@ pub const Lexer = struct {
     /// before, it fell back to three raw bytes, which only a WTF-8 subject
     /// can match.
     fn literalMultibyteToken(self: *Self, c: u8, start_pos: usize) Token {
+        if (self.code_units) {
+            // The trail half of an astral character whose lead was the
+            // previous token (see `code_units`).
+            if (self.pos >= 2 and c & 0xC0 == 0x80) if (self.astralAt(self.pos - 2)) |cp| {
+                self.pos += 2;
+                return surrogateToken(0xDC00 + ((cp - 0x10000) & 0x3FF), start_pos);
+            };
+            if (self.astralAt(self.pos)) |cp| {
+                self.pos += 2;
+                return surrogateToken(0xD800 + ((cp - 0x10000) >> 10), start_pos);
+            }
+        }
         const seq_len = std.unicode.utf8ByteSequenceLength(c) catch {
             self.pos += 1;
             return Token.char_token(c, start_pos);
@@ -503,12 +530,28 @@ pub const Lexer = struct {
         }
     }
 
+    /// The astral character whose 4-byte sequence starts at `i`, if any.
+    fn astralAt(self: *const Self, i: usize) ?u21 {
+        if (i + 4 > self.pattern.len) return null;
+        const bytes = self.pattern[i..][0..4];
+        if ((std.unicode.utf8ByteSequenceLength(bytes[0]) catch 0) != 4) return null;
+        return std.unicode.utf8Decode(bytes) catch null;
+    }
+
+    /// A lone surrogate as a character token (its 3-byte WTF-8 form).
+    fn surrogateToken(unit: u21, start_pos: usize) Token {
+        var buf: [4]u8 = undefined;
+        const n = std.unicode.wtf8Encode(unit, &buf) catch unreachable;
+        return Token.multibyteChar(buf, @intCast(n), start_pos);
+    }
+
     /// Tokenize while inside `[...]`: most metacharacters are literal here.
     /// Only `]` (end of class), `-` (range separator), and `\` (escape
     /// introducer) keep special meaning; `^` was already handled by the
     /// parser before entering class mode (it's only a negation marker at
     /// the very start of the class).
     fn nextInClass(self: *Self) !Token {
+        if (self.pending_trail != 0) return self.takePendingTrail();
         if (self.pos >= self.pattern.len) {
             return Token.simple(.eof, self.pos);
         }
@@ -1087,7 +1130,7 @@ pub const Lexer = struct {
                 self.pos < self.pattern.len and self.pattern[self.pos] == '}')
             {
                 self.pos += 1;
-                return codepointToken(value, start_pos);
+                return self.escapeValueToken(value, start_pos);
             }
             if (self.unicode_mode) return error.InvalidEscape;
             self.pos = brace_start;
@@ -1148,9 +1191,28 @@ pub const Lexer = struct {
     /// Peek at the next token without consuming it
     pub fn peek(self: *Self) !Token {
         const saved_pos = self.pos;
+        const saved_trail = self.pending_trail;
         const token = try self.next();
         self.pos = saved_pos;
+        self.pending_trail = saved_trail;
         return token;
+    }
+
+    fn takePendingTrail(self: *Self) Token {
+        const unit = self.pending_trail;
+        self.pending_trail = 0;
+        return surrogateToken(unit, self.pos);
+    }
+
+    /// `codepointToken` for an escape's value; in `code_units` mode a value
+    /// above U+FFFF is its lead half now and its trail half as the next
+    /// token (F3d).
+    fn escapeValueToken(self: *Self, value: u32, start_pos: usize) Token {
+        if (self.code_units and value > 0xFFFF) {
+            self.pending_trail = @intCast(0xDC00 + ((value - 0x10000) & 0x3FF));
+            return surrogateToken(@intCast(0xD800 + ((value - 0x10000) >> 10)), start_pos);
+        }
+        return codepointToken(value, start_pos);
     }
 
     /// Check if we're at end of pattern

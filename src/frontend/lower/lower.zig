@@ -64,6 +64,7 @@ pub const Frontend = struct {
         self.lexer = Lexer.init(pattern);
         self.lexer.unicode_mode = lex.unicode;
         self.lexer.v_mode = lex.v;
+        self.lexer.code_units = !(lex.unicode or lex.v);
         self.lexer.possessive = lex.possessive;
 
         self.parser = try Parser.init(gpa, &self.lexer);
@@ -473,6 +474,7 @@ fn expectLowered(pattern: []const u8, options: TestOptions, expected: []const u8
     var lexer = Lexer.init(pattern);
     lexer.unicode_mode = options.unicode or options.v;
     lexer.v_mode = options.v;
+    lexer.code_units = !(options.unicode or options.v);
     lexer.possessive = options.possessive;
     var parser = try Parser.init(a, &lexer);
     defer parser.deinit();
