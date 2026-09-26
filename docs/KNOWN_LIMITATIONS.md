@@ -5,7 +5,8 @@ zregex regex engine. Every claim below was checked by direct execution against t
 current source tree (compiling small probe programs against the `zregex` module and
 observing the actual result), not inferred from design docs or past status reports.
 
-## Version: 402/402 unit/integration tests passing, 168/168 (100%) on a test262-derived
+## Version: 0.2.0 (F1 closed: test262 2846/3017, see "F1 closed" below). The rest of this
+header describes the earlier state: 402/402 unit/integration tests passing, 168/168 (100%) on a test262-derived
 conformance sample (Phases 0, 1, 2 (now including duplicate named groups across
 mutually exclusive alternation branches, e.g. `(?<x>a)|(?<x>b)`, matching JS exactly),
 3 (including `\p{...}` General_Category support, 50 binary properties incl.
@@ -503,6 +504,45 @@ of what this harness currently checks," not "0 known JS RegExp incompatibilities
 unblocked-but-not-yet-implemented items in the summary table below (`\p{...}`, case
 folding, `u`/`v` flags, `$1`/`$&` in `replace`) are real gaps this sample doesn't exercise.
 
+### F1 closed (v0.2.0)
+
+**test262: 2846/3017** (F0b baseline: 2733; F1's target was 2838), with no
+regression at any step. F1 closed deviations D1-D5, D8, D9, D13 and D16 of
+`docs/REGEX_TIERS_PLAN.md` §2.3 (see "Behavior changes in F1" below for what
+changes for callers). No test262 entry is attributed to F1 any more; what is
+left is F3 (10, D6), F5 (122, Unicode tables), F6a (2), F6b (18, lookbehind)
+and 19 host-side entries.
+
+**Known divergences from V8 (`zig build differential-v8`, seed 0xf1c, 4000
+generated patterns):** 11,043 comparisons, 10,401 identical, 642 different,
+15 `StepLimitExceeded`, 0 crashes, 0 rejections. The 642, classified by
+pattern and subject (not bugs introduced by F1):
+- **248: D6** (a subject with an astral character matched without `u`: `.`
+  consumes the whole code point instead of one UTF-16 code unit). Fixed by
+  F3 (abstract Subject, WTF-8/UTF-16).
+- **394: quantifier iteration semantics**, all on patterns with a quantified
+  group: an iteration that matches empty is accepted where ECMA-262 discards
+  it (`(a*?){1,2}` on "a" gives [0,0], V8 [0,1]), and a group's captures are
+  not cleared at the start of each iteration. 326 differ only in captures,
+  68 in the overall match too. Fixed by F4b (spec RepeatMatcher).
+
+**Skipped tests:** `zig build test` skips 3 tests in Debug and 1 in
+ReleaseSafe. Only two tests are skipped in source: D15 (`()\1{1000}`, until
+F6a) and "MAX_NESTING_DEPTH levels fit in a 1 MiB stack", which skips in
+Debug only (until F2) and is counted twice because `src/parser/parser.zig`
+is compiled into two test binaries (the library's and the C API's). So
+Debug = D15 + 2x nesting, ReleaseSafe = D15.
+
+**PatternTooLarge:** compiled bytecode is capped at `MAX_PROGRAM_BYTES` =
+16 MiB (`src/codegen/generator.zig`); a larger program is
+`error.PatternTooLarge`. Counted repeats are unrolled, so nested counts
+multiply (`(?:a{65536}){65536}` would be 2^32 copies). The value is measured:
+`a{65536}`, the largest single-atom repeat, is 320 KiB, so the cap holds 51
+of them (`(?:a{65536}){51}` compiles, `{52}` doesn't, tested), and a program
+at the cap compiles in ~124 ms in ReleaseSafe (~400 ms in Debug); the i32
+jump-offset limit is 128x higher. F5's counted loops (D10) remove the
+unrolling.
+
 ### test262 baseline (F0b)
 
 The real test262 measurement that replaces the sample above as the semantic
@@ -611,10 +651,10 @@ the code space), which dominate run time:
   `\p{}` logic (tracked in F5 with pinning the Unicode version).
 - Known ECMA-262 deviations of the parser/matcher show up as expected:
   non-`u` `.` consuming a whole supplementary character and lone surrogate
-  halves (D6), lookbehind (D7), and Annex B forms (`\8`, `\1` without groups,
-  lone `]`, `\k<a>` without named groups, `[\12-\14]`, until F1b). Escaped
-  surrogate pairs under `u` (D13) and the `u`-mode parse-negative tests were
-  fixed in F1a (see "Behavior changes in F1" below). See
+  halves (D6) and lookbehind (D7). The rest of what this baseline showed
+  (Annex B forms, escaped surrogate pairs under `u` (D13), the `u`-mode
+  parse-negative tests, group names, deep nesting) was fixed in F1 (see
+  "F1 closed" above and "Behavior changes in F1" below). See
   `docs/REGEX_TIERS_PLAN.md` §2.3.
 - The recursive matcher bounds recursion depth, not stack bytes (D14): some
   patterns (e.g. `/<body.*>((.*\n?)*?)<\/body>/i`) crash on a 1 MiB native

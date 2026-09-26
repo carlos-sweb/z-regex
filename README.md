@@ -367,6 +367,6 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 
 **Made with ❤️ using Zig**
 
-**Version**: 0.1.0
+**Version**: 0.2.0
 **Status**: Active Development
 **Zig Version**: 0.16.0+
