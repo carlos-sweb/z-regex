@@ -562,6 +562,16 @@ with set algebra, and to `CHAR_SET`/`CHAR_SET_INV idx:u32` in the bytecode.
   patterns (the test corpora plus 2,453 random classes, flags `""`/`i`/`u`/`v`/`iu`/`iv`)
   and 20.8 M code point checks found 0 differences; 25 of those patterns used to be
   rejected by the old caps and now compile.
+- **Performance** (median of 10 `zig build bench` runs each, F2b against `main`): no
+  case is slower beyond the bench's resolution. `[\p{L}--\p{Lu}] /v` matches 7 %
+  faster (one lookup instead of two operand evaluations) but compiles in ~11.5 µs
+  instead of ~0.7 µs, since the operation is now computed at compile time; every other
+  case is within -4.3 %..+2.7 %, at the noise floor.
+- **Bench resolution on this machine.** A single run varies by up to 33 % between runs
+  of the same code (median spread 9 %), so one run can't judge a 20 % criterion. The
+  median of 10 runs is stable: splitting the 10 runs into two halves, their medians
+  differ by at most 2.0 % (`main`) and 4.6 % (F2b). Comparisons therefore use medians
+  of 10 runs, and differences under ~5 % get no verdict.
 
 ### test262 baseline (F0b)
 
