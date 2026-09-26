@@ -618,7 +618,11 @@ the code space), which dominate run time:
   `(a|aa)*c` on 41 bytes segfault with 1 MiB of stack and return
   `StepLimitExceeded` in 44-48 ms with 8 MiB. **The caller's stack is the
   line between answering and crashing.** The harness uses 8 MiB; F6a's
-  explicit stack addresses it.
+  explicit stack addresses it. Worse, found by the F0d parser fuzzer: a
+  quantified empty backreference such as `()\1{1000}` costs one frame per
+  iteration and overflows even an 8 MiB stack in ReleaseSafe (`()\1{300}`
+  in Debug), so the recursion limit of 1000 doesn't protect the default
+  stack either (skipped test in `tests/regression_tests.zig` until F6a).
 - Per-phase breakdown of the non-passing entries:
   `node scripts/test262/categorize.mjs` (explicit rules, no unclassified
   entries at this baseline): F1 115, F3 12, F5 122, F6a 2, F6b 18, and 15
