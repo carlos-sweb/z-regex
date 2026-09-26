@@ -2,6 +2,7 @@
 // test262 harness for zregex (docs/REGEX_TIERS_PLAN.md, phase F0b).
 //
 //   node scripts/test262/run.mjs [--sample N] [--filter SUBSTR] [--out FILE] [--lib PATH]
+//                                [--encoding wtf8|utf16]
 //                                [--check-baseline FILE | --update-baseline FILE |
 //                                 --update-baseline-improvements FILE]
 //
@@ -19,8 +20,12 @@
 // disappeared one fails the run without writing anything. This is the
 // update used while a phase is in progress (docs/REGEX_TIERS_PLAN.md, F1).
 //
+// --encoding picks the subject encoding zregex runs on (F3c, zregex.mjs):
+// wtf8 (default until F3d) or utf16.
+//
 // Environment:
 //   ZREGEX_LIB               path to libzregex.so (default zig-out/lib/libzregex.so)
+//   ZREGEX_ENCODING          default for --encoding
 //   ZREGEX_TEST262_DIR       test262 checkout (default .test262, see fetch.sh)
 //   ZREGEX_TEST_TIMEOUT_MS   per-test timeout enforced by the parent (default 20000)
 //   ZREGEX_TEST_RECYCLE      tests per worker before it is replaced (default 1000)
@@ -60,6 +65,7 @@ if ((UPDATE || IMPROVE) && (FILTER || SAMPLE !== null)) {
 
 const TEST262 = path.resolve(process.env.ZREGEX_TEST262_DIR || path.join(repo, '.test262'));
 const LIB = path.resolve(opt('--lib', null) || process.env.ZREGEX_LIB || path.join(repo, 'zig-out/lib/libzregex.so'));
+const ENCODING = opt('--encoding', null) || process.env.ZREGEX_ENCODING || 'wtf8';
 const TIMEOUT_MS = Number(process.env.ZREGEX_TEST_TIMEOUT_MS || 20000);
 const RECYCLE = Number(process.env.ZREGEX_TEST_RECYCLE || 1000);
 const WORKERS = Number(process.env.ZREGEX_TEST_WORKERS || Math.min(os.availableParallelism(), 8));
@@ -189,7 +195,7 @@ let done = 0;
 
 function spawnWorker(slot) {
   const child = fork(path.join(here, 'worker.mjs'), [], {
-    env: { ...process.env, ZREGEX_TEST262_DIR: TEST262, ZREGEX_LIB: LIB },
+    env: { ...process.env, ZREGEX_TEST262_DIR: TEST262, ZREGEX_LIB: LIB, ZREGEX_ENCODING: ENCODING },
     execArgv: FORCE_GC ? ['--expose-gc'] : [],
     stdio: ['ignore', 'ignore', 'pipe', 'ipc'],
   });
@@ -272,6 +278,7 @@ function report() {
       test262Sha: pinnedSha,
       node: process.version,
       lib: path.relative(repo, LIB),
+      encoding: ENCODING,
       workers: WORKERS,
       timeoutMs: TIMEOUT_MS,
       recycle: RECYCLE,

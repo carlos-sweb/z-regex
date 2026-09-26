@@ -13,7 +13,19 @@ This is tooling only: the library itself has no Node dependency.
   `@@search`, `@@split`) reaches the matcher through `RegExpExec`, so V8
   supplies the language and the algorithms around matching, zregex the
   matching.
-- Strings cross the FFI as WTF-8. Offsets are mapped back to UTF-16 indices.
+- Subjects cross the FFI in one of two encodings (F3c, `--encoding` or
+  `ZREGEX_ENCODING`), through `zregex_exec_wtf8` / `zregex_exec_utf16`:
+  - `utf16`: the string's own code units; indices need no mapping.
+  - `wtf8`: WTF-8 bytes; UTF-16 indices map to byte offsets, with `b+2`
+    for the point between the two halves of a 4-byte character (the
+    `subject` module's convention), so any `lastIndex` is expressible.
+- **Default and baseline:** until F3d the default is `wtf8` and
+  `baseline.json` is measured with it; `utf16` is run by hand with the same
+  baseline. From F3d the default is `utf16` (what JS uses inside, so what a
+  real host sees), `baseline.json` is regenerated with it, and `wtf8` runs
+  as a cross-check against its own `baseline-wtf8.json`: two numbers, and
+  any test whose status differs between the encodings is reported case by
+  case.
 - Parse-phase negative tests (`negative: phase: parse`) never run: the
   regex literal is extracted and zregex must reject it.
 - A pool of child processes runs one test per IPC message, so a crash
@@ -28,6 +40,7 @@ zig build -Doptimize=ReleaseSafe               # safety checks on: bugs surface 
 node scripts/test262/run.mjs                   # full run -> zig-out/test262/results.json
 node scripts/test262/run.mjs --sample 100      # stratified, reproducible sample
 node scripts/test262/run.mjs --filter lookBehind
+node scripts/test262/run.mjs --encoding utf16  # the subject as UTF-16 (F3c)
 
 zig build test262                              # the gate: ReleaseSafe build + --check-baseline
 node scripts/test262/run.mjs --update-baseline-improvements scripts/test262/baseline.json  # record improvements only
@@ -101,10 +114,10 @@ at the cost of roughly doubling the time of the non-passing entries
 - `new RegExp(src)` with a pattern V8 rejects but zregex would accept: V8
   throws first, so the test passes without measuring zregex. Only
   parse-negative tests with an extractable literal measure rejection.
-- A non-`u` `lastIndex` between the two halves of a surrogate pair can't be
-  expressed in WTF-8 (D6): a search resumes after the pair and a sticky
-  attempt fails, so a match never starts before `lastIndex`. Tests that
-  need to match a lone half of a pair fail on this.
+- (Fixed in F3c.) A non-`u` `lastIndex` between the two halves of a
+  surrogate pair couldn't be expressed in WTF-8, so a search resumed after
+  the pair and a sticky attempt failed. With `b+2` it is a position, and
+  `Symbol.replace/coerce-unicode.js` passes in both encodings.
 - `RegExp.$1` and the other legacy statics are maintained by V8's own
   matcher, which the hook bypasses; the tests for them are `legacy-regexp`,
   which Node 22's V8 doesn't support anyway (skipped).

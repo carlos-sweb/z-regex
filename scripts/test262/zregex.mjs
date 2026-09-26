@@ -1,9 +1,12 @@
 // FFI bridge from Node to libzregex (src/c_api.zig) via koffi.
 //
 // This is the "host" side of docs/REGEX_TIERS_PLAN.md §6.4: it owns
-// everything ECMAScript-specific that zregex deliberately doesn't (UTF-16
-// strings, lastIndex, the result array is built by host-exec.js), and hands
-// zregex only WTF-8 bytes and byte offsets.
+// everything ECMAScript-specific that zregex deliberately doesn't (lastIndex,
+// the result array is built by host-exec.js). Since F3c it hands zregex the
+// subject in one of two encodings (`encoding`, ZREGEX_ENCODING):
+//   utf16  the string's own code units, indices as they are;
+//   wtf8   WTF-8 bytes, indices mapped to byte offsets (with b+2 between
+//          the two halves of a 4-byte character, see src/subject/root.zig).
 
 import koffi from 'koffi';
 
@@ -37,9 +40,10 @@ export class ZRegexOffsetError extends Error {
  * sequences; TextEncoder would replace them with U+FFFD). Also returns the
  * UTF-16 index <-> byte offset maps:
  *   unitToByte[i]  byte offset of UTF-16 index i (0..length). The second
- *                  unit of a surrogate pair maps to the start of the pair.
- *   byteToUnit[b]  UTF-16 index for a byte offset at a code point
- *                  boundary, -1 inside a multi-byte sequence.
+ *                  unit of a surrogate pair maps to b+2, the position
+ *                  between the halves of the pair's 4-byte sequence at b.
+ *   byteToUnit[b]  UTF-16 index for a byte offset that is a position, -1
+ *                  anywhere else inside a sequence.
  */
 export function encodeWtf8(str) {
   const len = str.length;
@@ -53,7 +57,7 @@ export function encodeWtf8(str) {
       const lo = str.charCodeAt(i + 1);
       if (lo >= 0xdc00 && lo <= 0xdfff) {
         cp = 0x10000 + ((cp - 0xd800) << 10) + (lo - 0xdc00);
-        unitToByte[i + 1] = b;
+        unitToByte[i + 1] = b + 2;
         i++;
       }
     }
@@ -75,8 +79,6 @@ export function encodeWtf8(str) {
   }
   unitToByte[len] = b;
   const byteToUnit = new Int32Array(b + 1).fill(-1);
-  // Walk units backwards so a surrogate pair's shared byte offset keeps the
-  // index of its first unit.
   for (let i = len; i >= 0; i--) byteToUnit[unitToByte[i]] = i;
   return { bytes: bytes.subarray(0, b), unitToByte, byteToUnit };
 }
@@ -90,7 +92,17 @@ export function encodeWtf8(str) {
  */
 const NATIVE_STACK_MIB = Number(process.env.ZREGEX_NATIVE_STACK_MB || 8);
 
-export function loadZRegex(libPath) {
+/** The UTF-16 code units of a JS string. */
+function encodeUtf16(str) {
+  const units = new Uint16Array(str.length);
+  for (let i = 0; i < str.length; i++) units[i] = str.charCodeAt(i);
+  return units;
+}
+
+const NO_CAPTURE = 0xffffffffffffffffn;
+
+export function loadZRegex(libPath, { encoding = process.env.ZREGEX_ENCODING || 'wtf8' } = {}) {
+  if (encoding !== 'wtf8' && encoding !== 'utf16') throw new Error(`unknown encoding ${encoding} (wtf8 or utf16)`);
   koffi.config({ ...koffi.config(), sync_stack_size: NATIVE_STACK_MIB * 1024 * 1024 });
   const lib = koffi.load(libPath);
   const Options = koffi.struct('ZRegexOptions', {
@@ -107,16 +119,13 @@ export function loadZRegex(libPath) {
   const fn = {
     compile: lib.func('void* zregex_compile_n(const uint8_t* p, size_t len, const ZRegexOptions* opts)'),
     free: lib.func('void zregex_free(void* re)'),
-    matchAt: lib.func('void* zregex_match_at_n(void* re, const uint8_t* s, size_t len, size_t start)'),
-    search: lib.func('void* zregex_search_n(void* re, const uint8_t* s, size_t len, size_t start)'),
+    execWtf8: lib.func('int zregex_exec_wtf8(void* re, const uint8_t* s, size_t len, size_t index, bool sticky, _Inout_ uint64_t* slots, size_t n)'),
+    execUtf16: lib.func('int zregex_exec_utf16(void* re, const uint16_t* s, size_t len, size_t index, bool sticky, _Inout_ uint64_t* slots, size_t n)'),
     groupCount: lib.func('size_t zregex_group_count(void* re)'),
     namedCount: lib.func('size_t zregex_named_group_count(void* re)'),
     namedName: lib.func('void* zregex_named_group_name(void* re, size_t i)'),
     namedIndex: lib.func('size_t zregex_named_group_index(void* re, size_t i)'),
     stringFree: lib.func('void zregex_string_free(void* s)'),
-    capStart: lib.func('size_t zregex_match_capture_start(void* m, size_t g)'),
-    capEnd: lib.func('size_t zregex_match_capture_end(void* m, size_t g)'),
-    matchFree: lib.func('void zregex_match_free(void* m)'),
     lastError: lib.func('int zregex_last_error()'),
     lastErrorName: lib.func('const char* zregex_last_error_name()'),
   };
@@ -162,14 +171,15 @@ export function loadZRegex(libPath) {
   function encodeSubject(str) {
     if (str !== lastSubject) {
       lastSubject = str;
-      lastEncoded = encodeWtf8(str);
+      lastEncoded = encoding === 'wtf8' ? encodeWtf8(str) : { units: encodeUtf16(str) };
     }
     return lastEncoded;
   }
 
-  function toUnit(enc, byteOffset) {
-    const u = byteOffset < enc.byteToUnit.length ? enc.byteToUnit[byteOffset] : -1;
-    if (u < 0) throw new ZRegexOffsetError(byteOffset);
+  function toUnit(enc, offset) {
+    if (encoding === 'utf16') return offset;
+    const u = offset < enc.byteToUnit.length ? enc.byteToUnit[offset] : -1;
+    if (u < 0) throw new ZRegexOffsetError(offset);
     return u;
   }
 
@@ -183,40 +193,15 @@ export function loadZRegex(libPath) {
     stats.execCalls++;
     const re = compile(source, flags);
     const enc = encodeSubject(subject);
-    let start = enc.unitToByte[lastIndex];
-    // A non-u lastIndex can point between the two halves of a surrogate
-    // pair, a position WTF-8 can't express (D6). A match must never start
-    // before lastIndex (or a global replace loops forever), so a search
-    // resumes after the pair and a sticky attempt fails.
-    const midPair = lastIndex > 0 && lastIndex < subject.length && start === enc.unitToByte[lastIndex - 1];
-    if (midPair) {
-      if (sticky) return null;
-      start = enc.unitToByte[lastIndex + 1];
-    }
-    const m = sticky
-      ? fn.matchAt(re.handle, enc.bytes, enc.bytes.length, start)
-      : fn.search(re.handle, enc.bytes, enc.bytes.length, start);
-    if (!m) {
-      const err = fn.lastErrorName();
-      if (err) throw new ZRegexExecError(err);
-      return null;
-    }
-    try {
-      const captures = [];
-      for (let g = 0; g <= re.groupCount; g++) {
-        // Every group the pattern has (D9, F1c: no fixed cap).
-        const s = Number(fn.capStart(m, g));
-        const e = Number(fn.capEnd(m, g));
-        if (s >= NO_CAPTURE_THRESHOLD || e >= NO_CAPTURE_THRESHOLD) {
-          captures.push(-1, -1);
-        } else {
-          captures.push(toUnit(enc, s), toUnit(enc, e));
-        }
-      }
-      return { captures, names: re.names };
-    } finally {
-      fn.matchFree(m);
-    }
+    const slots = new BigUint64Array(2 * (re.groupCount + 1));
+    const rc = encoding === 'wtf8'
+      ? fn.execWtf8(re.handle, enc.bytes, enc.bytes.length, enc.unitToByte[lastIndex], sticky, slots, slots.length)
+      : fn.execUtf16(re.handle, enc.units, enc.units.length, lastIndex, sticky, slots, slots.length);
+    if (rc < 0) throw new ZRegexExecError(fn.lastErrorName() || `code ${fn.lastError()}`);
+    if (rc === 0) return null;
+    const captures = [];
+    for (const v of slots) captures.push(v === NO_CAPTURE ? -1 : toUnit(enc, Number(v)));
+    return { captures, names: re.names };
   }
 
   function clearCache() {

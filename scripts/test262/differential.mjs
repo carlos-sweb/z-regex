@@ -30,6 +30,8 @@ const LIB = path.resolve(opt('--lib', path.join(repo, 'zig-out/lib/libzregex.so'
 const SEED = Number(opt('--seed', 0xf1c));
 const COUNT = Number(opt('--count', 4000));
 const OUT = path.resolve(opt('--out', path.join(repo, 'zig-out/differential/results.json')));
+// Subject encoding for zregex (F3c, zregex.mjs): wtf8 (default until F3d) or utf16.
+const ENCODING = opt('--encoding', null) || process.env.ZREGEX_ENCODING || 'wtf8';
 
 // mulberry32
 function prng(seed) {
@@ -96,7 +98,7 @@ function v8Captures(m) {
 // recursive matcher can overflow the native stack, D14/D15) is attributed to
 // that case and the parent carries on with a fresh child.
 function runChild() {
-  const z = loadZRegex(LIB);
+  const z = loadZRegex(LIB, { encoding: ENCODING });
   process.on('message', ({ id, source, flags, subjects }) => {
     const out = [];
     let v8;
