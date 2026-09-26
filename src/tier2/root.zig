@@ -15,6 +15,7 @@ pub const recursive_matcher = @import("executor/recursive_matcher.zig");
 pub const thread = @import("executor/thread.zig");
 
 pub const RecursiveMatcher = recursive_matcher.RecursiveMatcher;
+pub const RecursiveMatcherFor = recursive_matcher.RecursiveMatcherFor;
 pub const ExecOptions = recursive_matcher.ExecOptions;
 pub const CompileResult = program.CompileResult;
 

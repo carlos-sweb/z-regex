@@ -425,3 +425,42 @@ fn hasOpcode(code: []const u8, op: Opcode) !bool {
     }
     return false;
 }
+
+// --- F3c: the matcher over UTF-16 ---
+
+test "RecursiveMatcher: the u16 instance matches like the u8 one (code points, F3c)" {
+    const a = std.testing.allocator;
+    const subject = zregex.subject;
+    const patterns = [_][]const u8{ "a", "\\u00e9+", ".", "(.)(.)", "[^a]+", "[\\u00e0-\\u00ff]", "\\p{L}+", "\\bx\\b", "(\\w)\\1", "(?<=(.))x", "(?<!\\u00e9)x", "^.$", "\\u{1F600}", "[\\u{1F600}a]" };
+    const subjects = [_][]const u8{ "", "a", "\u{E9}\u{E9}x", "ax\u{E9}x", "\u{1F600}", "x\u{1F600}x", "\xED\xA0\x80x", "\u{2028}a\nb", "aa bb \u{E9}\u{E9}" };
+    for (patterns) |p| {
+        const c = try zregex.compile(a, p, .{ .unicode = true });
+        defer c.deinit();
+        for (subjects) |s8| {
+            const s16 = try subject.utf16FromWtf8(a, s8);
+            defer a.free(s16);
+            var p16: usize = 0;
+            while (p16 <= s16.len) : (p16 += 1) {
+                const p8 = try subject.utf16ToWtf8Index(s8, p16);
+                // Only positions both encodings share outside a pair.
+                if (p16 > 0 and p16 < s16.len and s16[p16] >= 0xDC00 and s16[p16] <= 0xDFFF and s16[p16 - 1] >= 0xD800 and s16[p16 - 1] <= 0xDBFF) continue;
+                var m8 = RecursiveMatcher.init(a, c.bytecode, s8);
+                m8.charsets = c.charsets;
+                defer m8.deinit();
+                var m16 = zregex.tier2.RecursiveMatcherFor(u16).init(a, c.bytecode, s16);
+                m16.charsets = c.charsets;
+                defer m16.deinit();
+                const r8 = try m8.matchFrom(0, p8);
+                const r16 = try m16.matchFrom(0, p16);
+                try std.testing.expectEqual(r8.matched, r16.matched);
+                if (!r8.matched) continue;
+                try std.testing.expectEqual(try subject.wtf8ToUtf16Index(s8, r8.end_pos), r16.end_pos);
+                for (m8.captureSlice(), m16.captureSlice()) |g8, g16| {
+                    try std.testing.expectEqual(g8.start == null, g16.start == null);
+                    if (g8.start) |st| try std.testing.expectEqual(try subject.wtf8ToUtf16Index(s8, st), g16.start.?);
+                    if (g8.end) |en| try std.testing.expectEqual(try subject.wtf8ToUtf16Index(s8, en), g16.end.?);
+                }
+            }
+        }
+    }
+}
