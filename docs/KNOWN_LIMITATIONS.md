@@ -681,6 +681,14 @@ files shared with the C API ran twice (724 test runs → 405, the same 405 uniqu
 Tests that need the whole pipeline moved from `executor/` and `codegen/` to
 `tests/tier2_pipeline_tests.zig`.
 
+The build compiles the test binaries in parallel (no `-j1`; 4 cores here). Cold
+ReleaseSafe: 117 s wall, 299 s CPU (user + sys, 2.6× parallelism); Debug: 21 s wall,
+42 s CPU. Each ReleaseSafe test binary costs 24–34 s to compile even with a single test
+(`test-tier0`: 25 s), so the fixed cost per binary (test runner and std through LLVM)
+dominates, not module size. **Review trigger:** if cold ReleaseSafe `zig build test`
+goes past 150 s wall during F3–F4, the per-module test binaries get revisited; not
+before.
+
 ### test262 baseline (F0b)
 
 The real test262 measurement that replaces the sample above as the semantic
