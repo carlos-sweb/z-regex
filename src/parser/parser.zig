@@ -163,6 +163,10 @@ pub const Parser = struct {
     nesting_depth: u32 = 0,
     /// Nesting limit; a field so tests can lower it.
     max_nesting_depth: u32 = MAX_NESTING_DEPTH,
+    /// > 0 while parsing a `v`-mode nested class operand (`parseNestedClass`):
+    /// the token after its `]` is only a lookahead the caller re-reads in
+    /// class mode (see `consumeClassClose`).
+    nested_class_depth: u32 = 0,
     /// Names are decoded (escapes resolved, UTF-8) and owned by the parser
     /// (freed in `deinit`); callers that need them to outlive the parser
     /// copy them (see `codegen/compiler.zig`). In source order.
@@ -791,8 +795,7 @@ pub const Parser = struct {
             // we're still logically inside this outer, already-open class),
             // which doesn't special-case `^` at all, silently losing a
             // nested `[^...]`'s negation.
-            self.lexer.in_char_class = false;
-            const nested = try self.parseCharClass();
+            const nested = try self.parseNestedClass();
             // No `errdefer nested.deinit()` here: `finishClassSetOp` takes
             // ownership immediately and has its own `errdefer` for it --
             // registering a second one here would double-free `nested` if
@@ -930,12 +933,42 @@ pub const Parser = struct {
             return try self.finishClassSetOp(class, inverted);
         }
 
-        self.lexer.in_char_class = false;
-        _ = try self.consume(.rbracket);
+        try self.consumeClassClose();
 
         // An empty class is valid ECMA-262 (D3): `[]` never matches and
         // `[^]` matches any character. The codegen handles both.
         return class;
+    }
+
+    /// Parse a nested `[...]` operand of a `v`-mode class set operation.
+    /// Entered with `in_char_class` reset (see the callers for why); the
+    /// caller then rewinds and re-reads the token after the nested `]` in
+    /// class mode.
+    fn parseNestedClass(self: *Self) ParseError!*Node {
+        self.lexer.in_char_class = false;
+        self.nested_class_depth += 1;
+        defer self.nested_class_depth -= 1;
+        return self.parseCharClass();
+    }
+
+    /// Consume a class's closing `]`, fetching the next token in normal
+    /// (outside-a-class) mode. For a nested class that token is only a
+    /// lookahead: the caller rewinds and re-reads it in class mode. It is
+    /// fetched with `unicode_mode` off, since it is often the outer class's
+    /// own `]`, which under `u` is a SyntaxError outside a class (D2) and
+    /// would fail before the rewind (same reasoning as the `[` in
+    /// `parseCharClass`). A top-level class's next token is authoritative,
+    /// so there `unicode_mode` stays as it is (`[a]]` is still an error).
+    fn consumeClassClose(self: *Self) ParseError!void {
+        self.lexer.in_char_class = false;
+        if (self.nested_class_depth == 0) {
+            _ = try self.consume(.rbracket);
+            return;
+        }
+        const saved_unicode_mode = self.lexer.unicode_mode;
+        self.lexer.unicode_mode = false;
+        defer self.lexer.unicode_mode = saved_unicode_mode;
+        _ = try self.consume(.rbracket);
     }
 
     /// Finish parsing a `v`-mode class set operation (`[A--B]` / `[A&&B]`)
@@ -965,8 +998,7 @@ pub const Parser = struct {
             return error.ChainedClassSetOperatorNotSupported;
         }
 
-        self.lexer.in_char_class = false;
-        _ = try self.consume(.rbracket);
+        try self.consumeClassClose();
 
         const node = try Node.createClassSetOp(self.allocator, op, outer_negated);
         errdefer node.deinit();
@@ -991,8 +1023,7 @@ pub const Parser = struct {
             // Reset to normal mode before recursing, same reasoning as
             // operand1's nested case in `parseCharClass` -- otherwise a
             // negated nested operand (`[^x]`) silently loses its `^`.
-            self.lexer.in_char_class = false;
-            const nested = try self.parseCharClass();
+            const nested = try self.parseNestedClass();
             // Same rewind-and-re-fetch-in-class-mode fix as operand1's
             // nested case in `parseCharClass` -- the nested call's own
             // cleanup fetched whatever follows its `]` in normal mode,

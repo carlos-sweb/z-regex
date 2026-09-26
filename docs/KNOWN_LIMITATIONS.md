@@ -823,27 +823,29 @@ incorrect examples in this repository's own README and doc comments.
 
 ## Confirmed bugs (still open)
 
-- **`v` set operation whose last operand is a bracketed class fails under `unicode = true`**
-  *(found in F2b, introduced in F1b(2) `3c0470a`; not fixed, outside F2b's scope)*:
+*(none currently tracked here — see "Genuinely unimplemented" below for known gaps, all
+of which are scoped-out features, not bugs in what's implemented)*
+
+### Fixed in F2b
+
+- **`v` set operation whose last operand is a bracketed class failed under
+  `unicode = true`** *(found in F2b, introduced in F1b(2) `3c0470a`, fixed before F2c)*:
 
   ```zig
-  Regex.compileWithOptions(a, "[[a]&&[a]]", .{ .v = true });                  // ok
-  Regex.compileWithOptions(a, "[[a]&&[a]]", .{ .v = true, .unicode = true }); // error.UnmatchedBracket
-  Regex.compileWithOptions(a, "[\\p{L}&&[a]]", .{ .v = true, .unicode = true }); // error.UnmatchedBracket
-  Regex.compileWithOptions(a, "[[a]--\\p{Lu}]", .{ .v = true, .unicode = true }); // ok
+  Regex.compileWithOptions(a, "[[a]&&[a]]", .{ .v = true, .unicode = true });     // was error.UnmatchedBracket
+  Regex.compileWithOptions(a, "[\\p{L}&&[a]]", .{ .v = true, .unicode = true }); // was error.UnmatchedBracket
+  Regex.compileWithOptions(a, "[[a]--\\p{Lu}]", .{ .v = true, .unicode = true }); // always worked
   ```
 
-  After a nested `[...]` operand, `parseCharClass`/`parseClassSetOperand` fetch the
-  next token in normal (outside-a-class) mode and only then rewind and re-read it in
-  class mode. Since F1b(2), under `unicode` a `]` outside a class is a SyntaxError
-  (D2), so when that next character is the outer `]` the lexer fails before the
-  rewind. Only the Zig API can reach it: the C API, the test262 harness and the
-  differential pass `v` without `unicode`, and test262's `v` tests are still
-  `skipped_feature`. Fix: rewind before fetching (or fetch the token after a nested
-  class in class mode).
-
-Otherwise see "Genuinely unimplemented" below for known gaps, all of which are
-scoped-out features, not bugs in what's implemented.
+  After a nested `[...]` operand, the parser fetched the next token outside a class
+  and only then rewound and re-read it in class mode. Since F1b(2), under `unicode` a
+  `]` outside a class is a SyntaxError (D2), so when that token was the outer `]` the
+  lexer failed before the rewind. Now `consumeClassClose` fetches that lookahead
+  token with `unicode_mode` off for a nested class only (the same treatment the `[`
+  already had); a top-level class's next token is still read strictly, so `[a]]` and
+  `[[a]&&[a]]]` stay errors under `u`. Only the Zig API could reach the bug (the C
+  API, the test262 harness and the differential pass `v` without `unicode`).
+  Regression test in `tests/syntax_tests.zig`.
 
 ---
 
@@ -912,8 +914,7 @@ class, which may itself be `[^...]`-negated (`[[a-z]&&[^x]]`). Since F2b the ope
 is range-set arithmetic at compile time (`src/ir/charset.zig`), matched with one
 `CHAR_SET` lookup, with no cap on operand size; before F2b a `CHAR_CLASS_SET_OP` opcode
 evaluated both operands at match time, since the fixed range tables couldn't hold an
-operand like `\p{L}` (~700 ranges). With `unicode = true` as well, an operation whose
-last operand is a bracketed class currently fails (see "Confirmed bugs"). `--`/`&&`/`[` (for
+operand like `\p{L}` (~700 ranges). `--`/`&&`/`[` (for
 a nested operand) only tokenize specially inside a class when `v_mode` is on (default
 `false`), so existing patterns using literal `-`/`&`/`[` inside a class are unaffected.
 **Four real bugs found and fixed while building this** (all in `src/parser/parser.zig`,

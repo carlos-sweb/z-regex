@@ -382,6 +382,23 @@ aa10350e64a97fca		612b61	a+a
 aa10350e64a97fca	u	612b61	a+a
 9b36bcb6215a877c		612b3f	a+?
 9b36bcb6215a877c	u	612b3f	a+?
+00d9929bae6c7a0f	uv	5b5b615d26265b615d5d	[[a]&&[a]]
+bec72ce4ce278230		5b5b615d26265b615d5d	[[a]&&[a]]
+error:UnmatchedBracket	u	5b5b615d26265b615d5d	[[a]&&[a]]
+00d9929bae6c7a0f	uv	5b5c707b4c7d26265b615d5d	[\\p{L}&&[a]]
+d73154115db53b20		5b5c707b4c7d26265b615d5d	[\\p{L}&&[a]]
+error:UnmatchedBracket	u	5b5c707b4c7d26265b615d5d	[\\p{L}&&[a]]
+00d9929bae6c7a0f	uv	5b5b615d2d2d5c707b4c757d5d	[[a]--\\p{Lu}]
+865aff94f7c64b83		5b5b615d2d2d5c707b4c757d5d	[[a]--\\p{Lu}]
+error:UnmatchedBracket	u	5b5b615d2d2d5c707b4c757d5d	[[a]--\\p{Lu}]
+95d50d51f40f39e3	uv	5b5c707b4c7d2d2d5b5e612d7a5d5d	[\\p{L}--[^a-z]]
+d449c6f8d50f04ba		5b5c707b4c7d2d2d5b5e612d7a5d5d	[\\p{L}--[^a-z]]
+error:InvalidCharRange	u	5b5c707b4c7d2d2d5b5e612d7a5d5d	[\\p{L}--[^a-z]]
+error:UnmatchedBracket	u	5b615d5d	[a]]
+df9fb13dd1de4261		5b615d5d	[a]]
+error:UnmatchedBracket	uv	5b5b615d26265b615d5d5d	[[a]&&[a]]]
+5fa321ed647b3ee6		5b5b615d26265b615d5d5d	[[a]&&[a]]]
+error:UnmatchedBracket	u	5b5b615d26265b615d5d5d	[[a]&&[a]]]
 d6197ba0281785eb		5c70	\\p
 error:InvalidEscape	u	5c70	\\p
 d6197ba0281785eb	v	5c70	\\p
@@ -633,6 +650,9 @@ error:UnexpectedToken	v	283f3a6162292a2b63	(?:ab)*+c
 error:UnexpectedToken		617b327d2b	a{2}+
 error:UnexpectedToken	u	617b327d2b	a{2}+
 error:UnexpectedToken	v	617b327d2b	a{2}+
+00d9929bae6c7a0f	v	5b5b615d26265b615d5d	[[a]&&[a]]
+00d9929bae6c7a0f	v	5b5c707b4c7d26265b615d5d	[\\p{L}&&[a]]
+00d9929bae6c7a0f	v	5b5b615d2d2d5c707b4c757d5d	[[a]--\\p{Lu}]
 063c62577ed44026		28615c3162292a	(a\\1b)*
 063c62577ed44026	u	28615c3162292a	(a\\1b)*
 error:UnknownGroupName		283f3c613e78295c6b3c623e	(?<a>x)\\k<b>

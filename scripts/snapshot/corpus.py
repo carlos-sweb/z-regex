@@ -90,7 +90,7 @@ def main():
 
     # Options in these files are mostly named constants or loop variables;
     # every pattern also goes in without flags and with `u`.
-    named = {'annex_b': [''], 'u': ['u'], 'opts': ['', 'u', 'v'], 'm': ['m'], 'dot_all': ['s'], 'poss': ['']}
+    named = {'annex_b': [''], 'u': ['u'], 'vu': ['uv'], 'opts': ['', 'u', 'v'], 'm': ['m'], 'dot_all': ['s'], 'poss': ['']}
     call = re.compile(
         r'(?:expectMatch|expectRejected|expectAccepted|compileWithOptions|compile)\(\s*'
         r'(?:[A-Za-z_.]+,\s*)?"((?:[^"\\\n]|\\.)*)"\s*(?:,\s*(\.\{[^}]*\}|[A-Za-z_]+))?')
@@ -107,11 +107,21 @@ def main():
                 for flags in ('', 'u', 'v'):
                     add(flags, zig_unescape(lit.group(1)))
 
+    # Keep the recorded outcome of every pattern already in the file, so a
+    # corpus change shows up as new entries only.
+    recorded = {}
+    if os.path.exists(OUT):
+        for line in open(OUT, encoding='utf-8'):
+            cols = line.rstrip('\n').split('\t')
+            if not line.startswith('#') and len(cols) >= 3:
+                recorded[(cols[1], cols[2])] = cols[0]
+
     with open(OUT, 'w', encoding='utf-8') as f:
         f.write(HEADER)
         for flags, pattern in entries:
             shown = json.dumps(pattern.decode('utf-8', 'backslashreplace'), ensure_ascii=True)[1:-1]
-            f.write(f'-\t{flags}\t{pattern.hex()}\t{shown}\n')
+            outcome = recorded.get((flags, pattern.hex()), '-')
+            f.write(f'{outcome}\t{flags}\t{pattern.hex()}\t{shown}\n')
     print(f'{len(entries)} entries -> {os.path.relpath(OUT, REPO)}')
 
 

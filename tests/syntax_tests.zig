@@ -411,3 +411,25 @@ test "D8: *+ ++ ?+ are SyntaxErrors by default and possessive with the opt-in" {
     // Lazy quantifiers are unaffected.
     try expectMatch("a+?", annex_b, "aaa", "a");
 }
+
+// --- v-mode class set operations with `u` (fixed before F2c) ---
+
+test "v + u: a set operation whose last operand is a bracketed class" {
+    // Before the fix the token after the nested operand's `]` (the outer
+    // `]`) was read outside a class, where `u` rejects a lone `]`.
+    const vu: zregex.CompileOptions = .{ .v = true, .unicode = true };
+    try expectMatch("[[a]&&[a]]", vu, "xa", "a");
+    try expectMatch("[[a]&&[a]]", vu, "b", null);
+    try expectMatch("[\\p{L}&&[a]]", vu, "1a", "a");
+    try expectMatch("[\\p{L}&&[a]]", vu, "b", null);
+    // Not a regression: a property as the last operand already worked.
+    try expectMatch("[[a]--\\p{Lu}]", vu, "Aa", "a");
+    try expectMatch("[[a]--\\p{Lu}]", vu, "A", null);
+    // A negated nested operand, and the same patterns with `v` alone.
+    try expectMatch("[\\p{L}--[^a-z]]", vu, "Ab", "b");
+    for ([_][]const u8{ "[[a]&&[a]]", "[\\p{L}&&[a]]", "[[a]--\\p{Lu}]" }) |p| try expectAccepted(p, .{ .v = true });
+    // Only the nested class's lookahead is relaxed: a stray `]` after a
+    // top-level class, or after the outer class, is still rejected under `u`.
+    try expectRejected("[a]]", u);
+    try expectRejected("[[a]&&[a]]]", vu);
+}
