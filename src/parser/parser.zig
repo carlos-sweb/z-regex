@@ -250,39 +250,30 @@ pub const Parser = struct {
         self.next_alt_id += 1;
 
         try self.pushBranch(alt_id, 0);
-        var left = try self.parseSequence();
+        const left = try self.parseSequence();
         self.popBranch();
-        errdefer left.deinit();
 
-        if (self.check(.pipe)) {
-            // We have alternation
+        // `result` owns everything parsed so far: `left` alone, then the
+        // left-nested alternation `((a|b)|c)...`, so a failure at any point
+        // frees exactly what was built (no node owned twice or by nobody).
+        var result = left;
+        errdefer result.deinit();
+
+        // Handle alternations: a|b|c -> ((a|b)|c)
+        var branch_index: u32 = 1;
+        while (self.check(.pipe)) {
             try self.advance(); // consume '|'
 
-            try self.pushBranch(alt_id, 1);
-            var right = try self.parseSequence();
+            try self.pushBranch(alt_id, branch_index);
+            const next = try self.parseSequence();
             self.popBranch();
-            errdefer right.deinit();
+            errdefer next.deinit();
+            branch_index += 1;
 
-            var alt = try Node.createAlternation(self.allocator, left, right);
-
-            // Handle multiple alternations: a|b|c -> (a|(b|c))
-            var branch_index: u32 = 2;
-            while (self.check(.pipe)) {
-                try self.advance(); // consume '|'
-
-                try self.pushBranch(alt_id, branch_index);
-                const next = try self.parseSequence();
-                self.popBranch();
-                errdefer next.deinit();
-                branch_index += 1;
-
-                alt = try Node.createAlternation(self.allocator, alt, next);
-            }
-
-            return alt;
+            result = try Node.createAlternation(self.allocator, result, next);
         }
 
-        return left;
+        return result;
     }
 
     /// Push one `BranchStep` onto `self.branch_stack`. See `parseAlternation`.
