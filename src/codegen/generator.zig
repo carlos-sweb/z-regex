@@ -12,6 +12,10 @@ const compiler = @import("compiler.zig");
 const bittable_mod = @import("../utils/bittable.zig");
 const BitTable = bittable_mod.BitTable;
 const casefold = @import("../unicode/casefold.zig");
+const properties = @import("../unicode/properties.zig");
+const charset_mod = @import("../ir/charset.zig");
+const CharSet = charset_mod.CharSet;
+const Range = charset_mod.Range;
 
 const Node = ast.Node;
 const NodeType = ast.NodeType;
@@ -62,14 +66,24 @@ pub const CodegenError = error{
 pub const MAX_PROGRAM_BYTES: usize = 16 << 20;
 
 /// Code generator for translating AST to bytecode
-/// Capacity for collecting a class's members before `normalizeRanges`
-/// merges them down to at most `opcodes.MAX_CLASS_RANGES`.
-const COLLECT_RANGES = 64;
 pub const CodeGenerator = struct {
     allocator: Allocator,
     writer: *BytecodeWriter,
     group_count: u16,
     options: CompileOptions,
+    /// The program's CharSet table (F2b), referenced by CHAR_SET idx.
+    /// Indices are assigned in order of first appearance in the AST walk,
+    /// so the same pattern always yields the same bytecode and table.
+    charsets: std.ArrayListUnmanaged(CharSet) = .empty,
+    /// Bytes of `charsets` (8 per range), counted with the bytecode against
+    /// MAX_PROGRAM_BYTES.
+    charset_bytes: usize = 0,
+    /// Content interning: a set's range bytes -> its index. Only a lookup;
+    /// it never decides an index. Keys borrow the sets' own range memory.
+    charset_index: std.StringHashMapUnmanaged(u32) = .empty,
+    /// Class node -> index, so an unrolled counted repeat (which generates
+    /// the same node once per copy) materializes its class only once.
+    node_charset: std.AutoHashMapUnmanaged(*const Node, u32) = .empty,
 
     const Self = @This();
 
@@ -109,6 +123,28 @@ pub const CodeGenerator = struct {
         };
     }
 
+    /// Free the CharSet table unless `takeCharSets` already took it.
+    pub fn deinit(self: *Self) void {
+        for (self.charsets.items) |cs| cs.deinit(self.allocator);
+        self.charsets.deinit(self.allocator);
+        self.charset_index.deinit(self.allocator);
+        self.node_charset.deinit(self.allocator);
+    }
+
+    /// Hand the CharSet table over to the caller (`CompileResult.charsets`);
+    /// free each set, then the slice, with the generator's allocator.
+    pub fn takeCharSets(self: *Self) Allocator.Error![]const CharSet {
+        self.charset_index.clearAndFree(self.allocator);
+        self.node_charset.clearAndFree(self.allocator);
+        self.charset_bytes = 0;
+        return self.charsets.toOwnedSlice(self.allocator);
+    }
+
+    /// Bytecode plus CharSet table: what MAX_PROGRAM_BYTES caps.
+    fn programBytes(self: *const Self) usize {
+        return self.writer.offset() + self.charset_bytes;
+    }
+
     /// Generate bytecode from an AST
     pub fn generate(self: *Self, root: *Node) CodegenError!void {
         try self.generateNode(root);
@@ -116,12 +152,12 @@ pub const CodeGenerator = struct {
         try self.writer.emitSimple(.MATCH);
         // The per-node check in generateNode can let the last node run past
         // the cap; this makes the limit exact.
-        if (self.writer.offset() > MAX_PROGRAM_BYTES) return error.PatternTooLarge;
+        if (self.programBytes() > MAX_PROGRAM_BYTES) return error.PatternTooLarge;
     }
 
     /// Generate code for a node
     fn generateNode(self: *Self, node: *Node) CodegenError!void {
-        if (self.writer.offset() > MAX_PROGRAM_BYTES) return error.PatternTooLarge;
+        if (self.programBytes() > MAX_PROGRAM_BYTES) return error.PatternTooLarge;
         switch (node.type) {
             .char => try self.generateChar(node),
             .char_range => try self.generateCharRange(node),
@@ -222,71 +258,26 @@ pub const CodeGenerator = struct {
     }
 
     /// Generate code for a character class [abc] or [a-z0-9]
-    /// Sort `ranges` by start and merge overlapping or adjacent ones in
-    /// place, returning the new count; `error.TooManyRanges` if the result
-    /// still doesn't fit the fixed `opcodes.MAX_CLASS_RANGES` slots. Lets a
-    /// class hold members that only fit once merged (`[\s\S]` is one range,
-    /// `[\s\d]` a few), since `\s`/`\S` alone are 10-11 ranges.
-    fn normalizeRanges(ranges: [][2]u32) error{TooManyRanges}!usize {
-        const count = mergeRanges(ranges);
-        if (count > opcodes.MAX_CLASS_RANGES) return error.TooManyRanges;
-        return count;
-    }
-
-    /// Append a range to a collection buffer, merging the buffer first when
-    /// it is full; `error.TooManyRanges` only if it is still full after that.
-    fn pushRange(ranges: *[COLLECT_RANGES][2]u32, count: *usize, r: [2]u32) error{TooManyRanges}!void {
-        if (count.* == COLLECT_RANGES) {
-            count.* = mergeRanges(ranges[0..count.*]);
-            if (count.* == COLLECT_RANGES) return error.TooManyRanges;
-        }
-        ranges[count.*] = r;
-        count.* += 1;
-    }
-
-    fn mergeRanges(ranges: [][2]u32) usize {
-        if (ranges.len == 0) return 0;
-        std.mem.sort([2]u32, ranges, {}, struct {
-            fn lessThan(_: void, a: [2]u32, b: [2]u32) bool {
-                return a[0] < b[0];
-            }
-        }.lessThan);
-        var out: usize = 0;
-        for (ranges[1..]) |r| {
-            if (r[0] <= ranges[out][1] +| 1) {
-                ranges[out][1] = @max(ranges[out][1], r[1]);
-            } else {
-                out += 1;
-                ranges[out] = r;
-            }
-        }
-        return out + 1;
-    }
-
     fn generateCharClass(self: *Self, node: *Node) !void {
         // `[]` (D3): a class with no members never matches. An empty range
         // table does exactly that (and fails at end of input like any class).
         if (node.children.items.len == 0 and !node.inverted) {
-            return self.writer.emitCharClassRanges(.CHAR_CLASS_RANGES, &.{});
+            return self.emitCharSet(node, false);
         }
 
         // A `\p{...}`/`\P{...}` member (General_Category, binary property,
-        // Script, or Script_Extensions) can't fit either the byte bitmap or
-        // the plain code-point-range representation below -- its membership
-        // test is a whole external table, not an enumerable range list --
-        // so it gets its own representation, CHAR_CLASS_UNICODE(_INV),
-        // checked for first since its presence overrides the other two
-        // paths regardless of what else is in the class.
+        // Script, or Script_Extensions) can't fit the byte bitmap below, so
+        // the class becomes a CharSet with the property's ranges folded in.
         for (node.children.items) |child| {
             switch (child.type) {
-                .unicode_property, .unicode_script, .unicode_script_extensions => return self.generateCharClassUnicode(node),
+                .unicode_property, .unicode_script, .unicode_script_extensions => return self.emitCharSet(node, node.inverted),
                 else => {},
             }
         }
 
         // A class member above U+007F needs more than one UTF-8 byte to
         // encode, so it can't fit the fixed 256-entry byte bitmap below —
-        // it needs the code-point-range representation instead.
+        // it needs a CharSet instead.
         var needs_ranges = false;
         for (node.children.items) |child| {
             switch (child.type) {
@@ -301,7 +292,7 @@ pub const CodeGenerator = struct {
         }
 
         if (needs_ranges) {
-            return self.generateCharClassRanges(node);
+            return self.emitCharSet(node, node.inverted);
         }
 
         if (node.children.items.len == 1 and !node.inverted) {
@@ -339,184 +330,149 @@ pub const CodeGenerator = struct {
         try self.writer.emitCharClass(opcode, &table.bits);
     }
 
-    /// Generate a character class containing a member above U+007F, using
-    /// CHAR_CLASS_RANGES(_INV) (up to `opcodes.MAX_CLASS_RANGES` code point
-    /// ranges) instead of the byte bitmap.
-    noinline fn generateCharClassRanges(self: *Self, node: *Node) !void {
-        var ranges: [COLLECT_RANGES][2]u32 = undefined;
-        var count: usize = 0;
+    /// Emit CHAR_SET (or CHAR_SET_INV, for the class's own `[^...]`) for a
+    /// `char_class` or `class_set_op` node. The negation stays in the
+    /// opcode, as the table-based class instructions had it; only negations
+    /// *inside* the class (a `\P{...}` member, a nested `[^...]` operand)
+    /// are applied to the set.
+    noinline fn emitCharSet(self: *Self, node: *Node, inverted: bool) !void {
+        const idx = try self.charSetIndex(node);
+        try self.writer.emit1(if (inverted) .CHAR_SET_INV else .CHAR_SET, idx);
+    }
+
+    /// The table index of `node`'s CharSet, materializing and interning it
+    /// on first use.
+    fn charSetIndex(self: *Self, node: *Node) !u32 {
+        if (self.node_charset.get(node)) |idx| return idx;
+        const set = switch (node.type) {
+            .char_class => try self.classMembersSet(node, self.options.case_insensitive),
+            .class_set_op => try self.classSetOpSet(node),
+            else => return error.InvalidPattern,
+        };
+        const idx = try self.internCharSet(set);
+        try self.node_charset.put(self.allocator, node, idx);
+        return idx;
+    }
+
+    /// Add `set` to the table (taking ownership) or, if an equal set is
+    /// already there, free it and return that one's index. A new index is
+    /// always the table's length: order of first appearance.
+    fn internCharSet(self: *Self, set: CharSet) !u32 {
+        const key = std.mem.sliceAsBytes(set.ranges);
+        if (self.charset_index.get(key)) |idx| {
+            set.deinit(self.allocator);
+            return idx;
+        }
+        if (self.programBytes() + set.byteSize() > MAX_PROGRAM_BYTES) {
+            set.deinit(self.allocator);
+            return error.PatternTooLarge;
+        }
+        const idx: u32 = @intCast(self.charsets.items.len);
+        self.charsets.append(self.allocator, set) catch |err| {
+            set.deinit(self.allocator);
+            return err;
+        };
+        self.charset_bytes += set.byteSize();
+        // On failure the set stays in `charsets` (freed by `deinit`); it's
+        // just not findable for interning.
+        try self.charset_index.put(self.allocator, key, idx);
+        return idx;
+    }
+
+    /// The union of a class's members, without the class's own `[^...]`:
+    /// literals, ranges and `\p{...}`/`\P{...}` tests. With `fold`, a
+    /// literal also adds its simple case-fold pair -- exactly what the
+    /// table-based class instructions did before F2b: literals only, not
+    /// ranges (`[À-Ö]`) or properties, and not inside a `v` set operation's
+    /// operands (docs/KNOWN_LIMITATIONS.md).
+    fn classMembersSet(self: *Self, node: *Node, fold: bool) !CharSet {
+        var literal: std.ArrayListUnmanaged(Range) = .empty;
+        defer literal.deinit(self.allocator);
+        var props: std.ArrayListUnmanaged(*Node) = .empty;
+        defer props.deinit(self.allocator);
 
         for (node.children.items) |child| {
             switch (child.type) {
                 .char => {
-                    try pushRange(&ranges, &count, .{ child.char_value, child.char_value });
-                    try self.appendCaseFoldPair(&ranges, &count, child.char_value);
+                    try literal.append(self.allocator, .{ .lo = child.char_value, .hi = child.char_value });
+                    if (fold) {
+                        if (casefold.toUpper(child.char_value) orelse casefold.toLower(child.char_value)) |opposite| {
+                            try literal.append(self.allocator, .{ .lo = opposite, .hi = opposite });
+                        }
+                    }
                 },
-                .char_range => try pushRange(&ranges, &count, .{ child.range_start, child.range_end }),
+                .char_range => try literal.append(self.allocator, .{ .lo = child.range_start, .hi = child.range_end }),
+                .unicode_property, .unicode_script, .unicode_script_extensions => try props.append(self.allocator, child),
                 else => return error.InvalidPattern,
             }
         }
 
-        count = try normalizeRanges(ranges[0..count]);
-        const opcode: opcodes.Opcode = if (node.inverted) .CHAR_CLASS_RANGES_INV else .CHAR_CLASS_RANGES;
-        try self.writer.emitCharClassRanges(opcode, ranges[0..count]);
-    }
-
-    /// Under `case_insensitive`, append `char_value`'s simple case-fold pair
-    /// (if it has one) as its own single-codepoint range -- e.g. a literal
-    /// `é` member becomes both `é` and `É`. `casefold.zig`'s tables cover
-    /// ASCII too (not just non-ASCII), so this needs no separate ASCII-only
-    /// path the way `generateChar`'s SPLIT/GOTO trick does; it's shared by
-    /// `generateCharClassRanges` and `generateCharClassUnicode`, the two
-    /// class representations built from a `[2]u32` range table. Ranges
-    /// (`[À-Ö]`-style) are NOT case-folded here -- unlike ASCII's uniform
-    /// +32 shift, non-ASCII case mappings aren't a simple offset over an
-    /// arbitrary range, so that remains a documented gap (see
-    /// `docs/KNOWN_LIMITATIONS.md`).
-    fn appendCaseFoldPair(self: *Self, ranges: *[COLLECT_RANGES][2]u32, count: *usize, char_value: u32) !void {
-        if (!self.options.case_insensitive) return;
-        const opposite = casefold.toUpper(char_value) orelse casefold.toLower(char_value) orelse return;
-        try pushRange(ranges, count, .{ opposite, opposite });
-    }
-
-    /// Generate a character class containing at least one `\p{...}`/`\P{...}`
-    /// member (e.g. `[\p{L}\d]`, `[\P{Alphabetic}a-z]`). Inline chars/ranges
-    /// (including spliced shorthand like `\d`) go in the same
-    /// `opcodes.MAX_CLASS_RANGES`-slot range table `generateCharClassRanges`
-    /// uses; property/script/script-extensions members go in a separate
-    /// `opcodes.MAX_CLASS_PROPERTIES`-slot table, each carrying its own
-    /// `negated` bit for `\P{...}` used as a member -- independent of
-    /// `node.inverted` (the whole class's `[^...]` negation, applied once via
-    /// the opcode's _INV form) -- see CHAR_CLASS_UNICODE's doc comment.
-    noinline fn generateCharClassUnicode(self: *Self, node: *Node) !void {
-        var ranges: [COLLECT_RANGES][2]u32 = undefined;
-        var range_count: usize = 0;
-        var props: [opcodes.MAX_CLASS_PROPERTIES]opcodes.ClassPropertyTest = undefined;
-        var prop_count: usize = 0;
-
-        for (node.children.items) |child| {
-            switch (child.type) {
-                .char => {
-                    try pushRange(&ranges, &range_count, .{ child.char_value, child.char_value });
-                    try self.appendCaseFoldPair(&ranges, &range_count, child.char_value);
-                },
-                .char_range => {
-                    try pushRange(&ranges, &range_count, .{ child.range_start, child.range_end });
-                },
-                .unicode_property, .unicode_script, .unicode_script_extensions => {
-                    if (prop_count >= opcodes.MAX_CLASS_PROPERTIES) return error.TooManyClassProperties;
-                    const kind: opcodes.ClassPropertyKind = switch (child.type) {
-                        .unicode_property => .unicode_property,
-                        .unicode_script => .script,
-                        .unicode_script_extensions => .script_extensions,
-                        else => unreachable,
-                    };
-                    props[prop_count] = .{ .kind = kind, .negated = child.inverted, .value = @intCast(child.char_value) };
-                    prop_count += 1;
-                },
-                else => return error.InvalidPattern,
-            }
+        var acc = try CharSet.fromRanges(self.allocator, literal.items);
+        errdefer acc.deinit(self.allocator);
+        for (props.items) |p| {
+            const ps = try self.propertySet(p);
+            defer ps.deinit(self.allocator);
+            const merged = try acc.unionWith(ps, self.allocator);
+            acc.deinit(self.allocator);
+            acc = merged;
         }
-
-        range_count = try normalizeRanges(ranges[0..range_count]);
-        const opcode: opcodes.Opcode = if (node.inverted) .CHAR_CLASS_UNICODE_INV else .CHAR_CLASS_UNICODE;
-        try self.writer.emitCharClassUnicode(opcode, ranges[0..range_count], props[0..prop_count]);
+        return acc;
     }
 
-    /// Collect one `v`-mode class set operation operand's ranges/properties
-    /// (into caller-provided fixed buffers, same capacity as
-    /// `generateCharClassUnicode` uses) and its own negation, from either
-    /// shape `parser.zig::parseClassSetOperand`/operand1-parsing can
-    /// produce: a `char_class` node (ordinary or nested `[...]`, whose own
-    /// `.inverted` becomes this operand's negation) or a bare
-    /// `unicode_property`/`unicode_script`/`unicode_script_extensions` node
-    /// (a single property test, negation already folded into that test's
-    /// own `negated` bit -- see `bytecode.BytecodeWriter.ClassSetOperand`'s
-    /// doc comment for why the operand-level `negated` stays `false` there).
-    fn collectClassSetOperand(
-        self: *Self,
-        node: *Node,
-        ranges: *[COLLECT_RANGES][2]u32,
-        props: *[opcodes.MAX_CLASS_PROPERTIES]opcodes.ClassPropertyTest,
-    ) !bytecode.BytecodeWriter.ClassSetOperand {
-        _ = self;
-        var range_count: usize = 0;
-        var prop_count: usize = 0;
-        var negated = false;
+    /// A `\p{...}` node's code points; `\P{...}` (the node's `inverted`)
+    /// is the complement.
+    fn propertySet(self: *Self, node: *Node) !CharSet {
+        const table = switch (node.type) {
+            .unicode_property => properties.propertyRanges(@enumFromInt(node.char_value)),
+            .unicode_script => properties.scriptRanges(@intCast(node.char_value)),
+            .unicode_script_extensions => properties.scriptExtensionsRanges(@intCast(node.char_value)),
+            else => return error.InvalidPattern,
+        };
+        const ranges = try self.allocator.alloc(Range, table.len);
+        defer self.allocator.free(ranges);
+        for (table, ranges) |t, *r| r.* = .{ .lo = t.start, .hi = t.end };
+        const set = try CharSet.fromRanges(self.allocator, ranges);
+        if (!node.inverted) return set;
+        defer set.deinit(self.allocator);
+        return set.complement(self.allocator);
+    }
 
+    /// One `v`-mode set operation operand: a class (its members, then its
+    /// own `[^...]` as a complement -- the operand-level negation the
+    /// CHAR_CLASS_SET_OP operand block had) or a bare `\p{...}`.
+    fn classSetOperandSet(self: *Self, node: *Node) !CharSet {
         switch (node.type) {
             .char_class => {
-                negated = node.inverted;
-                for (node.children.items) |child| {
-                    switch (child.type) {
-                        .char => {
-                            try pushRange(ranges, &range_count, .{ child.char_value, child.char_value });
-                        },
-                        .char_range => {
-                            try pushRange(ranges, &range_count, .{ child.range_start, child.range_end });
-                        },
-                        .unicode_property, .unicode_script, .unicode_script_extensions => {
-                            if (prop_count >= opcodes.MAX_CLASS_PROPERTIES) return error.TooManyClassProperties;
-                            props[prop_count] = .{
-                                .kind = classPropertyKindOf(child.type),
-                                .negated = child.inverted,
-                                .value = @intCast(child.char_value),
-                            };
-                            prop_count += 1;
-                        },
-                        else => return error.InvalidPattern,
-                    }
-                }
+                const members = try self.classMembersSet(node, false);
+                if (!node.inverted) return members;
+                defer members.deinit(self.allocator);
+                return members.complement(self.allocator);
             },
-            .unicode_property, .unicode_script, .unicode_script_extensions => {
-                props[0] = .{
-                    .kind = classPropertyKindOf(node.type),
-                    .negated = node.inverted,
-                    .value = @intCast(node.char_value),
-                };
-                prop_count = 1;
-            },
+            .unicode_property, .unicode_script, .unicode_script_extensions => return self.propertySet(node),
             else => return error.InvalidPattern,
         }
-
-        range_count = try normalizeRanges(ranges[0..range_count]);
-        if (range_count > opcodes.MAX_SET_OP_RANGES) return error.TooManyRanges;
-        return .{ .negated = negated, .ranges = ranges[0..range_count], .properties = props[0..prop_count] };
     }
 
-    fn classPropertyKindOf(node_type: NodeType) opcodes.ClassPropertyKind {
-        return switch (node_type) {
-            .unicode_property => .unicode_property,
-            .unicode_script => .script,
-            .unicode_script_extensions => .script_extensions,
-            else => unreachable,
+    /// A `v`-mode class set operation (`[A--B]`/`[A&&B]`), computed at
+    /// compile time. `node.char_value` is the `ast.ClassSetOp`;
+    /// `node.inverted` (the outermost `[^...]`) is left to CHAR_SET_INV.
+    /// See `docs/KNOWN_LIMITATIONS.md` for this feature's scope.
+    fn classSetOpSet(self: *Self, node: *Node) !CharSet {
+        if (node.children.items.len != 2) return error.InvalidPattern;
+        const left = try self.classSetOperandSet(node.children.items[0]);
+        defer left.deinit(self.allocator);
+        const right = try self.classSetOperandSet(node.children.items[1]);
+        defer right.deinit(self.allocator);
+        const set_op: ast.ClassSetOp = @enumFromInt(node.char_value);
+        return switch (set_op) {
+            .intersection => left.intersect(right, self.allocator),
+            .difference => left.difference(right, self.allocator),
         };
     }
 
     /// Generate code for a `v`-mode class set operation (`[A--B]`/`[A&&B]`).
-    /// `node.char_value` is the `ast.ClassSetOp` (0=difference,
-    /// 1=intersection); `node.inverted` is the whole operation's own
-    /// `[^...]`, from the outermost bracket -- independent of either
-    /// operand's own negation, handled per-operand by
-    /// `collectClassSetOperand`. See `docs/KNOWN_LIMITATIONS.md` for this
-    /// feature's scope (exactly one operation, no chaining, no `\q{...}`).
-    noinline fn generateClassSetOp(self: *Self, node: *Node) !void {
-        if (node.children.items.len != 2) return error.InvalidPattern;
-
-        var left_ranges: [COLLECT_RANGES][2]u32 = undefined;
-        var left_props: [opcodes.MAX_CLASS_PROPERTIES]opcodes.ClassPropertyTest = undefined;
-        const left = try self.collectClassSetOperand(node.children.items[0], &left_ranges, &left_props);
-
-        var right_ranges: [COLLECT_RANGES][2]u32 = undefined;
-        var right_props: [opcodes.MAX_CLASS_PROPERTIES]opcodes.ClassPropertyTest = undefined;
-        const right = try self.collectClassSetOperand(node.children.items[1], &right_ranges, &right_props);
-
-        const set_op: ast.ClassSetOp = @enumFromInt(node.char_value);
-        if (set_op == .intersection) {
-            try self.writer.emitCharClassSetOp(.intersection, node.inverted, left, right);
-        } else {
-            try self.writer.emitCharClassSetOp(.difference, node.inverted, left, right);
-        }
+    fn generateClassSetOp(self: *Self, node: *Node) !void {
+        return self.emitCharSet(node, node.inverted);
     }
 
     /// Generate code for dot (any character)
@@ -1084,6 +1040,8 @@ test "CodeGenerator: simple character" {
     defer writer.deinit();
 
     var gen = CodeGenerator.init(std.testing.allocator, &writer, .{});
+
+    defer gen.deinit();
     try gen.generate(ast_root);
 
     const code = try writer.finalize();
@@ -1110,6 +1068,8 @@ test "CodeGenerator: sequence" {
     defer writer.deinit();
 
     var gen = CodeGenerator.init(std.testing.allocator, &writer, .{});
+
+    defer gen.deinit();
     try gen.generate(ast_root);
 
     const code = try writer.finalize();
@@ -1134,6 +1094,8 @@ test "CodeGenerator: alternation" {
     defer writer.deinit();
 
     var gen = CodeGenerator.init(std.testing.allocator, &writer, .{});
+
+    defer gen.deinit();
     try gen.generate(ast_root);
 
     const code = try writer.finalize();
@@ -1158,6 +1120,8 @@ test "CodeGenerator: star quantifier" {
     defer writer.deinit();
 
     var gen = CodeGenerator.init(std.testing.allocator, &writer, .{});
+
+    defer gen.deinit();
     try gen.generate(ast_root);
 
     const code = try writer.finalize();
@@ -1181,6 +1145,8 @@ test "CodeGenerator: plus quantifier" {
     defer writer.deinit();
 
     var gen = CodeGenerator.init(std.testing.allocator, &writer, .{});
+
+    defer gen.deinit();
     try gen.generate(ast_root);
 
     const code = try writer.finalize();
@@ -1204,6 +1170,8 @@ test "CodeGenerator: group" {
     defer writer.deinit();
 
     var gen = CodeGenerator.init(std.testing.allocator, &writer, .{});
+
+    defer gen.deinit();
     try gen.generate(ast_root);
 
     const code = try writer.finalize();
@@ -1228,6 +1196,8 @@ test "CodeGenerator: anchors" {
     defer writer.deinit();
 
     var gen = CodeGenerator.init(std.testing.allocator, &writer, .{});
+
+    defer gen.deinit();
     try gen.generate(ast_root);
 
     const code = try writer.finalize();
@@ -1251,6 +1221,8 @@ test "CodeGenerator: dot excludes newline by default" {
     defer writer.deinit();
 
     var gen = CodeGenerator.init(std.testing.allocator, &writer, .{});
+
+    defer gen.deinit();
     try gen.generate(ast_root);
 
     const code = try writer.finalize();
@@ -1276,6 +1248,8 @@ test "CodeGenerator: dot matches newline with dot_all" {
     defer writer.deinit();
 
     var gen = CodeGenerator.init(std.testing.allocator, &writer, .{ .dot_all = true });
+
+    defer gen.deinit();
     try gen.generate(ast_root);
 
     const code = try writer.finalize();
@@ -1301,6 +1275,8 @@ test "CodeGenerator: repeat quantifier" {
     defer writer.deinit();
 
     var gen = CodeGenerator.init(std.testing.allocator, &writer, .{});
+
+    defer gen.deinit();
     try gen.generate(ast_root);
 
     const code = try writer.finalize();

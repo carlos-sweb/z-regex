@@ -12,6 +12,8 @@ const RecursiveMatcher = recursive_mod.RecursiveMatcher;
 const Capture = thread_mod.Capture;
 const nextSearchStart = RecursiveMatcher.nextSearchStart;
 pub const NamedGroup = format_mod.NamedGroup;
+const CompileResult = @import("../codegen/compiler.zig").CompileResult;
+const CharSet = @import("../ir/charset.zig").CharSet;
 
 /// A capture's [start, end) byte offsets into the matched input (the JS `d`
 /// / `hasIndices` flag equivalent — see `MatchResult.getCaptureIndices`).
@@ -95,6 +97,8 @@ pub const Matcher = struct {
     named_groups: []const NamedGroup = &.{},
     /// Capture slots per match: the pattern's group count + 1 (D9).
     capture_slots: usize = 1,
+    /// The program's CharSet table (`CompileResult.charsets`, F2b).
+    charsets: []const CharSet = &.{},
 
     const Self = @This();
 
@@ -127,9 +131,18 @@ pub const Matcher = struct {
         };
     }
 
+    /// Everything a `CompileResult` carries: bytecode, named groups, group
+    /// count and the CharSet table.
+    pub fn initCompiled(allocator: Allocator, compiled: CompileResult) Self {
+        var m = Self.initWithGroups(allocator, compiled.bytecode, compiled.named_groups, compiled.group_count);
+        m.charsets = compiled.charsets;
+        return m;
+    }
+
     /// Check if pattern matches entire input
     pub fn matchFull(self: Self, input: []const u8) !bool {
         var matcher = RecursiveMatcher.initWithSlots(self.allocator, self.bytecode, input, .{}, self.capture_slots);
+        matcher.charsets = self.charsets;
         defer matcher.deinit();
 
         const result = try matcher.matchFrom(0, 0);
@@ -148,6 +161,7 @@ pub const Matcher = struct {
         // Pass the FULL input to matcher (not a slice)
         // This allows lookbehind to see content before start_pos
         var matcher = RecursiveMatcher.initWithSlots(self.allocator, self.bytecode, input, .{}, self.capture_slots);
+        matcher.charsets = self.charsets;
         defer matcher.deinit();
 
         const result = try matcher.matchFrom(0, start_pos);

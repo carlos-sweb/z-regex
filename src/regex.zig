@@ -46,6 +46,9 @@ pub const RegexError = parser_mod.ParseError || generator_mod.CodegenError || Al
     BufferTooSmall,
     RecursionLimitExceeded,
     StepLimitExceeded,
+    /// A CHAR_SET index outside the program's CharSet table (malformed
+    /// program; never produced by `compile`).
+    InvalidCharSet,
 };
 
 /// Main Regex type - represents a compiled regular expression
@@ -87,7 +90,7 @@ pub const Regex = struct {
 
     /// Test if pattern matches entire input
     pub fn matchFull(self: Self, input: []const u8) RegexError!bool {
-        const m = Matcher.initWithGroups(self.allocator, self.compiled.bytecode, self.compiled.named_groups, self.compiled.group_count);
+        const m = Matcher.initCompiled(self.allocator, self.compiled);
         return try m.matchFull(input);
     }
 
@@ -99,7 +102,7 @@ pub const Regex = struct {
     /// Find first match in input. If `sticky`, only matches at position 0
     /// (no scanning ahead) — use `findAt` directly to check a later position.
     pub fn find(self: Self, input: []const u8) RegexError!?MatchResult {
-        const m = Matcher.initWithGroups(self.allocator, self.compiled.bytecode, self.compiled.named_groups, self.compiled.group_count);
+        const m = Matcher.initCompiled(self.allocator, self.compiled);
         if (self.sticky) return try m.findAt(input, 0);
         return try m.find(input);
     }
@@ -109,14 +112,14 @@ pub const Regex = struct {
     /// iteration from a caller-tracked position, similar to how JS code
     /// tracks `lastIndex` when using a sticky regex.
     pub fn findAt(self: Self, input: []const u8, start_pos: usize) RegexError!?MatchResult {
-        const m = Matcher.initWithGroups(self.allocator, self.compiled.bytecode, self.compiled.named_groups, self.compiled.group_count);
+        const m = Matcher.initCompiled(self.allocator, self.compiled);
         return try m.findAt(input, start_pos);
     }
 
     /// Find all matches in input. If `sticky`, stops at the first position
     /// that doesn't match instead of scanning ahead for the next one.
     pub fn findAll(self: Self, input: []const u8) RegexError!std.ArrayListUnmanaged(MatchResult) {
-        const m = Matcher.initWithGroups(self.allocator, self.compiled.bytecode, self.compiled.named_groups, self.compiled.group_count);
+        const m = Matcher.initCompiled(self.allocator, self.compiled);
         return try m.findAll(input, self.sticky);
     }
 
@@ -1902,27 +1905,147 @@ test "Regex: quantifiers on a multi-byte character class" {
     try std.testing.expect(!try re.test_("\u{E9}a"));
 }
 
-test "Regex: character class with more than MAX_CLASS_RANGES multi-byte members is rejected" {
-    const max = @import("bytecode/opcodes.zig").MAX_CLASS_RANGES;
-    // `n` non-adjacent members (every other code point from U+1F600), so the
-    // codegen can't merge them into fewer ranges.
-    const Build = struct {
-        fn pattern(buf: []u8, n: usize, step: u21) []const u8 {
-            var len: usize = 0;
-            buf[len] = '[';
-            len += 1;
-            for (0..n) |i| len += std.unicode.utf8Encode(0x1F600 + @as(u21, @intCast(i)) * step, buf[len..]) catch unreachable;
-            buf[len] = ']';
-            return buf[0 .. len + 1];
+/// `[` + `n` members from `base`, `step` apart (step 2: none adjacent, so
+/// nothing merges) + `]`.
+fn buildSpacedClass(buf: []u8, base: u21, n: usize, step: u21) []const u8 {
+    var len: usize = 0;
+    buf[len] = '[';
+    len += 1;
+    for (0..n) |i| len += std.unicode.utf8Encode(base + @as(u21, @intCast(i)) * step, buf[len..]) catch unreachable;
+    buf[len] = ']';
+    return buf[0 .. len + 1];
+}
+
+test "Regex: a class with many non-ASCII members compiles and matches each one (F2b)" {
+    // Before F2b the fixed range table held 30 ranges (error.TooManyRanges).
+    const allocator = std.testing.allocator;
+    var buf: [1024]u8 = undefined;
+    var re = try Regex.compile(allocator, buildSpacedClass(&buf, 0x1F600, 100, 2));
+    defer re.deinit();
+    try std.testing.expectEqual(@as(usize, 1), re.compiled.charsets.len);
+    try std.testing.expectEqual(@as(usize, 100), re.compiled.charsets[0].ranges.len);
+    var enc: [4]u8 = undefined;
+    for (0..200) |i| {
+        const cp: u21 = 0x1F600 + @as(u21, @intCast(i));
+        const n = try std.unicode.utf8Encode(cp, &enc);
+        try std.testing.expectEqual(i % 2 == 0, try re.test_(enc[0..n]));
+    }
+}
+
+test "Regex: a class with more than four \\p{...} members (F2b)" {
+    // Before F2b a class held at most 4 property tests
+    // (error.TooManyClassProperties).
+    const allocator = std.testing.allocator;
+    var re = try Regex.compile(allocator, "^[\\p{L}\\p{N}\\p{P}\\p{S}\\p{Z}]+$");
+    defer re.deinit();
+    try std.testing.expect(try re.test_("a1.+ \u{E9}\u{660}\u{3000}"));
+    try std.testing.expect(!try re.test_("a\x01"));
+    var inv = try Regex.compile(allocator, "^[^\\p{L}\\p{N}\\p{P}\\p{S}\\p{Z}]$");
+    defer inv.deinit();
+    try std.testing.expect(try inv.test_("\x01"));
+    try std.testing.expect(!try inv.test_("a"));
+}
+
+test "Regex: v set operation with a large operand (F2b)" {
+    // Before F2b each operand held 13 ranges. The left operand here has 20
+    // non-adjacent members.
+    const allocator = std.testing.allocator;
+    var class_buf: [256]u8 = undefined;
+    const members = buildSpacedClass(&class_buf, 0x100, 20, 2);
+    var buf: [512]u8 = undefined;
+    const pattern = try std.fmt.bufPrint(&buf, "^[{s}--[\\u{{104}}]]$", .{members});
+    var re = try Regex.compileWithOptions(allocator, pattern, .{ .v = true });
+    defer re.deinit();
+    try std.testing.expect(try re.test_("\u{100}"));
+    try std.testing.expect(try re.test_("\u{126}"));
+    try std.testing.expect(!try re.test_("\u{104}"));
+    try std.testing.expect(!try re.test_("\u{101}"));
+    try std.testing.expect(!try re.test_("\u{128}"));
+}
+
+test "Regex: CHAR_SET class edge cases keep their pre-F2b meaning" {
+    const allocator = std.testing.allocator;
+    // `[^\P{L}]` is \p{L}: the member's negation goes into the set, the
+    // class's own `[^...]` stays in the opcode.
+    var not_not_l = try Regex.compile(allocator, "^[^\\P{L}]$");
+    defer not_not_l.deinit();
+    try std.testing.expect(try not_not_l.test_("\u{E9}"));
+    try std.testing.expect(!try not_not_l.test_("1"));
+
+    var empty = try Regex.compile(allocator, "[]");
+    defer empty.deinit();
+    try std.testing.expect((try empty.find("abc\n")) == null);
+    try std.testing.expectEqual(@as(usize, 0), empty.compiled.charsets[0].ranges.len);
+
+    var any = try Regex.compile(allocator, "^[^]$");
+    defer any.deinit();
+    try std.testing.expect(try any.test_("\n"));
+
+    // Case folding: literals fold, ranges don't (documented gap, unchanged).
+    var lit = try Regex.compileWithOptions(allocator, "^[\u{E9}\u{1F600}]$", .{ .case_insensitive = true });
+    defer lit.deinit();
+    try std.testing.expect(try lit.test_("\u{C9}"));
+    var range = try Regex.compileWithOptions(allocator, "^[\u{C0}-\u{D6}\u{1F600}]$", .{ .case_insensitive = true });
+    defer range.deinit();
+    try std.testing.expect(try range.test_("\u{C0}"));
+    try std.testing.expect(!try range.test_("\u{E0}"));
+
+    // A negated operand inside a set operation: [^a-z] && \p{L} is the
+    // letters outside a-z.
+    var op = try Regex.compileWithOptions(allocator, "^[[^a-z]&&\\p{L}]$", .{ .v = true });
+    defer op.deinit();
+    try std.testing.expect(try op.test_("A"));
+    try std.testing.expect(!try op.test_("a"));
+    try std.testing.expect(!try op.test_("1"));
+}
+
+test "Regex: the CharSet table is deterministic and interned (F2b)" {
+    const allocator = std.testing.allocator;
+    const pattern = "[\u{E9}][\\p{L}]x[\u{E9}][\\p{N}\u{E9}][\\p{L}]";
+    var a = try Regex.compile(allocator, pattern);
+    defer a.deinit();
+    var b = try Regex.compile(allocator, pattern);
+    defer b.deinit();
+    try std.testing.expectEqualSlices(u8, a.compiled.bytecode, b.compiled.bytecode);
+    try std.testing.expectEqual(a.compiled.charsets.len, b.compiled.charsets.len);
+    for (a.compiled.charsets, b.compiled.charsets) |x, y| try std.testing.expect(x.eql(y));
+    // Equal classes share an entry; indices follow first appearance.
+    try std.testing.expectEqual(@as(usize, 3), a.compiled.charsets.len);
+    try std.testing.expect(a.compiled.charsets[0].contains(0xE9));
+    try std.testing.expectEqual(@as(usize, 1), a.compiled.charsets[0].ranges.len);
+    try std.testing.expect(a.compiled.charsets[2].contains('0'));
+}
+
+test "Regex: an unrolled class repeat materializes its CharSet once (F2b)" {
+    var re = try Regex.compile(std.testing.allocator, "(?:[\\p{L}]){65536}");
+    defer re.deinit();
+    try std.testing.expectEqual(@as(usize, 1), re.compiled.charsets.len);
+}
+
+test "Regex: the CharSet table counts toward PatternTooLarge (F2b)" {
+    const allocator = std.testing.allocator;
+    // 4000 distinct classes of ~5 KiB each (\p{L} plus a private-use code
+    // point) exceed MAX_PROGRAM_BYTES through the table alone.
+    const pattern = try allocator.alloc(u8, 4000 * 16);
+    defer allocator.free(pattern);
+    var len: usize = 0;
+    for (0..4000) |i| {
+        const piece = try std.fmt.bufPrint(pattern[len..], "[\\p{{L}}\\u{{{X}}}]", .{0xE000 + i});
+        len += piece.len;
+    }
+    try std.testing.expectError(error.PatternTooLarge, Regex.compile(allocator, pattern[0..len]));
+    // A codegen failure after a class was materialized frees the table.
+    try std.testing.expectError(error.PatternTooLarge, Regex.compile(allocator, "[\\p{L}](?:a{65536}){52}"));
+}
+
+test "Regex: compiling classes leaks nothing on any allocation failure (F2b)" {
+    const Run = struct {
+        fn run(allocator: std.mem.Allocator) !void {
+            var re = try Regex.compileWithOptions(allocator, "[\u{E9}\\p{L}][^\\P{N}a][[^a-z]&&\\p{L}]", .{ .v = true, .case_insensitive = true });
+            re.deinit();
         }
     };
-    var buf: [512]u8 = undefined;
-    try std.testing.expectError(error.TooManyRanges, Regex.compile(std.testing.allocator, Build.pattern(&buf, max + 1, 2)));
-    var at_max = try Regex.compile(std.testing.allocator, Build.pattern(&buf, max, 2));
-    at_max.deinit();
-    // Adjacent members merge into one range, so many of them fit.
-    var merged = try Regex.compile(std.testing.allocator, Build.pattern(&buf, max * 3, 1));
-    merged.deinit();
+    try std.testing.checkAllAllocationFailures(std.testing.allocator, Run.run, .{});
 }
 
 test "Regex: sticky flag only matches at the current position" {
@@ -2480,14 +2603,6 @@ test "Regex: \\p{Script=...} and \\p{Script_Extensions=...} work as class member
     // U+0301 is in Latin's Script_Extensions (see the earlier
     // Script_Extensions tests) even though its own Script is Inherited.
     try std.testing.expect(try scx.test_("a\u{301}"));
-}
-
-test "Regex: a class with more than MAX_CLASS_PROPERTIES \\p{...} members is a compile error" {
-    const allocator = std.testing.allocator;
-    try std.testing.expectError(
-        error.TooManyClassProperties,
-        Regex.compile(allocator, "[\\p{L}\\p{N}\\p{P}\\p{S}\\p{Z}]"),
-    );
 }
 
 test "Regex: malformed \\p (no braces) falls back to a literal 'p'" {

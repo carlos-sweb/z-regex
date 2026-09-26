@@ -119,7 +119,7 @@ pub fn decodeInstruction(bytecode: []const u8, offset: usize) !Instruction {
         },
 
         // 4 byte operand (u32)
-        .CHAR32, .LOOKAHEAD, .NEGATIVE_LOOKAHEAD, .LOOKBEHIND, .NEGATIVE_LOOKBEHIND => {
+        .CHAR32, .CHAR_SET, .CHAR_SET_INV, .LOOKAHEAD, .NEGATIVE_LOOKAHEAD, .LOOKBEHIND, .NEGATIVE_LOOKBEHIND => {
             inst.operands[0] = readU32(bytecode[offset + 1 ..]);
             inst.operand_count = 1;
         },
@@ -196,7 +196,7 @@ pub fn encodeInstruction(inst: Instruction, buffer: []u8) !usize {
         },
 
         // 4 byte operand (u32)
-        .CHAR32, .LOOKAHEAD, .NEGATIVE_LOOKAHEAD, .LOOKBEHIND, .NEGATIVE_LOOKBEHIND => {
+        .CHAR32, .CHAR_SET, .CHAR_SET_INV, .LOOKAHEAD, .NEGATIVE_LOOKAHEAD, .LOOKBEHIND, .NEGATIVE_LOOKBEHIND => {
             writeU32(buffer[pos..], inst.operands[0]);
             pos += 4;
         },

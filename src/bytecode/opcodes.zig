@@ -106,18 +106,22 @@ pub const Opcode = enum(u8) {
     /// Format: [CHAR_ANY]
     CHAR_ANY = 0x07,
 
-    /// Match a Unicode scalar value against a small set of code point ranges
-    /// (for character classes containing a member above U+007F, which can't
-    /// fit the CHAR_CLASS bitmap). Decodes a full UTF-8 sequence at the
-    /// current position and checks it against up to MAX_CLASS_RANGES ranges.
-    /// Format: [CHAR_CLASS_RANGES count:u8 (start:u32 end:u32){8}]
-    CHAR_CLASS_RANGES = 0x08,
+    /// Match a Unicode scalar value against a CharSet (F2b): decodes a full
+    /// UTF-8 sequence at the current position (same decoding as
+    /// CHAR_RANGE_INV/CHAR_CLASS_INV: one byte for invalid UTF-8, a WTF-8
+    /// lone surrogate as its code point) and checks it against
+    /// `CompileResult.charsets[idx]`. Every class that doesn't fit the ASCII
+    /// bitmap compiles to this: non-ASCII members, `\p{...}` members and
+    /// `v`-mode set operations, all materialized at compile time. The table
+    /// lives outside the bytecode, so the bytecode alone isn't executable
+    /// (docs/REGEX_TIERS_PLAN.md, F2b decision).
+    /// Format: [CHAR_SET idx:u32]
+    CHAR_SET = 0x08,
 
-    /// Inverted form of CHAR_CLASS_RANGES: matches if the decoded code point
-    /// is NOT in any of the ranges (consumes the full UTF-8 sequence, same
-    /// reasoning as CHAR_RANGE_INV/CHAR_CLASS_INV).
-    /// Format: [CHAR_CLASS_RANGES_INV count:u8 (start:u32 end:u32){8}]
-    CHAR_CLASS_RANGES_INV = 0x09,
+    /// Inverted form of CHAR_SET (a class's own `[^...]`): matches if the
+    /// decoded code point is NOT in the set, consuming it.
+    /// Format: [CHAR_SET_INV idx:u32]
+    CHAR_SET_INV = 0x09,
 
     /// Match a Unicode property (`\p{...}`) -- General_Category or one of a
     /// curated set of binary properties. Decodes a full UTF-8 sequence at
@@ -352,12 +356,19 @@ pub const Opcode = enum(u8) {
     ///          right:(same layout as left)]
     CHAR_CLASS_SET_OP = 0x64,
 
+    /// Superseded by CHAR_SET (F2b); no longer emitted, removed next.
+    /// Format: [CHAR_CLASS_RANGES count:u8 (start:u32 end:u32){MAX_CLASS_RANGES}]
+    CHAR_CLASS_RANGES = 0x65,
+
+    /// Superseded by CHAR_SET_INV (F2b); no longer emitted, removed next.
+    CHAR_CLASS_RANGES_INV = 0x66,
+
     _,
 
     /// Get the category of this opcode
     pub fn category(self: Opcode) OpcodeCategory {
         return switch (self) {
-            .CHAR, .CHAR32, .CHAR2, .CHAR_RANGE, .CHAR_RANGE_INV, .CHAR_CLASS, .CHAR_CLASS_INV, .CHAR_ANY, .CHAR_CLASS_RANGES, .CHAR_CLASS_RANGES_INV, .UNICODE_PROPERTY, .UNICODE_PROPERTY_INV, .UNICODE_SCRIPT, .UNICODE_SCRIPT_INV, .UNICODE_SCRIPT_EXTENSIONS, .UNICODE_SCRIPT_EXTENSIONS_INV, .CHAR_CLASS_UNICODE, .CHAR_CLASS_UNICODE_INV, .CHAR_CLASS_SET_OP => .character_match,
+            .CHAR, .CHAR32, .CHAR2, .CHAR_RANGE, .CHAR_RANGE_INV, .CHAR_CLASS, .CHAR_CLASS_INV, .CHAR_ANY, .CHAR_SET, .CHAR_SET_INV, .CHAR_CLASS_RANGES, .CHAR_CLASS_RANGES_INV, .UNICODE_PROPERTY, .UNICODE_PROPERTY_INV, .UNICODE_SCRIPT, .UNICODE_SCRIPT_INV, .UNICODE_SCRIPT_EXTENSIONS, .UNICODE_SCRIPT_EXTENSIONS_INV, .CHAR_CLASS_UNICODE, .CHAR_CLASS_UNICODE_INV, .CHAR_CLASS_SET_OP => .character_match,
             .MATCH, .GOTO, .SPLIT, .SPLIT_GREEDY, .SPLIT_LAZY, .SPLIT_POSSESSIVE, .LOOP => .control_flow,
             .SAVE_START, .SAVE_END, .SAVE_START_NAMED, .SAVE_END_NAMED, .CLEAR_CAPTURE => .capture,
             .BACK_REF, .BACK_REF_I => .backreference,
@@ -381,7 +392,7 @@ pub const Opcode = enum(u8) {
             .UNICODE_PROPERTY, .UNICODE_PROPERTY_INV, .UNICODE_SCRIPT, .UNICODE_SCRIPT_INV, .UNICODE_SCRIPT_EXTENSIONS, .UNICODE_SCRIPT_EXTENSIONS_INV => 2,
 
             // 5 bytes (opcode + u32)
-            .CHAR32, .LOOKAHEAD, .NEGATIVE_LOOKAHEAD, .LOOKBEHIND, .NEGATIVE_LOOKBEHIND => 5,
+            .CHAR32, .CHAR_SET, .CHAR_SET_INV, .LOOKAHEAD, .NEGATIVE_LOOKAHEAD, .LOOKBEHIND, .NEGATIVE_LOOKBEHIND => 5,
 
             // 7 bytes (opcode + u16 + u32)
             .SAVE_START_NAMED, .SAVE_END_NAMED => 7,

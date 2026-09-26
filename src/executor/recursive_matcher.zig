@@ -14,6 +14,7 @@ const Allocator = std.mem.Allocator;
 const opcodes = @import("../bytecode/opcodes.zig");
 const format = @import("../bytecode/format.zig");
 const properties = @import("../unicode/properties.zig");
+const CharSet = @import("../ir/charset.zig").CharSet;
 
 const Opcode = opcodes.Opcode;
 const Instruction = format.Instruction;
@@ -85,6 +86,10 @@ const LoopState = struct {
 pub const RecursiveMatcher = struct {
     allocator: Allocator,
     bytecode: []const u8,
+    /// The program's CharSet table (`CompileResult.charsets`), which
+    /// CHAR_SET/CHAR_SET_INV index into. Empty for bytecode built without
+    /// one; a CHAR_SET then fails with `error.InvalidCharSet`.
+    charsets: []const CharSet = &.{},
     input: []const u8,
     /// Capture slots in use: the pattern's group count + 1 (slot 0 unused).
     capture_slots: usize,
@@ -108,7 +113,7 @@ pub const RecursiveMatcher = struct {
     const Self = @This();
 
     /// Error set for matching operations
-    pub const MatchError = error{ OutOfMemory, UnknownOpcode, UnexpectedEndOfBytecode, RecursionLimitExceeded, StepLimitExceeded };
+    pub const MatchError = error{ OutOfMemory, UnknownOpcode, UnexpectedEndOfBytecode, RecursionLimitExceeded, StepLimitExceeded, InvalidCharSet };
 
     pub fn init(allocator: Allocator, bytecode: []const u8, input: []const u8) Self {
         return Self.initWithOptions(allocator, bytecode, input, ExecOptions{});
@@ -204,7 +209,7 @@ pub const RecursiveMatcher = struct {
     }
 
     /// Match from specific PC and string position
-    pub fn matchFrom(self: *Self, pc: usize, pos: usize) error{ OutOfMemory, UnknownOpcode, UnexpectedEndOfBytecode, RecursionLimitExceeded, StepLimitExceeded }!MatchResult {
+    pub fn matchFrom(self: *Self, pc: usize, pos: usize) MatchError!MatchResult {
         // Check step limit (protects against ReDoS)
         if (self.exec_options.max_steps > 0) {
             self.step_count += 1;
@@ -286,6 +291,12 @@ pub const RecursiveMatcher = struct {
                 if (pc + 33 > self.bytecode.len) return error.UnexpectedEndOfBytecode;
                 const table = self.bytecode[pc + 1 ..][0..32];
                 return self.matchCharClassInv(pc, pos, table, inst.size);
+            },
+
+            .CHAR_SET, .CHAR_SET_INV => {
+                const r = try self.checkCharSet(inst, pos);
+                if (!r.matched) return MatchResult{ .matched = false, .end_pos = pos };
+                return self.matchFrom(pc + inst.size, r.end_pos);
             },
 
             .CHAR_CLASS_RANGES => {
@@ -773,6 +784,22 @@ pub const RecursiveMatcher = struct {
         return .{ .codepoint = cp, .len = len };
     }
 
+    /// Shared matching logic for CHAR_SET(_INV), used by both the main
+    /// recursive matcher and the star-loop fast path
+    /// (matchSingleInstruction): decode the code point at `pos` and look it
+    /// up in `charsets[idx]`. Decoded code points are always in
+    /// [0, 0x10FFFF] (a lone invalid byte decodes as its value), so a set
+    /// complemented at compile time agrees with a runtime negation.
+    fn checkCharSet(self: *Self, inst: Instruction, pos: usize) MatchError!struct { matched: bool, end_pos: usize } {
+        const idx = inst.operands[0];
+        if (idx >= self.charsets.len) return error.InvalidCharSet;
+        if (pos >= self.input.len) return .{ .matched = false, .end_pos = pos };
+        const decoded = decodeCodepointAt(self.input, pos);
+        const in_set = self.charsets[idx].contains(decoded.codepoint);
+        const matched = if (inst.opcode == .CHAR_SET_INV) !in_set else in_set;
+        return .{ .matched = matched, .end_pos = if (matched) pos + decoded.len else pos };
+    }
+
     /// Shared range-matching logic for CHAR_CLASS_RANGES(_INV), used by both
     /// the main recursive matcher and the star-loop fast path
     /// (matchSingleInstruction). Decodes the code point at `pos` and checks
@@ -1010,7 +1037,7 @@ pub const RecursiveMatcher = struct {
     /// limit (found via test262-derived conformance testing).
     fn isQuantifiableAtomOpcode(opcode: Opcode) bool {
         return switch (opcode) {
-            .CHAR, .CHAR_ANY, .CHAR32, .CHAR2, .CHAR_RANGE, .CHAR_RANGE_INV, .CHAR_CLASS, .CHAR_CLASS_INV, .CHAR_CLASS_RANGES, .CHAR_CLASS_RANGES_INV, .CHAR_CLASS_UNICODE, .CHAR_CLASS_UNICODE_INV, .CHAR_CLASS_SET_OP, .UNICODE_PROPERTY, .UNICODE_PROPERTY_INV, .UNICODE_SCRIPT, .UNICODE_SCRIPT_INV, .UNICODE_SCRIPT_EXTENSIONS, .UNICODE_SCRIPT_EXTENSIONS_INV, .BACK_REF, .BACK_REF_I => true,
+            .CHAR, .CHAR_ANY, .CHAR32, .CHAR2, .CHAR_RANGE, .CHAR_RANGE_INV, .CHAR_CLASS, .CHAR_CLASS_INV, .CHAR_SET, .CHAR_SET_INV, .CHAR_CLASS_RANGES, .CHAR_CLASS_RANGES_INV, .CHAR_CLASS_UNICODE, .CHAR_CLASS_UNICODE_INV, .CHAR_CLASS_SET_OP, .UNICODE_PROPERTY, .UNICODE_PROPERTY_INV, .UNICODE_SCRIPT, .UNICODE_SCRIPT_INV, .UNICODE_SCRIPT_EXTENSIONS, .UNICODE_SCRIPT_EXTENSIONS_INV, .BACK_REF, .BACK_REF_I => true,
             else => false,
         };
     }
@@ -1262,6 +1289,11 @@ pub const RecursiveMatcher = struct {
                     return .{ .matched = false, .end_pos = pos };
                 }
                 return .{ .matched = true, .end_pos = pos + utf8SeqLenAt(self.input, pos) };
+            },
+
+            .CHAR_SET, .CHAR_SET_INV => {
+                const r = try self.checkCharSet(inst, pos);
+                return .{ .matched = r.matched, .end_pos = r.end_pos };
             },
 
             .CHAR_CLASS_RANGES => {

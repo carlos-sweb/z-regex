@@ -388,6 +388,30 @@ fn rangesFor(cat: UnicodeProperty) []const CodepointRange {
     };
 }
 
+const ASCII_RANGES: []const CodepointRange = &.{.{ .start = 0, .end = 0x7F }};
+const ANY_RANGES: []const CodepointRange = &.{.{ .start = 0, .end = 0x10FFFF }};
+
+/// The sorted, merged code point ranges of property `cat` -- what
+/// `isInCategory` searches. The code generator materializes a class's
+/// `\p{...}` members from these (F2b).
+pub fn propertyRanges(cat: UnicodeProperty) []const CodepointRange {
+    return switch (cat) {
+        .ASCII => ASCII_RANGES,
+        .Any => ANY_RANGES,
+        else => rangesFor(cat),
+    };
+}
+
+/// The ranges `isInScript` searches for `script_index`.
+pub fn scriptRanges(script_index: u8) []const CodepointRange {
+    return tables.SCRIPT_RANGES[script_index];
+}
+
+/// The ranges `isInScriptExtensions` searches for `script_index`.
+pub fn scriptExtensionsRanges(script_index: u8) []const CodepointRange {
+    return tables.SCRIPT_EXTENSIONS_RANGES[script_index];
+}
+
 /// Whether codepoint `cp` belongs to Unicode property `cat` (binary search
 /// over the property's sorted, merged range list, except for the two
 /// trivial properties computed directly).
@@ -479,6 +503,21 @@ test "properties: isInCategory binary properties" {
     try std.testing.expect(!isInCategory('a', .Uppercase));
     try std.testing.expect(isInCategory('a', .Lowercase));
     try std.testing.expect(!isInCategory('A', .Lowercase));
+}
+
+test "properties: propertyRanges agrees with isInCategory at every range edge" {
+    inline for (@typeInfo(UnicodeProperty).@"enum".fields) |f| {
+        const cat: UnicodeProperty = @enumFromInt(f.value);
+        const ranges = propertyRanges(cat);
+        for (ranges, 0..) |r, i| {
+            try std.testing.expect(r.start <= r.end);
+            if (i > 0) try std.testing.expect(r.start > ranges[i - 1].end);
+            try std.testing.expect(isInCategory(r.start, cat));
+            try std.testing.expect(isInCategory(r.end, cat));
+            if (r.start > 0 and (i == 0 or ranges[i - 1].end + 1 < r.start)) try std.testing.expect(!isInCategory(r.start - 1, cat));
+            if (r.end < 0x10FFFF) try std.testing.expect(!isInCategory(r.end + 1, cat) or (i + 1 < ranges.len and ranges[i + 1].start == r.end + 1));
+        }
+    }
 }
 
 test "properties: isInCategory trivial ASCII/Any properties" {

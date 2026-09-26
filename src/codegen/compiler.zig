@@ -13,6 +13,7 @@ const generator_mod = @import("generator.zig");
 const optimizer_mod = @import("optimizer.zig");
 const bytecode_writer = @import("../bytecode/writer.zig");
 const format_mod = @import("../bytecode/format.zig");
+const charset_mod = @import("../ir/charset.zig");
 
 const Lexer = lexer_mod.Lexer;
 const Parser = parser_mod.Parser;
@@ -21,6 +22,7 @@ const Optimizer = optimizer_mod.Optimizer;
 const OptLevel = optimizer_mod.OptLevel;
 const BytecodeWriter = bytecode_writer.BytecodeWriter;
 pub const NamedGroup = format_mod.NamedGroup;
+pub const CharSet = charset_mod.CharSet;
 
 /// Compilation result
 pub const CompileResult = struct {
@@ -33,15 +35,25 @@ pub const CompileResult = struct {
     /// exists but didn't participate in this match" -- e.g. for `$N`
     /// substitution in `Regex.replace`/`replaceAll`.
     group_count: u16,
+    /// The CharSet table CHAR_SET/CHAR_SET_INV index into (F2b). Not part
+    /// of the bytecode: the bytecode alone isn't executable, and isn't a
+    /// stable serialization format (docs/REGEX_TIERS_PLAN.md, F2b).
+    charsets: []const CharSet = &.{},
     allocator: Allocator,
 
     /// Free the compilation result
     pub fn deinit(self: CompileResult) void {
         for (self.named_groups) |ng| self.allocator.free(ng.name);
         self.allocator.free(self.named_groups);
+        freeCharSets(self.allocator, self.charsets);
         self.allocator.free(self.bytecode);
     }
 };
+
+fn freeCharSets(allocator: Allocator, charsets: []const CharSet) void {
+    for (charsets) |cs| cs.deinit(allocator);
+    allocator.free(charsets);
+}
 
 /// Compiler options
 pub const CompileOptions = struct {
@@ -118,6 +130,7 @@ pub fn compile(allocator: Allocator, pattern: []const u8, options: CompileOption
     defer writer.deinit();
 
     var generator = CodeGenerator.init(allocator, &writer, options);
+    defer generator.deinit();
     try generator.generate(ast);
 
     const unoptimized = try writer.finalize();
@@ -142,10 +155,14 @@ pub fn compile(allocator: Allocator, pattern: []const u8, options: CompileOption
         try named_groups.append(allocator, .{ .name = name_copy, .index = entry.index });
     }
 
+    const charsets = try generator.takeCharSets();
+    errdefer freeCharSets(allocator, charsets);
+
     return CompileResult{
         .bytecode = optimized,
         .named_groups = try named_groups.toOwnedSlice(allocator),
         .group_count = parser.group_counter,
+        .charsets = charsets,
         .allocator = allocator,
     };
 }
