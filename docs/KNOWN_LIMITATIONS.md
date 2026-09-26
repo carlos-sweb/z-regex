@@ -630,6 +630,22 @@ the code space), which dominate run time:
   (~105 in Debug). Found by the F0d parser fuzzer (reduced from
   `\2{9007199254740991}\[*`); skipped test in `tests/regression_tests.zig`
   until F6a's explicit heap stack with a byte limit.
+- **256 capturing groups overflow the group counter (D16).** The parser's
+  capture counter is a `u8`: a pattern with 256 *sequential* capturing
+  groups (`(a)(a)...`) panics with an integer overflow in ReleaseSafe and
+  Debug, and in ReleaseFast silently wraps to 0, so group 256 overwrites
+  capture 0 (the whole match). 255 groups work. The nesting limit doesn't
+  stop it (the groups aren't nested) and the fuzzer's patterns are too
+  short to reach it. Fixed by F1c(a) (u16 indices and an explicit
+  `TooManyCaptures` error).
+- **200 nested capturing groups need ~9.8 MiB of stack (T15, pending F6a).**
+  `S15.10.2.8_A3_T15` (200 nested `(`) parses, compiles and frees within
+  8 MiB, but the recursive matcher spends ~49 KiB per nested capturing group
+  in ReleaseSafe (~147 KiB in Debug), so the match needs ~9.8 MiB (~29 MiB
+  in Debug): it crashes on 8 MiB and matches on 16 MiB. It also needs more
+  than 16 captures (D9). F1 doesn't count it (target 2838, not 2840); F6a's
+  explicit heap stack makes it reachable. The non-capturing version
+  (`S15.10.2.8_A3_T16`) has no per-level matcher cost and is reachable in F1.
 - **Parser fuzzing coverage (F0d).** Parser and `analyze`: full coverage,
   no crash or leak (20,000 patterns x 3 flag modes, plus 1.5 M in an
   uncommitted ReleaseSafe run). Matcher: **partial until F6a**: patterns in
@@ -640,8 +656,11 @@ the code space), which dominate run time:
   the stress in `zig build test-fuzz-stress` (by hand or weekly CI).
 - Per-phase breakdown of the non-passing entries:
   `node scripts/test262/categorize.mjs` (explicit rules, no unclassified
-  entries at this baseline): F1 115, F3 12, F5 122, F6a 2, F6b 18, and 15
-  lexer-level tests whose literal can't be extracted.
+  entries at this baseline): F1 113 (111 in its target plus the 2 D5
+  entries of `dotall/without-dotall-unicode`), F3 10, F5 122, F6a 2, F6b 18,
+  and 19 host-side: 15 lexer-level tests whose literal can't be extracted and
+  4 (`S7.8.5_A1.5/A2.5`) where `\` + LineTerminator is a JS *literal* error
+  but a valid pattern, on which zregex agrees with V8.
 
 **Blind spots**: a pattern V8 rejects but zregex would accept via
 `new RegExp(...)` isn't measured (V8 throws first); parse-negative tests

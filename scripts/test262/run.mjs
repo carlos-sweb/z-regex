@@ -2,7 +2,8 @@
 // test262 harness for zregex (docs/REGEX_TIERS_PLAN.md, phase F0b).
 //
 //   node scripts/test262/run.mjs [--sample N] [--filter SUBSTR] [--out FILE] [--lib PATH]
-//                                [--check-baseline FILE | --update-baseline FILE]
+//                                [--check-baseline FILE | --update-baseline FILE |
+//                                 --update-baseline-improvements FILE]
 //
 // --check-baseline compares the engine suite against a committed baseline
 // and exits non-zero on a regression (pass -> anything else), on a test the
@@ -10,7 +11,13 @@
 // pinned test262 revision is unchanged. A test that starts passing is
 // reported as an improvement and doesn't fail the run.
 // --update-baseline writes the engine suite's current statuses (skips
-// excluded, crashes included) as the new baseline.
+// excluded, crashes included) as the new baseline. Only for a new pinned
+// test262 revision: it would silently accept a regression.
+// --update-baseline-improvements runs the --check-baseline check first and,
+// only if it passes, records the improvements (not pass -> pass) in FILE;
+// every other entry stays as it was. A regression, a new entry or a
+// disappeared one fails the run without writing anything. This is the
+// update used while a phase is in progress (docs/REGEX_TIERS_PLAN.md, F1).
 //
 // Environment:
 //   ZREGEX_LIB               path to libzregex.so (default zig-out/lib/libzregex.so)
@@ -41,12 +48,13 @@ const FILTER = opt('--filter', null);
 const OUT = path.resolve(opt('--out', path.join(repo, 'zig-out/test262/results.json')));
 const CHECK = opt('--check-baseline', null);
 const UPDATE = opt('--update-baseline', null);
-if (CHECK && UPDATE) {
-  console.error('--check-baseline and --update-baseline are mutually exclusive');
+const IMPROVE = opt('--update-baseline-improvements', null);
+if ([CHECK, UPDATE, IMPROVE].filter(Boolean).length > 1) {
+  console.error('--check-baseline, --update-baseline and --update-baseline-improvements are mutually exclusive');
   process.exit(2);
 }
-if (UPDATE && (FILTER || SAMPLE !== null)) {
-  console.error('--update-baseline needs a full run (no --filter/--sample)');
+if ((UPDATE || IMPROVE) && (FILTER || SAMPLE !== null)) {
+  console.error('updating the baseline needs a full run (no --filter/--sample)');
   process.exit(2);
 }
 
@@ -285,6 +293,7 @@ function report() {
   printSummary(out);
   if (UPDATE) writeBaseline(out, UPDATE);
   if (CHECK) process.exitCode = checkBaseline(out, CHECK);
+  if (IMPROVE) process.exitCode = recordImprovements(out, IMPROVE);
 }
 
 const BASELINE_SKIPS = new Set(['skipped_host', 'skipped_feature']);
@@ -297,6 +306,32 @@ function engineEntries(out) {
   return entries;
 }
 
+function serializeBaseline(baseline) {
+  return `${JSON.stringify(baseline, null, 0).replace(/,"/g, ',\n"')}\n`;
+}
+
+/** --update-baseline-improvements: check first, then flip only not-pass -> pass. */
+function recordImprovements(out, file) {
+  if (checkBaseline(out, file) !== 0) {
+    console.log('\nbaseline NOT updated: the check failed (fix the regressions/new/disappeared entries first)');
+    return 1;
+  }
+  const baseline = JSON.parse(fs.readFileSync(file, 'utf8'));
+  const current = engineEntries(out);
+  let flipped = 0;
+  for (const [key, was] of Object.entries(baseline.entries)) {
+    if (was !== 'pass' && current[key] === 'pass') {
+      baseline.entries[key] = 'pass';
+      flipped++;
+    }
+  }
+  baseline.generated = out.meta.date;
+  fs.writeFileSync(file, serializeBaseline(baseline));
+  const pass = Object.values(baseline.entries).filter((s) => s === 'pass').length;
+  console.log(`\nbaseline: recorded ${flipped} improvements; ${pass}/${Object.keys(baseline.entries).length} pass -> ${path.relative(process.cwd(), file)}`);
+  return 0;
+}
+
 function writeBaseline(out, file) {
   const baseline = {
     test262Sha: out.meta.test262Sha,
@@ -305,7 +340,7 @@ function writeBaseline(out, file) {
     note: 'Engine suite only (host suite and skipped tests excluded). Update with --update-baseline.',
     entries: engineEntries(out),
   };
-  fs.writeFileSync(file, `${JSON.stringify(baseline, null, 0).replace(/,"/g, ',\n"')}\n`);
+  fs.writeFileSync(file, serializeBaseline(baseline));
   const bytes = fs.statSync(file).size;
   console.log(`\nbaseline: ${Object.keys(baseline.entries).length} entries, ${(bytes / 1024).toFixed(0)} KiB -> ${path.relative(process.cwd(), file)}`);
 }
@@ -340,7 +375,7 @@ function checkBaseline(out, file) {
   list('REGRESSIONS: pass -> not pass', regressions);
   list('NEW tests not in the baseline', added);
   list(shaChanged ? 'Disappeared (test262 revision changed)' : 'DISAPPEARED from the baseline', disappeared);
-  list('Improvements: now passing (run --update-baseline to record)', improvements);
+  list('Improvements: now passing (run --update-baseline-improvements to record)', improvements);
   const failed = regressions.length > 0 || added.length > 0 || (disappeared.length > 0 && !shaChanged);
   console.log(`\nbaseline check: ${failed ? 'FAILED' : 'ok'} (${regressions.length} regressions, ${added.length} new, ${disappeared.length} disappeared, ${improvements.length} improvements)`);
   return failed ? 1 : 0;

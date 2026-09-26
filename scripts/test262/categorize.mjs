@@ -17,6 +17,9 @@ const RULES = [
   ['Unicode tables / case folding', 'F5', (k) => /property-escapes\/generated\/|unicode_full_case_folding|u-case-mapping/.test(k)],
   ['lookbehind (D7)', 'F6b', (k) => /lookBehind\/|named-groups\/lookbehind/.test(k)],
   ['captures in quantified lookahead', 'F6a', (k) => /lookahead-quantifier-match-groups/.test(k)],
+  // Only D5 (dot/anchors vs \r, U+2028, U+2029) fails in these two; bonus
+  // for F1, not counted in its target (docs/REGEX_TIERS_PLAN.md, F1).
+  ['line terminators \\r U+2028 U+2029 (D5)', 'F1', (k) => /dotall\/without-dotall-unicode/.test(k)],
   ['non-u code units: dot, lone surrogate halves, indices (D6)', 'F3', (k) => /dotall\/|indices-array-non-unicode-match|coerce-unicode|builtin-infer-unicode/.test(k)],
   ['u: escaped/literal surrogate pairs (D13)', 'F1', (k) => /u-surrogate-pairs|source\/value-u|u-astral-char-class-invert/.test(k)],
   ['\\s is ASCII-only (D4)', 'F1', (k) => /whitespace-class-escape|character-class-escape-non-whitespace/.test(k)],
@@ -24,6 +27,9 @@ const RULES = [
   ['backreferences past \\9, >16 groups, deep nesting (D9)', 'F1', (k) => /S15\.10\.2\.11_A1_T[89]|S15\.10\.2\.8_A3_T1[56]/.test(k)],
   ['group names: Unicode identifiers, forward references', 'F1', (k, r) => /InvalidGroupName|UnknownGroupName/.test(r.detail || '') && !/annexB/.test(k)],
   ['Annex B lexical grammar (D2 and friends)', 'F1', (k) => /^annexB\//.test(k)],
+  // `\` + LineTerminator inside a *literal* is a JS lexer error; as a
+  // pattern (`new RegExp("\\\n")`) it is valid and zregex agrees with V8.
+  ['JS lexer: \\ + LineTerminator in a literal (host)', '—', (k) => /literals\/regexp\/S7\.8\.5_A[12]\.5_T[13]/.test(k)],
   ['u grammar / early errors (parse-negative accepted)', 'F1', (k, r) => /\|parse$/.test(k) && r.status === 'fail'],
   ['\\xFF / Latin-1 escape', 'F1', (k) => /S15\.10\.2\.10_A3\.1_T1/.test(k)],
   ['literal lexer tests (not extractable)', '—', (k, r) => r.status === 'unextracted'],

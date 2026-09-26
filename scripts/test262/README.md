@@ -30,7 +30,8 @@ node scripts/test262/run.mjs --sample 100      # stratified, reproducible sample
 node scripts/test262/run.mjs --filter lookBehind
 
 zig build test262                              # the gate: ReleaseSafe build + --check-baseline
-node scripts/test262/run.mjs --update-baseline scripts/test262/baseline.json   # record a new baseline
+node scripts/test262/run.mjs --update-baseline-improvements scripts/test262/baseline.json  # record improvements only
+node scripts/test262/run.mjs --update-baseline scripts/test262/baseline.json   # new test262 revision only
 ```
 
 ## The baseline gate
@@ -44,7 +45,11 @@ skipped tests excluded; crashes included as expected states).
 - an entry that **disappeared**, unless the pinned test262 revision changed.
 
 An entry that starts passing is reported as an improvement and doesn't fail
-the run; record it with `--update-baseline` in an explicit commit. With
+the run; record it with `--update-baseline-improvements` in an explicit
+commit. That flag runs the check first and refuses to write anything if it
+fails, then flips only not-pass -> pass entries, so a regression can never be
+absorbed into the baseline. `--update-baseline` rewrites every entry and is
+only for a new pinned test262 revision. With
 `--filter`/`--sample` the check is scoped to the selected tests.
 
 | Variable | Default | Meaning |
