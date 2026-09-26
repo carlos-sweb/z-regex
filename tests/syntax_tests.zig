@@ -432,20 +432,38 @@ test "D8: *+ ++ ?+ are SyntaxErrors by default and possessive with the opt-in" {
 
 test "v + u: a set operation whose last operand is a bracketed class" {
     // Before the fix the token after the nested operand's `]` (the outer
-    // `]`) was read outside a class, where `u` rejects a lone `]`.
-    const vu: zregex.CompileOptions = .{ .v = true, .unicode = true };
-    try expectMatch("[[a]&&[a]]", vu, "xa", "a");
-    try expectMatch("[[a]&&[a]]", vu, "b", null);
-    try expectMatch("[\\p{L}&&[a]]", vu, "1a", "a");
-    try expectMatch("[\\p{L}&&[a]]", vu, "b", null);
-    // Not a regression: a property as the last operand already worked.
-    try expectMatch("[[a]--\\p{Lu}]", vu, "Aa", "a");
-    try expectMatch("[[a]--\\p{Lu}]", vu, "A", null);
-    // A negated nested operand, and the same patterns with `v` alone.
-    try expectMatch("[\\p{L}--[^a-z]]", vu, "Ab", "b");
-    for ([_][]const u8{ "[[a]&&[a]]", "[\\p{L}&&[a]]", "[[a]--\\p{Lu}]" }) |p| try expectAccepted(p, .{ .v = true });
+    // `]`) was read outside a class, where `u` rejects a lone `]`. Since
+    // F4a(4) prep `compile` rejects `u` with `v` (a SyntaxError, as in
+    // ECMA-262), so the lexer state the fix is about (`unicode_mode` and
+    // `v_mode` together, which F5 brings back for `v` alone) is checked on
+    // the lexer and parser directly.
+    for ([_][]const u8{ "[[a]&&[a]]", "[\\p{L}&&[a]]", "[[a]--\\p{Lu}]", "[\\p{L}--[^a-z]]" }) |p| try parseUnicodeSets(p, true);
+    try parseUnicodeSets("[[a]&&[a]]]", false);
     // Only the nested class's lookahead is relaxed: a stray `]` after a
-    // top-level class, or after the outer class, is still rejected under `u`.
+    // top-level class is still rejected under `u`.
     try expectRejected("[a]]", u);
-    try expectRejected("[[a]&&[a]]]", vu);
+    const v: zregex.CompileOptions = .{ .v = true };
+    try expectMatch("[[a]&&[a]]", v, "xa", "a");
+    try expectMatch("[[a]&&[a]]", v, "b", null);
+    try expectMatch("[\\p{L}&&[a]]", v, "1a", "a");
+    try expectMatch("[\\p{L}&&[a]]", v, "b", null);
+    try expectMatch("[[a]--\\p{Lu}]", v, "Aa", "a");
+    try expectMatch("[[a]--\\p{Lu}]", v, "A", null);
+    try expectMatch("[\\p{L}--[^a-z]]", v, "Ab", "b");
+    try testing.expectError(error.IncompatibleFlags, zregex.Regex.compileWithOptions(testing.allocator, "[[a]&&[a]]", .{ .v = true, .unicode = true }));
+}
+
+/// Parses `pattern` with the lexer in `unicode_mode` and `v_mode` together.
+fn parseUnicodeSets(pattern: []const u8, accepted: bool) !void {
+    var lexer = zregex.Lexer.init(pattern);
+    lexer.unicode_mode = true;
+    lexer.v_mode = true;
+    var parser = try zregex.Parser.init(testing.allocator, &lexer);
+    defer parser.deinit();
+    if (parser.parse()) |ast| {
+        ast.deinit();
+        if (!accepted) return error.TestExpectedError;
+    } else |err| {
+        if (err == error.OutOfMemory or accepted) return err;
+    }
 }

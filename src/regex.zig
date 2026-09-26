@@ -104,6 +104,8 @@ pub const RegexError = parser_mod.ParseError || generator_mod.CodegenError || Al
     /// `CompileOptions.force_tier` asked for an executor the pattern can't
     /// run on (the reason is in `CompileOptions.tier_diagnostic`).
     TierUnavailable,
+    /// `unicode` and `v` together, a SyntaxError in ECMA-262.
+    IncompatibleFlags,
 };
 
 /// Main Regex type - represents a compiled regular expression

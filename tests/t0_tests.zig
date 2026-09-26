@@ -264,3 +264,69 @@ test "execAt on the VM: a warm composite scratch allocates nothing" {
     try testing.expectEqual(warm, failing.allocations);
     try testing.expect(!scratch.in_use);
 }
+
+// ------------------------------------------------ F4a(4) prep: path audit
+
+test "unicode and v together are a SyntaxError, as in Flags.parse" {
+    try testing.expectError(error.IncompatibleFlags, zregex.Regex.compileWithOptions(testing.allocator, "a", .{ .unicode = true, .v = true }));
+    try testing.expectError(error.IncompatibleFlags, zregex.analysis.Flags.parse("uv"));
+    try testing.expectError(error.IncompatibleFlags, zregex.compile(testing.allocator, "a", .{ .unicode = true, .v = true }));
+}
+
+test "Regex.findAll (F4a) and tier2 Matcher.findAll agree on the backtracker" {
+    // Two implementations of the same facade loop since F4a(3): the Regex
+    // one (dispatching) and the backtracker's own, still used by its tests.
+    const a = testing.allocator;
+    for (cases) |c| {
+        const pattern, const f = c;
+        const re = try zregex.Regex.compileWithOptions(a, pattern, .{ .case_insensitive = f.i, .multiline = f.m, .dot_all = f.s, .force_tier = .expert });
+        defer re.deinit();
+        const m = zregex.tier2.matcher.Matcher.initCompiled(a, re.compiled);
+        for (subjects) |s| {
+            var x = try re.findAll(s);
+            defer {
+                for (x.items) |r| r.deinit();
+                x.deinit(a);
+            }
+            var y = try m.findAll(s, false);
+            defer {
+                for (y.items) |r| r.deinit();
+                y.deinit(a);
+            }
+            try testing.expectEqual(y.items.len, x.items.len);
+            for (x.items, y.items) |p, q| {
+                try testing.expectEqual(q.start, p.start);
+                try testing.expectEqual(q.end, p.end);
+            }
+        }
+    }
+}
+
+test "existsAnchoredMatch at a position agrees with a sticky exec there" {
+    const gpa = testing.allocator;
+    var vs: tier0.VmScratch = .init(gpa);
+    defer vs.deinit();
+    for (cases) |c| {
+        const pattern, const f = c;
+        const fe = try zregex.lower.Frontend.init(gpa, pattern, .{}, .{ .ignore_case = f.i, .multiline = f.m, .dot_all = f.s });
+        defer fe.deinit();
+        const prog = try tier0.compile(gpa, fe.root);
+        defer prog.deinit(gpa);
+        for (subjects) |s8| {
+            const s16 = try zregex.subject.utf16FromWtf8(gpa, s8);
+            defer gpa.free(s16);
+            for ([_]zregex.Subject{ .{ .wtf8 = s8 }, .{ .utf16 = s16 } }) |subj| {
+                for (0..subj.len() + 1) |i| {
+                    if (!subj.isPosition(i)) continue;
+                    var budget: zregex.Budget = .unlimited;
+                    const exists = try tier0.existsAnchoredMatch(&prog, subj, .code_unit, i, .forward, &vs, &budget);
+                    const found = (try vm(&prog, subj, i, true, &vs)).found;
+                    testing.expectEqual(found, exists) catch |err| {
+                        std.debug.print("/{s}/ at {d} ({s})\n", .{ pattern, i, @tagName(subj) });
+                        return err;
+                    };
+                }
+            }
+        }
+    }
+}

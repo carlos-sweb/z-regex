@@ -101,7 +101,7 @@ fn zigErrorToC(err: anytype) ZRegexError {
         error.RecursionLimitExceeded => .ZREGEXP_ERROR_RECURSION_LIMIT,
         error.StepLimitExceeded => .ZREGEXP_ERROR_STEP_LIMIT,
         error.UnmatchedParen => .ZREGEXP_ERROR_UNMATCHED_PAREN,
-        error.InvalidEscape, error.InvalidQuantifier => .ZREGEXP_ERROR_SYNTAX,
+        error.InvalidEscape, error.InvalidQuantifier, error.IncompatibleFlags => .ZREGEXP_ERROR_SYNTAX,
         error.InvalidCharRange => .ZREGEXP_ERROR_INVALID_RANGE,
         else => .ZREGEXP_ERROR_UNKNOWN,
     };
@@ -799,8 +799,15 @@ test "zregex_compile / zregex_compile_n carry u and v to CompileResult.mode (F3c
         .{ .unicode = false, .v = false, .mode = .code_unit },
         .{ .unicode = true, .v = false, .mode = .code_point },
         .{ .unicode = false, .v = true, .mode = .code_point },
-        .{ .unicode = true, .v = true, .mode = .code_point },
     };
+    // `u` and `v` together are a SyntaxError (F4a(4) prep).
+    var both = zregex_default_options();
+    both.unicode = true;
+    both.v = true;
+    try std.testing.expect(zregex_compile("a", &both) == null);
+    try std.testing.expectEqual(ZRegexError.ZREGEXP_ERROR_SYNTAX, zregex_last_error());
+    try std.testing.expect(zregex_compile_n("a", 1, &both) == null);
+    try std.testing.expectEqualStrings("IncompatibleFlags", std.mem.span(zregex_last_error_name()));
     for (cases) |c| {
         var opts = zregex_default_options();
         opts.unicode = c.unicode;

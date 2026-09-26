@@ -823,6 +823,7 @@ starts inside a character. That also fixes captures that were silently wrong:
 | F3b | A literal above U+007F is one `CHAR32` with its code point (was one per UTF-8 byte); a raw pattern byte is `BYTE` | 73 | `39765b7` |
 | F3c | none | 0 | — |
 | F3d | Without `u`/`v` an astral pattern character is two `CHAR32`, its UTF-16 halves | 4 | `4d6aa33` |
+| F4a(4) prep | `u` and `v` together are `error.IncompatibleFlags` (a SyntaxError, as `Flags.parse` already said) | 5 | this phase |
 
 ### F4a: linear VM without captures (in progress)
 

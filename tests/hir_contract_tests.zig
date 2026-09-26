@@ -29,8 +29,10 @@ fn has(flags: []const u8, c: u8) bool {
 fn check(pattern: []const u8, flags: []const u8) !void {
     const a = testing.allocator;
     const u = has(flags, 'u') or has(flags, 'v');
+    // The lexer modes `lower.Frontend` sets: `v` alone doesn't turn on
+    // `unicode_mode` (yet, F5), and `u` with `v` is a SyntaxError.
     var lexer = zregex.Lexer.init(pattern);
-    lexer.unicode_mode = u;
+    lexer.unicode_mode = has(flags, 'u');
     lexer.v_mode = has(flags, 'v');
     lexer.code_units = !u;
     var parser = try zregex.Parser.init(a, &lexer);
@@ -45,7 +47,10 @@ fn check(pattern: []const u8, flags: []const u8) !void {
     if (body.* != .char_set) return;
     const set = body.char_set.set;
 
-    var re = try zregex.Regex.compileWithOptions(a, pattern, .{ .case_insensitive = has(flags, 'i'), .dot_all = has(flags, 's'), .unicode = u, .v = has(flags, 'v') });
+    // The backtracker, forced: the contract is between `set` and its
+    // bytecode. T0's VM reads `set` itself, so routing a T0 atom there (F4a)
+    // would make this check compare `set` with `set`.
+    var re = try zregex.Regex.compileWithOptions(a, pattern, .{ .case_insensitive = has(flags, 'i'), .dot_all = has(flags, 's'), .unicode = has(flags, 'u'), .v = has(flags, 'v'), .force_tier = .expert });
     defer re.deinit();
 
     var points: std.ArrayListUnmanaged(u32) = .empty;

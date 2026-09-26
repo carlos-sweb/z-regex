@@ -37,6 +37,8 @@ pub const Stats = struct {
     executed: usize = 0,
     /// Executed patterns that ran on T0's VM, compared with the backtracker.
     engines_compared: usize = 0,
+    /// Pattern×mode pairs that also went through the path audit (sampled).
+    audited: usize = 0,
     skipped_expert: usize = 0,
     skipped_unclassifiable: usize = 0,
 };
@@ -71,6 +73,8 @@ pub fn checkPattern(gpa: std.mem.Allocator, pattern: []const u8) !void {
             defer re.deinit();
             // F1 gate: analyze and compile agree on what is a SyntaxError.
             if (analyzed_syntax_error) return reportDisagreement(pattern, mode, "analyze: parse error, compile: ok");
+            const audit = sampled(pattern);
+            if (audit) try checkRouting(gpa, re, pattern, options, analysis, mode);
             if (!execute) {
                 if (analysis.min_tier == null) {
                     stats.skipped_unclassifiable += 1;
@@ -81,7 +85,7 @@ pub fn checkPattern(gpa: std.mem.Allocator, pattern: []const u8) !void {
             }
             stats.executed += 1;
             for (subjects) |subject| {
-                if (re.find(subject)) |m| {
+                if (audit) try findMatchesExecAt(gpa, re, subject, pattern) else if (re.find(subject)) |m| {
                     if (m) |match| match.deinit();
                 } else |err| switch (err) {
                     error.OutOfMemory => return err,
@@ -89,7 +93,7 @@ pub fn checkPattern(gpa: std.mem.Allocator, pattern: []const u8) !void {
                 }
                 try sameInBoth(gpa, re, subject, pattern, mode);
             }
-            if (re.t0 != null) try compareEngines(gpa, re, pattern, options);
+            if (re.t0 != null) try compareEngines(gpa, re, pattern, options, audit);
         } else |err| switch (err) {
             error.OutOfMemory => return err,
             else => {
@@ -131,8 +135,62 @@ fn sameInBoth(gpa: std.mem.Allocator, re: zregex.Regex, subject: []const u8, pat
     }
 }
 
+/// The F4a(4) path-audit checks (`checkRouting`, `findMatchesExecAt`) run
+/// on one pattern in ten, picked by a hash of the pattern: on every pattern
+/// they doubled the stress in Debug (70.6 -> 140.5 s), over the 50% limit.
+fn sampled(pattern: []const u8) bool {
+    return std.hash.Wyhash.hash(0xF4A4, pattern) % 10 == 0;
+}
+
+/// F4a audit: the dispatcher routes to T0's VM exactly the patterns
+/// `analyze()` puts in T0 and `tier0.check` accepts, and `force_tier`
+/// agrees with that routing.
+fn checkRouting(gpa: std.mem.Allocator, re: zregex.Regex, pattern: []const u8, options: zregex.CompileOptions, analysis: zregex.analysis.Analysis, mode: Mode) !void {
+    stats.audited += 1;
+    const eligible = blk: {
+        if (analysis.min_tier != .regular) break :blk false;
+        const fe = try zregex.lower.Frontend.init(gpa, pattern, .{ .unicode = options.unicode, .v = options.v }, .{});
+        defer fe.deinit();
+        break :blk zregex.tier0.check(fe.root) == null;
+    };
+    if (eligible != (re.t0 != null)) return reportDisagreement(pattern, mode, "analyze()+tier0.check and the dispatcher route differently");
+    var o = options;
+    o.force_tier = .regular;
+    if (zregex.Regex.compileWithOptions(gpa, pattern, o)) |forced| {
+        defer forced.deinit();
+        if (re.t0 == null or forced.t0 == null) return reportDisagreement(pattern, mode, "force_tier .regular compiled a pattern the dispatcher keeps off the VM");
+    } else |err| switch (err) {
+        error.OutOfMemory => return err,
+        error.TierUnavailable => if (re.t0 != null) return reportDisagreement(pattern, mode, "force_tier .regular refused a pattern the dispatcher routes to the VM"),
+        else => return err,
+    }
+    o.force_tier = .expert;
+    const bt = try zregex.Regex.compileWithOptions(gpa, pattern, o);
+    defer bt.deinit();
+    if (bt.t0 != null) return reportDisagreement(pattern, mode, "force_tier .expert left a T0 program");
+}
+
+/// F4a audit: the facade's `find` is `execAt` from 0 (WTF-8, the regex's
+/// own sticky), including its errors.
+fn findMatchesExecAt(gpa: std.mem.Allocator, re: zregex.Regex, subject: []const u8, pattern: []const u8) !void {
+    const found = re.find(subject);
+    defer if (found) |m| (if (m) |match| match.deinit()) else |_| {};
+    var scratch = zregex.Scratch.init(gpa);
+    defer scratch.deinit();
+    const slots = try gpa.alloc(?usize, re.slotCount());
+    defer gpa.free(slots);
+    var out: zregex.MatchSlots = .{ .slots = slots };
+    const exec = re.execAt(.{ .wtf8 = subject }, 0, &scratch, &out, .{});
+    const same = if (found) |m| (if (exec) |e| (if (m) |match| e and slots[0].? == match.start and slots[1].? == match.end else !e) else |_| false) else |ferr| (if (exec) |_| false else |eerr| ferr == eerr);
+    if (found) |_| {} else |err| if (err == error.OutOfMemory) return err;
+    if (!same) {
+        std.debug.print("\n/{s}/ on {x}: find and execAt differ\n", .{ pattern, subject });
+        return error.FindExecAtDisagree;
+    }
+}
+
 /// F4a: T0's VM (`re`) and the backtracker give the same result.
-fn compareEngines(gpa: std.mem.Allocator, re: zregex.Regex, pattern: []const u8, options: zregex.CompileOptions) !void {
+fn compareEngines(gpa: std.mem.Allocator, re: zregex.Regex, pattern: []const u8, options: zregex.CompileOptions, audit: bool) !void {
     stats.engines_compared += 1;
     var o = options;
     o.force_tier = .expert;
@@ -142,6 +200,7 @@ fn compareEngines(gpa: std.mem.Allocator, re: zregex.Regex, pattern: []const u8,
     var scratch = zregex.Scratch.init(gpa);
     defer scratch.deinit();
     for (subjects) |s8| {
+        if (audit) try findMatchesExecAt(gpa, bt, s8, pattern);
         const s16 = try zregex.subject.utf16FromWtf8(gpa, s8);
         defer gpa.free(s16);
         for ([_]zregex.Subject{ .{ .wtf8 = s8 }, .{ .utf16 = s16 } }) |subj| {

@@ -22,6 +22,10 @@
 #
 # F3d: without `u`/`v` an astral pattern character (literal or \u{...}) is
 # two CHAR32, its UTF-16 halves: 4 of 699 outcomes changed, exactly those.
+#
+# F4a(4) prep: `u` and `v` together are error:IncompatibleFlags (a SyntaxError
+# in ECMA-262, as analysis.Flags.parse already said): 5 of 699 outcomes
+# changed, exactly the `uv` entries.
 1f65ed2fc157c741		5b2f5d	[/]
 0dcc096902c1f92d		5b2f2f5d	[//]
 8570374eb144fd72		28612a29625c312b	(a*)b\\1+
@@ -390,21 +394,21 @@ aa10350e64a97fca		612b61	a+a
 aa10350e64a97fca	u	612b61	a+a
 9b36bcb6215a877c		612b3f	a+?
 9b36bcb6215a877c	u	612b3f	a+?
-00d9929bae6c7a0f	uv	5b5b615d26265b615d5d	[[a]&&[a]]
+error:IncompatibleFlags	uv	5b5b615d26265b615d5d	[[a]&&[a]]
 bec72ce4ce278230		5b5b615d26265b615d5d	[[a]&&[a]]
 error:UnmatchedBracket	u	5b5b615d26265b615d5d	[[a]&&[a]]
-00d9929bae6c7a0f	uv	5b5c707b4c7d26265b615d5d	[\\p{L}&&[a]]
+error:IncompatibleFlags	uv	5b5c707b4c7d26265b615d5d	[\\p{L}&&[a]]
 d73154115db53b20		5b5c707b4c7d26265b615d5d	[\\p{L}&&[a]]
 error:UnmatchedBracket	u	5b5c707b4c7d26265b615d5d	[\\p{L}&&[a]]
-00d9929bae6c7a0f	uv	5b5b615d2d2d5c707b4c757d5d	[[a]--\\p{Lu}]
+error:IncompatibleFlags	uv	5b5b615d2d2d5c707b4c757d5d	[[a]--\\p{Lu}]
 865aff94f7c64b83		5b5b615d2d2d5c707b4c757d5d	[[a]--\\p{Lu}]
 error:UnmatchedBracket	u	5b5b615d2d2d5c707b4c757d5d	[[a]--\\p{Lu}]
-95d50d51f40f39e3	uv	5b5c707b4c7d2d2d5b5e612d7a5d5d	[\\p{L}--[^a-z]]
+error:IncompatibleFlags	uv	5b5c707b4c7d2d2d5b5e612d7a5d5d	[\\p{L}--[^a-z]]
 d449c6f8d50f04ba		5b5c707b4c7d2d2d5b5e612d7a5d5d	[\\p{L}--[^a-z]]
 error:InvalidCharRange	u	5b5c707b4c7d2d2d5b5e612d7a5d5d	[\\p{L}--[^a-z]]
 error:UnmatchedBracket	u	5b615d5d	[a]]
 df9fb13dd1de4261		5b615d5d	[a]]
-error:UnmatchedBracket	uv	5b5b615d26265b615d5d5d	[[a]&&[a]]]
+error:IncompatibleFlags	uv	5b5b615d26265b615d5d5d	[[a]&&[a]]]
 5fa321ed647b3ee6		5b5b615d26265b615d5d5d	[[a]&&[a]]]
 error:UnmatchedBracket	u	5b5b615d26265b615d5d5d	[[a]&&[a]]]
 d6197ba0281785eb		5c70	\\p

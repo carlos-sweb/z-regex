@@ -41,6 +41,7 @@ pub const DynBitSet = @import("utils").bitset.DynBitSet;
 pub const Pool = @import("utils").pool.Pool;
 pub const Pooled = @import("utils").pool.Pooled;
 pub const debug = @import("utils").debug;
+pub const Budget = @import("utils").budget.Budget;
 
 // Bytecode module exports
 pub const Opcode = @import("tier2").opcodes.Opcode;

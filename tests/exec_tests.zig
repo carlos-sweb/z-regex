@@ -80,8 +80,9 @@ test "compile options reach CompileResult.mode (F3c)" {
         .{ .opts = .{}, .mode = .code_unit },
         .{ .opts = .{ .unicode = true }, .mode = .code_point },
         .{ .opts = .{ .v = true }, .mode = .code_point },
-        .{ .opts = .{ .unicode = true, .v = true }, .mode = .code_point },
     };
+    // `u` and `v` together are a SyntaxError (F4a(4) prep).
+    try testing.expectError(error.IncompatibleFlags, zregex.compile(testing.allocator, "a", .{ .unicode = true, .v = true }));
     for (cases) |c| {
         const r = try zregex.compile(testing.allocator, "a", c.opts);
         defer r.deinit();
@@ -188,8 +189,12 @@ test "execAt with a warm scratch doesn't allocate (the bench's cases)" {
         .{ .pattern = "(a+)+b", .input = "aaaaaaaaaaaaab" },
         .{ .pattern = "(a)(b)(c)(d)(e)(f)(g)(h)(i)(j)(k)(l)(m)(n)(o)(p)(q)(r)", .input = "xabcdefghijklmnopqr" },
     };
-    for (cases) |c| {
-        var re = try zregex.Regex.compileWithOptions(testing.allocator, c.pattern, c.opts);
+    // Each case on the executor the dispatcher picks and on the backtracker
+    // (since F4a the T0 cases route to the VM; the backtracker keeps its gate).
+    for (cases) |c| for ([_]?zregex.analysis.Tier{ null, .expert }) |force| {
+        var opts = c.opts;
+        opts.force_tier = force;
+        var re = try zregex.Regex.compileWithOptions(testing.allocator, c.pattern, opts);
         defer re.deinit();
         const s16 = try subject.utf16FromWtf8(testing.allocator, c.input);
         defer testing.allocator.free(s16);
@@ -211,7 +216,7 @@ test "execAt with a warm scratch doesn't allocate (the bench's cases)" {
                 return error.TestUnexpectedResult;
             }
         }
-    }
+    };
 }
 
 test "Scratch marks itself in use during an execution" {

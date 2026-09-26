@@ -74,7 +74,8 @@ pub const CompileOptions = struct {
     /// (yet) turn on full `u`-mode strictness the way real `v` implies, nor
     /// `\q{...}` multi-string literals or operator chaining/deep nesting --
     /// see `docs/KNOWN_LIMITATIONS.md` for the authoritative list of what
-    /// this flag does and doesn't cover.
+    /// this flag does and doesn't cover. Together with `unicode` it is
+    /// `error.IncompatibleFlags`, a SyntaxError in ECMA-262.
     v: bool = false,
 
     /// Opt-in extension, not ECMA-262 (D8, F1b): read `*+`, `++` and `?+` as
@@ -143,6 +144,9 @@ pub fn compileTiers(allocator: Allocator, pattern: []const u8, options: CompileO
 }
 
 fn frontend(allocator: Allocator, pattern: []const u8, options: CompileOptions) !*lower_mod.Frontend {
+    // ECMA-262: `u` and `v` together are a SyntaxError (the same check as
+    // `analysis.Flags.parse`).
+    if (options.unicode and options.v) return error.IncompatibleFlags;
     return lower_mod.Frontend.init(allocator, pattern, .{
         .unicode = options.unicode,
         .v = options.v,
