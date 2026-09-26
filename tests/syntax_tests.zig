@@ -299,3 +299,36 @@ test "^ and $ with multiline split lines at every LineTerminator" {
     // CRLF is two terminators: an empty line sits between them.
     try expectMatch("^$", m, "a\r\nb", "");
 }
+
+// --- D1/D2 (F1b): braces and brackets that aren't syntax ---
+
+test "D1: an empty-minimum brace is literal text in Annex B and a SyntaxError with u" {
+    try expectMatch("a{,5}", annex_b, "aa{,5}", "a{,5}");
+    try expectMatch("^a{}$", annex_b, "a{}", "a{}");
+    try expectMatch("x{,}", annex_b, "x{,}", "x{,}");
+    for ([_][]const u8{ "a{,5}", "a{}", "a{,}" }) |p| try expectRejected(p, u);
+    // Well-formed braced quantifiers are unchanged.
+    try expectMatch("a{2}", annex_b, "aaa", "aa");
+    try expectMatch("a{2,}", u, "aaa", "aaa");
+    try expectMatch("a{1,2}", annex_b, "aaa", "aa");
+}
+
+test "D2: a lone {, } or ] is literal text in Annex B and a SyntaxError with u" {
+    for ([_][]const u8{ "a{", "{", "a{1", "a{1,", "a{1,2", "a{x}", "}", "a}", "]", "a]" }) |p| {
+        try expectAccepted(p, annex_b);
+        try expectRejected(p, u);
+    }
+    try expectMatch("a{1,", annex_b, "a{1,", "a{1,");
+    try expectMatch("]+", annex_b, "x]]", "]]");
+    try expectMatch("^}$", annex_b, "}", "}");
+    // Escaped, they are fine in both modes.
+    try expectMatch("\\{\\}\\]", u, "{}]", "{}]");
+}
+
+test "a braced quantifier with nothing to repeat is still a SyntaxError (Annex B InvalidBracedQuantifier)" {
+    for ([_][]const u8{ "{1}", "{1,}", "{1,2}", "a|{1}", "({2})" }) |p| {
+        try expectRejected(p, annex_b);
+        try expectRejected(p, u);
+    }
+    try expectRejected("a{2,1}", annex_b); // out of order
+}

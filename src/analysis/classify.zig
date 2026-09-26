@@ -14,10 +14,10 @@
 //!
 //! Patterns whose current compile semantics is *known* to deviate from
 //! ECMA-262 are reported as unclassifiable instead of being classified on
-//! top of a wrong meaning (plan §6.3, "decisión de F0a"): D1 and D10
-//! (recorded by the lexer), D8 (possessive quantifiers), and anything the
-//! current parser rejects -- which includes the D2/D3 deviations as well as
-//! genuine SyntaxErrors, indistinguishable until F1.
+//! top of a wrong meaning (plan §6.3, "decisión de F0a"): D10 (recorded by
+//! the lexer), D8 (possessive quantifiers), and anything the current parser
+//! rejects. D1 left this list in F1b, when the lexer started reading `{,5}`
+//! per ECMA-262 (a deliberate change of the F0a contract, plan §5.2).
 
 const std = @import("std");
 const Allocator = std.mem.Allocator;
@@ -114,8 +114,6 @@ pub const FeatureSet = std.EnumSet(Feature);
 /// Known ECMA-262 deviations of the current parser that make a pattern
 /// unclassifiable in F0a (numbering from plan §2.3).
 pub const Deviation = enum {
-    /// `{}`, `{,}`, `{,n}` accepted as a quantifier.
-    d1_quantifier_min_omitted,
     /// Possessive quantifiers (`*+`, `++`, `?+`) enabled by default.
     d8_possessive_quantifier,
     /// `{n}` with n > 65536 silently clamped.
@@ -208,7 +206,6 @@ pub fn analyze(gpa: Allocator, pattern: []const u8, flags: Flags) Allocator.Erro
 
     if (lexer.deviation) |d| {
         return unclassifiable(.{ .known_deviation = switch (d) {
-            .min_omitted => .d1_quantifier_min_omitted,
             .min_clamped => .d10_quantifier_min_clamped,
         } });
     }
@@ -339,14 +336,11 @@ fn expectParseError(pattern: []const u8, flags: []const u8) !void {
     try testing.expect(a.unclassifiable.? == .parse_error);
 }
 
-test "§5.2: [0-9]{,5} is unclassifiable in F0a (D1), with and without u" {
-    try expectDeviation("[0-9]{,5}", "", .d1_quantifier_min_omitted);
-    try expectDeviation("[0-9]{,5}", "u", .d1_quantifier_min_omitted);
-}
-
 test "§5.2 after F1: [0-9]{,5} is T0 (Annex B literal) and a SyntaxError with u" {
-    // Enabled by F1, once the lexer reads `{,5}` per ECMA-262.
-    return error.SkipZigTest;
+    // F0a reported it as unclassifiable (D1); F1b's lexer reads `{,5}` per
+    // ECMA-262: a digit class followed by the literal text `{,5}`.
+    try expectTier("[0-9]{,5}", "", .regular);
+    try expectParseError("[0-9]{,5}", "u");
 }
 
 test "§5.2: T0 patterns" {
@@ -408,19 +402,20 @@ test "counted repetition: unroll budget multiplies through nesting" {
     try expectTier("a{5,}", "", .regular);
 }
 
-test "D1 detection covers every empty-minimum form" {
-    try expectDeviation("a{}", "", .d1_quantifier_min_omitted);
-    try expectDeviation("a{,}", "", .d1_quantifier_min_omitted);
-    try expectDeviation("x(?:a{,2})", "", .d1_quantifier_min_omitted);
+test "every empty-minimum brace form is literal text without u and a SyntaxError with u (D1, F1b)" {
+    for ([_][]const u8{ "a{}", "a{,}", "x(?:a{,2})" }) |p| {
+        try expectTier(p, "", .regular);
+        try expectParseError(p, "u");
+    }
     // Well-formed quantifiers are not D1.
     try expectTier("a{2}", "", .regular);
     try expectTier("a{2,}", "", .regular);
     try expectTier("a{2,5}", "", .regular);
 }
 
-test "D1: braces that are class content or escaped are not reported" {
+test "braces that are class content or escaped are plain T0" {
     // The parser speculatively lexes the token after `[` in normal mode and
-    // then rewinds; that discarded `{,5}` must not count.
+    // then rewinds; that discarded token must not change the result.
     try expectTier("[{,5}]", "", .regular);
     try expectTier("\\{,5}", "", .regular);
 }
@@ -436,7 +431,8 @@ test "D8: possessive quantifiers are unclassifiable" {
 }
 
 test "parser rejections are reported, not raised" {
-    try expectParseError("a{", ""); // D2 today
+    try expectTier("a{", "", .regular); // Annex B literal since F1b (D2)
+    try expectParseError("a{", "u");
     try expectParseError("[]", ""); // D3 today
     try expectParseError("(", "");
     try expectParseError("\\q", "u");

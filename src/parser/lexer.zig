@@ -170,13 +170,11 @@ pub const Token = struct {
 
 /// Lexer for tokenizing regex patterns
 /// A `{...}` quantifier the lexer accepts with a meaning ECMA-262 doesn't
-/// give it (docs/REGEX_TIERS_PLAN.md §2.3). Recorded, not corrected: fixing
-/// these changes what existing patterns compile to, which is F1's job.
+/// give it (docs/REGEX_TIERS_PLAN.md §2.3). Recorded, not corrected. D1
+/// (`{,5}` read as `{0,5}`) was one until F1b; it is now literal text
+/// (Annex B) or a SyntaxError (`u`).
 pub const QuantifierDeviation = enum {
-    /// D1: empty minimum (`{}`, `{,}`, `{,5}`) accepted as `{0,...}`. Per
-    /// Annex B it's literal text; with `u`/`v` it's a SyntaxError.
-    min_omitted,
-    /// D10: minimum above `MAX_REPEAT_UNROLL`, silently clamped.
+    /// D10: minimum above `MAX_REPEAT_UNROLL`, silently clamped (F5).
     min_clamped,
 };
 
@@ -428,9 +426,18 @@ pub const Lexer = struct {
                 self.pos += 1;
                 return Token.simple(.lbracket, start_pos);
             },
+            // A `]` or `}` outside a class, and a `{` that doesn't start a
+            // braced quantifier, are Annex B ExtendedPatternCharacters
+            // (literal text, D2); under `u` they are SyntaxErrors.
             ']' => {
                 self.pos += 1;
-                return Token.simple(.rbracket, start_pos);
+                if (self.unicode_mode) return error.UnmatchedBracket;
+                return Token.char_token(']', start_pos);
+            },
+            '}' => {
+                self.pos += 1;
+                if (self.unicode_mode) return error.InvalidRepeat;
+                return Token.char_token('}', start_pos);
             },
             '-' => {
                 self.pos += 1;
@@ -438,7 +445,11 @@ pub const Lexer = struct {
             },
             '{' => {
                 self.pos += 1;
-                return try self.parseRepeat(start_pos);
+                return self.parseRepeat(start_pos) catch |err| {
+                    if (self.unicode_mode) return err;
+                    self.pos = start_pos + 1;
+                    return Token.char_token('{', start_pos);
+                };
             },
             '\\' => {
                 self.pos += 1;
@@ -634,12 +645,8 @@ pub const Lexer = struct {
     }
 
     /// Record D1/D10 for a quantifier `parseRepeat` is about to accept.
-    fn noteRepeatDeviation(self: *Self, min: u64, min_omitted: bool, start_pos: usize) void {
-        if (min_omitted) {
-            self.noteDeviation(.min_omitted, start_pos);
-        } else if (min > MAX_REPEAT_UNROLL) {
-            self.noteDeviation(.min_clamped, start_pos);
-        }
+    fn noteRepeatDeviation(self: *Self, min: u64, start_pos: usize) void {
+        if (min > MAX_REPEAT_UNROLL) self.noteDeviation(.min_clamped, start_pos);
     }
 
     /// Parse repeat quantifier {n,m}
@@ -648,7 +655,10 @@ pub const Lexer = struct {
         var min: u64 = 0;
         var max: u64 = 0;
         var has_comma = false;
-        const min_start = self.pos;
+
+        // A braced quantifier needs its minimum: `{}`, `{,}` and `{,5}` are
+        // not quantifiers (D1).
+        if (self.pos >= self.pattern.len or !isAsciiDigit(self.pattern[self.pos])) return error.InvalidRepeat;
 
         // Parse min
         while (self.pos < self.pattern.len) {
@@ -664,7 +674,7 @@ pub const Lexer = struct {
                 // {n} form: exactly n. A count past the limit degrades to
                 // "clamped min, unbounded max" (see MAX_REPEAT_UNROLL).
                 self.pos += 1;
-                self.noteRepeatDeviation(min, self.pos - 1 == min_start, start_pos);
+                self.noteRepeatDeviation(min, start_pos);
                 const n: u32 = @intCast(@min(min, MAX_REPEAT_UNROLL));
                 const m: u32 = if (min > MAX_REPEAT_UNROLL) unbounded else n;
                 return Token.repeat_token(n, m, start_pos);
@@ -683,8 +693,7 @@ pub const Lexer = struct {
                 self.pos += 1;
             } else if (c == '}') {
                 self.pos += 1;
-                // `min_start` holds the comma when the min digits are empty.
-                self.noteRepeatDeviation(min, self.pattern[min_start] == ',', start_pos);
+                self.noteRepeatDeviation(min, start_pos);
                 const n: u32 = @intCast(@min(min, MAX_REPEAT_UNROLL));
                 // {n,} (no max digits) is unlimited; a max past the limit is
                 // treated as unlimited too -- correct for any real input.
@@ -1044,7 +1053,9 @@ test "Lexer: special characters" {
     try std.testing.expectEqual(TokenType.rparen, (try lexer.next()).type);
     try std.testing.expectEqual(TokenType.plus, (try lexer.next()).type);
     try std.testing.expectEqual(TokenType.lbracket, (try lexer.next()).type);
-    try std.testing.expectEqual(TokenType.rbracket, (try lexer.next()).type);
+    // Outside a class `]` is literal text (Annex B, D2); the parser reads a
+    // class body in class mode, where it closes the class.
+    try std.testing.expectEqual(TokenType.char, (try lexer.next()).type);
     try std.testing.expectEqual(TokenType.question, (try lexer.next()).type);
 }
 
@@ -1130,10 +1141,16 @@ test "Lexer: isAtEnd" {
     try std.testing.expect(lexer.isAtEnd());
 }
 
-test "Lexer: invalid repeat" {
+test "Lexer: a brace that isn't a quantifier is literal, or an error under u" {
     var lexer = Lexer.init("{abc}");
+    const t = try lexer.next();
+    try std.testing.expectEqual(TokenType.char, t.type);
+    try std.testing.expectEqual(@as(u32, '{'), t.char_value);
+    try std.testing.expectEqual(@as(usize, 1), lexer.pos);
 
-    try std.testing.expectError(error.InvalidRepeat, lexer.next());
+    var strict = Lexer.init("{abc}");
+    strict.unicode_mode = true;
+    try std.testing.expectError(error.InvalidRepeat, strict.next());
 }
 
 test "Lexer: position tracking" {
