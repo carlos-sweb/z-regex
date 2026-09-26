@@ -690,6 +690,36 @@ dominates, not module size. **Review trigger:** if cold ReleaseSafe `zig build t
 goes past 150 s wall during F3–F4, the per-module test binaries get revisited; not
 before.
 
+### F3b: encoding-independent bytecode
+
+Every character opcode now decodes one character of the subject through the `subject`
+module and compares its value: a literal above U+007F is one `CHAR32` with its code
+point (it was one `CHAR32` per UTF-8 byte), and a raw byte of an ill-formed pattern
+(`hir.LitUnit.raw_byte`) is the new `BYTE` opcode, which compares that byte and never
+matches a UTF-16 subject. A literal never matches an ill-formed WTF-8 byte of the same
+value (`\u00e9` doesn't match a lone byte `0xE9`), as before; classes and `.` still take
+such a byte as its value. The semantics are still code points for every pattern (the
+pre-F3 behavior); F3d switches patterns without `u` to code units (D6).
+
+Checked old against new (F3a, `71868c2`) on the 40,636-pattern corpus of F2c, with
+`find` and `findAt` at every byte offset of 22 subjects (astral characters, lone
+surrogates, separately encoded halves, ill-formed bytes): no compile or error
+difference, and three kinds of match difference, all expected:
+
+- **Fixed bug:** `^` with `m` also accepted a lone LF or CR three bytes before the
+  position (the 3-byte LS/PS test looked at `pos - 3` with the single-byte test too), so
+  `/^x/m` matched in `"\nabx"`. 35 of the differences; regression test added.
+- **Lookbehind** (300): start positions go back one character at a time, never from
+  inside a character, up to 100 characters (it was 100 bytes). A capture inside a
+  lookbehind now holds whole characters, and a lookbehind that only succeeded by
+  starting in the middle of a character (so a class read a continuation byte as its
+  value) no longer does. Lookbehind is rewritten in F6b (D7).
+- **`findAt` inside a character.** At `b+2` of a 4-byte sequence, the new position
+  between the two halves, the new matcher decodes the trail half where the old one read
+  bytes (13,543 finds, by design). At any other offset inside a character (1,970
+  finds), which is not a position, the old matcher read byte by byte and the new one
+  also reaches `b+2`. From F3c such an offset gives no match.
+
 ### test262 baseline (F0b)
 
 The real test262 measurement that replaces the sample above as the semantic

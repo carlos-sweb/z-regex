@@ -87,7 +87,7 @@ pub fn decodeInstruction(bytecode: []const u8, offset: usize) !Instruction {
         },
 
         // 1 byte operand
-        .UNICODE_PROPERTY, .UNICODE_PROPERTY_INV, .UNICODE_SCRIPT, .UNICODE_SCRIPT_INV, .UNICODE_SCRIPT_EXTENSIONS, .UNICODE_SCRIPT_EXTENSIONS_INV => {
+        .UNICODE_PROPERTY, .UNICODE_PROPERTY_INV, .UNICODE_SCRIPT, .UNICODE_SCRIPT_INV, .UNICODE_SCRIPT_EXTENSIONS, .UNICODE_SCRIPT_EXTENSIONS_INV, .BYTE => {
             inst.operands[0] = bytecode[offset + 1];
             inst.operand_count = 1;
         },
@@ -165,7 +165,7 @@ pub fn encodeInstruction(inst: Instruction, buffer: []u8) !usize {
         },
 
         // 1 byte operand
-        .UNICODE_PROPERTY, .UNICODE_PROPERTY_INV, .UNICODE_SCRIPT, .UNICODE_SCRIPT_INV, .UNICODE_SCRIPT_EXTENSIONS, .UNICODE_SCRIPT_EXTENSIONS_INV => {
+        .UNICODE_PROPERTY, .UNICODE_PROPERTY_INV, .UNICODE_SCRIPT, .UNICODE_SCRIPT_INV, .UNICODE_SCRIPT_EXTENSIONS, .UNICODE_SCRIPT_EXTENSIONS_INV, .BYTE => {
             buffer[pos] = @intCast(inst.operands[0]);
             pos += 1;
         },

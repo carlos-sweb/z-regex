@@ -86,6 +86,40 @@ test "regression: a WTF-8 lone surrogate is one code point (7d36074)" {
     try testing.expect((try two.find(lone)) == null);
 }
 
+// F3b: `^` with `m` looked for a LineTerminator ending at `pos` by also
+// testing the byte at `pos - 3` (for the 3-byte LS/PS), which was true for a
+// lone LF/CR there too: `/^x/m` matched in "\nabx". Found by the F3b
+// old-vs-new comparison.
+test "regression: ^ with m needs a LineTerminator right before (F3b)" {
+    var re = try zregex.Regex.compileWithOptions(testing.allocator, "^x", .{ .multiline = true });
+    defer re.deinit();
+    try testing.expect((try re.find("\nabx")) == null);
+    try testing.expect((try re.find("\r\nax")) == null);
+    const m = (try re.find("ab\u{2028}x")) orelse return error.TestExpectedMatch;
+    defer m.deinit();
+    try testing.expectEqual(@as(usize, 5), m.start);
+}
+
+// F3b: a literal above U+007F is one code point, so it never matches an
+// ill-formed byte with the same value, and a raw pattern byte (BYTE) only
+// matches that byte.
+test "regression: a non-ASCII literal doesn't match a lone byte of its value (F3b)" {
+    var re = try zregex.Regex.compile(testing.allocator, "\\u00e9");
+    defer re.deinit();
+    try testing.expect((try re.find("\xE9")) == null);
+    const m = (try re.find("a\u{E9}")) orelse return error.TestExpectedMatch;
+    defer m.deinit();
+    try testing.expectEqual(@as(usize, 1), m.start);
+    try testing.expectEqual(@as(usize, 3), m.end);
+
+    var raw = try zregex.Regex.compile(testing.allocator, "\xE9");
+    defer raw.deinit();
+    const r = (try raw.find("a\xE9")) orelse return error.TestExpectedMatch;
+    defer r.deinit();
+    try testing.expectEqual(@as(usize, 1), r.start);
+    try testing.expect((try raw.find("\u{E9}")) == null);
+}
+
 // F0a: AST constructors leaked the new node when appending its child failed
 // (found by checkAllAllocationFailures on analyze). Same check on the full
 // compile path, over the constructors that append a child.

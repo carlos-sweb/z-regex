@@ -39,7 +39,10 @@ pub const Mode = enum {
 
 /// One decoded character: its value, and the position on its other side
 /// (the next position for `decodeAt`, the previous one for `decodeBefore`).
-pub const Decoded = struct { value: u32, pos: usize };
+/// `invalid` marks an ill-formed WTF-8 byte, decoded as its value: a
+/// literal U+00E9 must not match a lone byte 0xE9, while a class or `.`
+/// takes it as its value (the HIR contract).
+pub const Decoded = struct { value: u32, pos: usize, invalid: bool = false };
 
 pub const IndexError = error{InvalidIndex};
 
@@ -138,7 +141,7 @@ fn seqAt(s: []const u8, i: usize) ?Seq {
 
 /// The astral character whose 4-byte sequence has `i` as its `b+2`.
 fn midOf(s: []const u8, i: usize) ?u21 {
-    if (i < 2 or i >= s.len) return null;
+    if (i < 2 or i >= s.len or s[i] & 0xC0 != 0x80) return null;
     const seq = seqAt(s, i - 2) orelse return null;
     return if (seq.len == 4) seq.cp else null;
 }
@@ -166,8 +169,9 @@ fn wtf8IsPosition(s: []const u8, i: usize) bool {
 
 fn wtf8DecodeAt(s: []const u8, mode: Mode, i: usize) ?Decoded {
     if (i >= s.len) return null;
+    if (s[i] < 0x80) return .{ .value = s[i], .pos = i + 1 };
     if (midOf(s, i)) |cp| return .{ .value = trailOf(cp), .pos = i + 2 };
-    const seq = seqAt(s, i) orelse return .{ .value = s[i], .pos = i + 1 };
+    const seq = seqAt(s, i) orelse return .{ .value = s[i], .pos = i + 1, .invalid = true };
     if (seq.len == 4 and mode == .code_unit) return .{ .value = leadOf(seq.cp), .pos = i + 2 };
     return .{ .value = seq.cp, .pos = i + seq.len };
 }
@@ -175,6 +179,7 @@ fn wtf8DecodeAt(s: []const u8, mode: Mode, i: usize) ?Decoded {
 fn wtf8DecodeBefore(s: []const u8, mode: Mode, i: usize) ?Decoded {
     if (i == 0 or i > s.len) return null;
     if (midOf(s, i)) |cp| return .{ .value = leadOf(cp), .pos = i - 2 };
+    if (s[i - 1] < 0x80) return .{ .value = s[i - 1], .pos = i - 1 };
     // A valid sequence that ends exactly at `i`: its lead is the first
     // non-continuation byte going back, so there is at most one.
     var k: usize = 1;
@@ -186,7 +191,7 @@ fn wtf8DecodeBefore(s: []const u8, mode: Mode, i: usize) ?Decoded {
         }
         if (s[i - k] & 0xC0 != 0x80) break;
     }
-    return .{ .value = s[i - 1], .pos = i - 1 };
+    return .{ .value = s[i - 1], .pos = i - 1, .invalid = true };
 }
 
 // --------------------------------------------------------- Index mapping
@@ -239,8 +244,13 @@ pub fn wtf8FromUtf16(gpa: std.mem.Allocator, s: []const u16) std.mem.Allocator.E
 
 const testing = std.testing;
 
+/// Compares value and position; `invalid` has its own test.
 fn expectDecoded(expected: ?Decoded, actual: ?Decoded) !void {
-    try testing.expectEqualDeep(expected, actual);
+    try testing.expectEqual(expected == null, actual == null);
+    if (expected) |e| {
+        try testing.expectEqual(e.value, actual.?.value);
+        try testing.expectEqual(e.pos, actual.?.pos);
+    }
 }
 
 test "every code point decodes the same in WTF-8 and UTF-16, in both modes" {
@@ -326,6 +336,27 @@ test "WTF-8 positions around lone surrogates and invalid bytes" {
     try expectDecoded(.{ .value = 0xD83D, .pos = 3 }, split.decodeAt(.code_point, 0));
     try testing.expectError(error.InvalidIndex, wtf8ToUtf16Index("\xF0\x9F\x98\x80", 1));
     try testing.expectError(error.InvalidIndex, wtf8ToUtf16Index("\xC3\xA9", 1));
+}
+
+test "only ill-formed WTF-8 bytes are marked invalid" {
+    const s: Subject = .{ .wtf8 = "a\xC3\xA9\x80\xED\xA0\x80\xF0\x9F\x98\x80\xE2\x82" };
+    const expected = [_]bool{ false, false, true, false, false, false, true, true };
+    var pos: usize = 0;
+    for (expected) |inv| {
+        const d = s.decodeAt(.code_unit, pos).?;
+        try testing.expectEqual(inv, d.invalid);
+        pos = d.pos;
+    }
+    try testing.expectEqual(s.len(), pos);
+    var back = s.len();
+    var n = expected.len;
+    while (n > 0) : (n -= 1) {
+        const d = s.decodeBefore(.code_unit, back).?;
+        try testing.expectEqual(expected[n - 1], d.invalid);
+        back = d.pos;
+    }
+    try testing.expectEqual(@as(usize, 0), back);
+    try testing.expect(!(Subject{ .utf16 = &.{0xD800} }).decodeAt(.code_unit, 0).?.invalid);
 }
 
 test "UTF-16 pairs combine only with u; every index is a position" {

@@ -176,45 +176,38 @@ pub const CodeGenerator = struct {
     // Character Matching
     // =========================================================================
 
-    /// Generate one literal unit, exactly as the AST generator did (see
-    /// `hir.Literal`: one CHAR32 per byte-level unit, never merged). A code
-    /// point <= U+007F or a raw byte is one CHAR32 (both ASCII cases under
-    /// `i`); a code point above U+007F is its WTF-8 bytes, with its simple
-    /// case-fold pair as an alternative under `i`.
+    /// Generate one literal unit (F3b: one instruction per character, not
+    /// per byte). A code point is one CHAR32, matched against the decoded
+    /// subject: both ASCII cases under `i`, and for a code point above
+    /// U+007F its simple case-fold pair as an alternative under `i`. A raw
+    /// byte (`hir.LitUnit.raw_byte`) is a BYTE.
     noinline fn generateUnit(self: *Self, unit: hir.LitUnit) !void {
-        if (unit.raw_byte or unit.value <= MAX_ASCII) return self.generateChar(unit.value);
-
-        var bytes_buf: [4]u8 = undefined;
-        const len = std.unicode.wtf8Encode(@intCast(unit.value), &bytes_buf) catch return error.InvalidPattern;
-        const bytes = bytes_buf[0..len];
+        if (unit.raw_byte) return self.writer.emit1(.BYTE, unit.value);
+        if (unit.value <= MAX_ASCII) return self.generateChar(unit.value);
+        if (unit.value > 0x10FFFF) return error.InvalidPattern;
 
         if (self.flags.ignore_case) {
             const opposite = casefold.toUpper(unit.value) orelse casefold.toLower(unit.value);
             if (opposite) |opp| {
-                var buf: [4]u8 = undefined;
-                const opp_len = std.unicode.utf8Encode(@intCast(opp), &buf) catch unreachable;
-
                 var orig_label = try self.writer.createLabel();
                 var opp_label = try self.writer.createLabel();
                 var after_label = try self.writer.createLabel();
 
                 try self.writer.emitSplit(.SPLIT, orig_label, opp_label);
                 try self.writer.defineLabel(&orig_label);
-                for (bytes) |b| try self.generateChar(b);
+                try self.writer.emit1(.CHAR32, unit.value);
                 try self.writer.emitJump(.GOTO, after_label);
                 try self.writer.defineLabel(&opp_label);
-                for (buf[0..opp_len]) |b| {
-                    try self.writer.emit1(.CHAR32, b);
-                }
+                try self.writer.emit1(.CHAR32, opp);
                 try self.writer.defineLabel(&after_label);
                 return;
             }
         }
 
-        for (bytes) |b| try self.generateChar(b);
+        try self.writer.emit1(.CHAR32, unit.value);
     }
 
-    /// Generate code for one CHAR32 unit (a code point <= U+007F, or a byte)
+    /// Generate code for one ASCII CHAR32 unit
     fn generateChar(self: *Self, char: u32) !void {
         // If case-insensitive mode and this is an ASCII letter, generate alternation
         if (self.flags.ignore_case and char <= MAX_ASCII) {

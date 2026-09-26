@@ -15,6 +15,9 @@ const opcodes = @import("../bytecode/opcodes.zig");
 const format = @import("../bytecode/format.zig");
 const properties = @import("unicode").properties;
 const CharSet = @import("ir").charset.CharSet;
+const subject_mod = @import("subject");
+const Subject = subject_mod.Subject;
+const Decoded = subject_mod.Decoded;
 
 const Opcode = opcodes.Opcode;
 const Instruction = format.Instruction;
@@ -247,10 +250,10 @@ pub const RecursiveMatcher = struct {
                 return MatchResult{ .matched = true, .end_pos = pos };
             },
 
-            .CHAR32 => {
-                // Match specific character
-                const expected = @as(u8, @intCast(inst.operands[0]));
-                return self.matchChar(pc, pos, expected, inst.size);
+            .CHAR32, .BYTE, .CHAR_RANGE, .CHAR_RANGE_INV, .CHAR_CLASS, .CHAR_CLASS_INV => {
+                const r = try self.matchSingleInstruction(inst, pc, pos);
+                if (!r.matched) return MatchResult{ .matched = false, .end_pos = pos };
+                return self.matchFrom(pc + inst.size, r.end_pos);
             },
 
             .CHAR => {
@@ -261,36 +264,6 @@ pub const RecursiveMatcher = struct {
             .CHAR_ANY => {
                 // Match any Unicode scalar value, including newline (dot with /s)
                 return self.matchAnyChar(pc, pos, false, inst.size);
-            },
-
-            .CHAR_RANGE => {
-                // Match character in range [min, max]
-                const min = @as(u8, @intCast(inst.operands[0]));
-                const max = @as(u8, @intCast(inst.operands[1]));
-                return self.matchCharRange(pc, pos, min, max, inst.size);
-            },
-
-            .CHAR_RANGE_INV => {
-                // Match character NOT in range [^min-max]
-                const min = @as(u8, @intCast(inst.operands[0]));
-                const max = @as(u8, @intCast(inst.operands[1]));
-                return self.matchCharRangeInv(pc, pos, min, max, inst.size);
-            },
-
-            .CHAR_CLASS => {
-                // Match character in class (using bit table)
-                // Table is stored inline: 32 bytes starting at pc + 1
-                if (pc + 33 > self.bytecode.len) return error.UnexpectedEndOfBytecode;
-                const table = self.bytecode[pc + 1 ..][0..32];
-                return self.matchCharClass(pc, pos, table, inst.size);
-            },
-
-            .CHAR_CLASS_INV => {
-                // Match character NOT in class (using bit table)
-                // Table is stored inline: 32 bytes starting at pc + 1
-                if (pc + 33 > self.bytecode.len) return error.UnexpectedEndOfBytecode;
-                const table = self.bytecode[pc + 1 ..][0..32];
-                return self.matchCharClassInv(pc, pos, table, inst.size);
             },
 
             .CHAR_SET, .CHAR_SET_INV => {
@@ -538,7 +511,7 @@ pub const RecursiveMatcher = struct {
             .LINE_START => {
                 // Assert start of line (used for ^ with multiline): absolute
                 // start of input, or right after a LineTerminator (D5)
-                const at_line_start = pos == 0 or lineTerminatorEndsAt(self.input, pos);
+                const at_line_start = pos == 0 or self.lineTerminatorEndsAt(pos);
                 if (!at_line_start) {
                     return MatchResult{ .matched = false, .end_pos = pos };
                 }
@@ -548,7 +521,7 @@ pub const RecursiveMatcher = struct {
             .LINE_END => {
                 // Assert end of line (used for $ with multiline): absolute
                 // end of input, or right before a LineTerminator (D5)
-                const at_line_end = pos == self.input.len or isLineTerminatorAt(self.input, pos);
+                const at_line_end = pos == self.input.len or self.isLineTerminatorAt(pos);
                 if (!at_line_end) {
                     return MatchResult{ .matched = false, .end_pos = pos };
                 }
@@ -578,180 +551,61 @@ pub const RecursiveMatcher = struct {
         }
     }
 
-    /// Match specific character
-    fn matchChar(self: *Self, pc: usize, pos: usize, expected: u8, inst_size: usize) MatchError!MatchResult {
-        if (pos >= self.input.len) {
-            return MatchResult{ .matched = false, .end_pos = pos };
-        }
-        if (self.input[pos] != expected) {
-            return MatchResult{ .matched = false, .end_pos = pos };
-        }
-        // Continue with next instruction
-        return self.matchFrom(pc + inst_size, pos + 1);
+    /// The subject: WTF-8 bytes (F3b). Positions are byte offsets.
+    fn subject(self: *const Self) Subject {
+        return .{ .wtf8 = self.input };
     }
 
-    /// Decodes a WTF-8-encoded lone UTF-16 surrogate (U+D800-U+DFFF) --
-    /// the 3-byte sequence z-string/z-lexer/z-interpreter/z-json use to
-    /// represent an unpaired surrogate that plain UTF-8 can't express
-    /// (std.unicode.utf8Decode rejects that codepoint range even though
-    /// the bit layout is otherwise ordinary 3-byte UTF-8). Duplicated
-    /// locally per this ecosystem's small-standalone-library convention
-    /// (z-regex has no zstring dependency) -- see z-string-surrogate-charat.md.
-    fn decodeSurrogateWtf8(bytes: []const u8) ?u21 {
-        if (bytes.len != 3) return null;
-        if (bytes[0] & 0xF0 != 0xE0) return null;
-        if (bytes[1] & 0xC0 != 0x80 or bytes[2] & 0xC0 != 0x80) return null;
-        const value: u21 = (@as(u21, bytes[0] & 0x0F) << 12) | (@as(u21, bytes[1] & 0x3F) << 6) | (bytes[2] & 0x3F);
-        if (value < 0xD800 or value > 0xDFFF) return null;
-        return value;
+    /// The character at `pos`, one code point (F3b keeps the pre-F3
+    /// semantics for every pattern; F3d decodes code units without `u`).
+    /// Null at the end of input.
+    fn decodeAt(self: *const Self, pos: usize) ?Decoded {
+        return self.subject().decodeAt(.code_point, pos);
     }
 
-    /// Length in bytes of the UTF-8 sequence starting at `input[pos]` (1-4),
-    /// or 1 if it isn't the start of a valid sequence, or the sequence would
-    /// run past the end of input, or the bytes there don't decode validly.
-    /// This keeps matching binary-safe: malformed/non-UTF-8 input degrades to
-    /// byte-at-a-time matching instead of erroring. A WTF-8 lone surrogate
-    /// (see decodeSurrogateWtf8) counts as a valid 3-byte sequence too, so a
-    /// string built from e.g. String.fromCharCode(0xDC00) is matched as one
-    /// character, not three raw bytes.
-    /// Where the next search start after `pos` is: one whole UTF-8/WTF-8
-    /// sequence later (one byte for malformed input), so a search never
-    /// starts in the middle of a character (D12, start positions).
+    fn decodeBefore(self: *const Self, pos: usize) ?Decoded {
+        return self.subject().decodeBefore(.code_point, pos);
+    }
+
+    /// Where the next search start after `pos` is: one whole character
+    /// later (one byte for ill-formed input), so a search never starts in
+    /// the middle of a character (D12, start positions).
     pub fn nextSearchStart(input: []const u8, pos: usize) usize {
-        return pos + utf8SeqLenAt(input, pos);
+        return (Subject{ .wtf8 = input }).advanceIndex(.code_point, pos);
     }
 
-    fn utf8SeqLenAt(input: []const u8, pos: usize) usize {
-        if (pos >= input.len) return 1;
-        const len = std.unicode.utf8ByteSequenceLength(input[pos]) catch return 1;
-        if (pos + len > input.len) return 1;
-        _ = std.unicode.utf8Decode(input[pos..][0..len]) catch {
-            if (len == 3 and decodeSurrogateWtf8(input[pos..][0..3]) != null) return 3;
-            return 1;
-        };
-        return len;
+    /// ECMA-262 LineTerminator: LF, CR, LS (U+2028) or PS (U+2029). What `.`
+    /// without /s excludes and what `^`/`$` with /m look for (D5).
+    fn isLineTerminator(c: u32) bool {
+        return c == '\n' or c == '\r' or c == 0x2028 or c == 0x2029;
     }
 
-    /// ECMA-262 LineTerminator: LF, CR, LS (U+2028) or PS (U+2029, both
-    /// E2 80 A8/A9 in UTF-8). What `.` without /s excludes and what `^`/`$`
-    /// with /m look for (D5).
-    fn isLineTerminatorAt(input: []const u8, pos: usize) bool {
-        if (pos >= input.len) return false;
-        return switch (input[pos]) {
-            '\n', '\r' => true,
-            0xE2 => pos + 2 < input.len and input[pos + 1] == 0x80 and (input[pos + 2] == 0xA8 or input[pos + 2] == 0xA9),
-            else => false,
-        };
+    fn isLineTerminatorAt(self: *const Self, pos: usize) bool {
+        const d = self.decodeAt(pos) orelse return false;
+        return isLineTerminator(d.value);
     }
 
     /// Whether a LineTerminator ends right before `pos`.
-    fn lineTerminatorEndsAt(input: []const u8, pos: usize) bool {
-        if (pos == 0) return false;
-        if (input[pos - 1] == '\n' or input[pos - 1] == '\r') return true;
-        return pos >= 3 and isLineTerminatorAt(input, pos - 3);
+    fn lineTerminatorEndsAt(self: *const Self, pos: usize) bool {
+        const d = self.decodeBefore(pos) orelse return false;
+        return isLineTerminator(d.value);
     }
 
-    /// Match any Unicode scalar value (dot). `exclude_newline` is true for
-    /// plain `.` (no /s flag), false for dot_all. Consumes the full UTF-8
-    /// sequence at `pos`, not just one byte.
+    /// Match any character (dot). `exclude_newline` is true for plain `.`
+    /// (no /s flag), false for dot_all.
     fn matchAnyChar(self: *Self, pc: usize, pos: usize, exclude_newline: bool, inst_size: usize) MatchError!MatchResult {
-        if (pos >= self.input.len) {
+        const d = self.decodeAt(pos) orelse return MatchResult{ .matched = false, .end_pos = pos };
+        if (exclude_newline and isLineTerminator(d.value)) {
             return MatchResult{ .matched = false, .end_pos = pos };
         }
-        if (exclude_newline and isLineTerminatorAt(self.input, pos)) {
-            return MatchResult{ .matched = false, .end_pos = pos };
-        }
-        const seq_len = utf8SeqLenAt(self.input, pos);
-        return self.matchFrom(pc + inst_size, pos + seq_len);
+        return self.matchFrom(pc + inst_size, d.pos);
     }
 
-    /// Match character in range
-    fn matchCharRange(self: *Self, pc: usize, pos: usize, min: u8, max: u8, inst_size: usize) MatchError!MatchResult {
-        if (pos >= self.input.len) {
-            return MatchResult{ .matched = false, .end_pos = pos };
-        }
-        const c = self.input[pos];
-        if (c < min or c > max) {
-            return MatchResult{ .matched = false, .end_pos = pos };
-        }
-        return self.matchFrom(pc + inst_size, pos + 1);
-    }
-
-    /// Match character NOT in range (inverted). Since the range only covers
-    /// byte values 0-255, a match here means "any Unicode scalar value other
-    /// than this byte range" — so like `.`, it consumes the full UTF-8
-    /// sequence at `pos`, not just one byte.
-    fn matchCharRangeInv(self: *Self, pc: usize, pos: usize, min: u8, max: u8, inst_size: usize) MatchError!MatchResult {
-        if (pos >= self.input.len) {
-            return MatchResult{ .matched = false, .end_pos = pos };
-        }
-        const c = self.input[pos];
-        // Inverted logic: match if NOT in range
-        if (c >= min and c <= max) {
-            return MatchResult{ .matched = false, .end_pos = pos };
-        }
-        const seq_len = utf8SeqLenAt(self.input, pos);
-        return self.matchFrom(pc + inst_size, pos + seq_len);
-    }
-
-    /// Match character in class (using bit table)
-    fn matchCharClass(self: *Self, pc: usize, pos: usize, table: *const [32]u8, inst_size: usize) MatchError!MatchResult {
-        if (pos >= self.input.len) {
-            return MatchResult{ .matched = false, .end_pos = pos };
-        }
-        const c = self.input[pos];
-
-        // Check if character is in the bit table
-        const byte_idx = c / 8;
-        const bit_idx = @as(u3, @intCast(c % 8));
-        const is_in_class = (table[byte_idx] & (@as(u8, 1) << bit_idx)) != 0;
-
-        if (is_in_class) {
-            return self.matchFrom(pc + inst_size, pos + 1);
-        } else {
-            return MatchResult{ .matched = false, .end_pos = pos };
-        }
-    }
-
-    /// Match character NOT in class (using bit table). Same UTF-8 sequence
-    /// consumption as matchCharRangeInv, and for the same reason.
-    fn matchCharClassInv(self: *Self, pc: usize, pos: usize, table: *const [32]u8, inst_size: usize) MatchError!MatchResult {
-        if (pos >= self.input.len) {
-            return MatchResult{ .matched = false, .end_pos = pos };
-        }
-        const c = self.input[pos];
-
-        // Check if character is in the bit table
-        const byte_idx = c / 8;
-        const bit_idx = @as(u3, @intCast(c % 8));
-        const is_in_class = (table[byte_idx] & (@as(u8, 1) << bit_idx)) != 0;
-
-        // Inverted logic: match if NOT in class
-        if (!is_in_class) {
-            const seq_len = utf8SeqLenAt(self.input, pos);
-            return self.matchFrom(pc + inst_size, pos + seq_len);
-        } else {
-            return MatchResult{ .matched = false, .end_pos = pos };
-        }
-    }
-
-    /// Decode the Unicode scalar value at `input[pos]` along with how many
-    /// bytes it occupies (see utf8SeqLenAt for the binary-safe fallback
-    /// policy this relies on).
-    fn decodeCodepointAt(input: []const u8, pos: usize) struct { codepoint: u32, len: usize } {
-        const len = utf8SeqLenAt(input, pos);
-        if (len == 1) {
-            return .{ .codepoint = input[pos], .len = 1 };
-        }
-        if (len == 3) {
-            if (decodeSurrogateWtf8(input[pos..][0..3])) |surrogate| {
-                return .{ .codepoint = surrogate, .len = 3 };
-            }
-        }
-        // utf8SeqLenAt only returns >1 (and not a recognized WTF-8
-        // surrogate) after already validating the decode.
-        const cp = std.unicode.utf8Decode(input[pos..][0..len]) catch unreachable;
-        return .{ .codepoint = cp, .len = len };
+    /// Whether `c` is in a CHAR_CLASS(_INV) bit table (bits 0-255; the
+    /// generator only sets ASCII bits).
+    fn inBitTable(table: *const [32]u8, c: u32) bool {
+        if (c > 0xFF) return false;
+        return (table[c / 8] & (@as(u8, 1) << @as(u3, @intCast(c % 8)))) != 0;
     }
 
     /// Shared matching logic for CHAR_SET(_INV), used by both the main
@@ -763,11 +617,10 @@ pub const RecursiveMatcher = struct {
     fn checkCharSet(self: *Self, inst: Instruction, pos: usize) MatchError!struct { matched: bool, end_pos: usize } {
         const idx = inst.operands[0];
         if (idx >= self.charsets.len) return error.InvalidCharSet;
-        if (pos >= self.input.len) return .{ .matched = false, .end_pos = pos };
-        const decoded = decodeCodepointAt(self.input, pos);
-        const in_set = self.charsets[idx].contains(decoded.codepoint);
+        const decoded = self.decodeAt(pos) orelse return .{ .matched = false, .end_pos = pos };
+        const in_set = self.charsets[idx].contains(decoded.value);
         const matched = if (inst.opcode == .CHAR_SET_INV) !in_set else in_set;
-        return .{ .matched = matched, .end_pos = if (matched) pos + decoded.len else pos };
+        return .{ .matched = matched, .end_pos = if (matched) decoded.pos else pos };
     }
 
     /// Shared matching logic for UNICODE_PROPERTY(_INV), used by both the
@@ -779,11 +632,11 @@ pub const RecursiveMatcher = struct {
         if (pc + 2 > self.bytecode.len) return error.UnexpectedEndOfBytecode;
 
         const category: properties.UnicodeProperty = @enumFromInt(self.bytecode[pc + 1]);
-        const decoded = decodeCodepointAt(self.input, pos);
-        const in_category = properties.isInCategory(decoded.codepoint, category);
+        const decoded = self.decodeAt(pos) orelse return .{ .matched = false, .end_pos = pos };
+        const in_category = properties.isInCategory(decoded.value, category);
 
         const matched = if (inverted) !in_category else in_category;
-        return .{ .matched = matched, .end_pos = if (matched) pos + decoded.len else pos };
+        return .{ .matched = matched, .end_pos = if (matched) decoded.pos else pos };
     }
 
     /// Shared matching logic for UNICODE_SCRIPT(_INV), used by both the main
@@ -795,11 +648,11 @@ pub const RecursiveMatcher = struct {
         if (pc + 2 > self.bytecode.len) return error.UnexpectedEndOfBytecode;
 
         const script_index = self.bytecode[pc + 1];
-        const decoded = decodeCodepointAt(self.input, pos);
-        const in_script = properties.isInScript(decoded.codepoint, script_index);
+        const decoded = self.decodeAt(pos) orelse return .{ .matched = false, .end_pos = pos };
+        const in_script = properties.isInScript(decoded.value, script_index);
 
         const matched = if (inverted) !in_script else in_script;
-        return .{ .matched = matched, .end_pos = if (matched) pos + decoded.len else pos };
+        return .{ .matched = matched, .end_pos = if (matched) decoded.pos else pos };
     }
 
     /// Shared matching logic for UNICODE_SCRIPT_EXTENSIONS(_INV), used by
@@ -811,11 +664,11 @@ pub const RecursiveMatcher = struct {
         if (pc + 2 > self.bytecode.len) return error.UnexpectedEndOfBytecode;
 
         const script_index = self.bytecode[pc + 1];
-        const decoded = decodeCodepointAt(self.input, pos);
-        const in_script = properties.isInScriptExtensions(decoded.codepoint, script_index);
+        const decoded = self.decodeAt(pos) orelse return .{ .matched = false, .end_pos = pos };
+        const in_script = properties.isInScriptExtensions(decoded.value, script_index);
 
         const matched = if (inverted) !in_script else in_script;
-        return .{ .matched = matched, .end_pos = if (matched) pos + decoded.len else pos };
+        return .{ .matched = matched, .end_pos = if (matched) decoded.pos else pos };
     }
 
     /// Detect if SPLIT is part of star quantifier pattern
@@ -842,7 +695,7 @@ pub const RecursiveMatcher = struct {
     /// limit (found via test262-derived conformance testing).
     fn isQuantifiableAtomOpcode(opcode: Opcode) bool {
         return switch (opcode) {
-            .CHAR, .CHAR_ANY, .CHAR32, .CHAR2, .CHAR_RANGE, .CHAR_RANGE_INV, .CHAR_CLASS, .CHAR_CLASS_INV, .CHAR_SET, .CHAR_SET_INV, .UNICODE_PROPERTY, .UNICODE_PROPERTY_INV, .UNICODE_SCRIPT, .UNICODE_SCRIPT_INV, .UNICODE_SCRIPT_EXTENSIONS, .UNICODE_SCRIPT_EXTENSIONS_INV, .BACK_REF, .BACK_REF_I => true,
+            .CHAR, .CHAR_ANY, .CHAR32, .BYTE, .CHAR2, .CHAR_RANGE, .CHAR_RANGE_INV, .CHAR_CLASS, .CHAR_CLASS_INV, .CHAR_SET, .CHAR_SET_INV, .UNICODE_PROPERTY, .UNICODE_PROPERTY_INV, .UNICODE_SCRIPT, .UNICODE_SCRIPT_INV, .UNICODE_SCRIPT_EXTENSIONS, .UNICODE_SCRIPT_EXTENSIONS_INV, .BACK_REF, .BACK_REF_I => true,
             else => false,
         };
     }
@@ -997,103 +850,31 @@ pub const RecursiveMatcher = struct {
     /// Used by star quantifiers to match the repeated element
     fn matchSingleInstruction(self: *Self, inst: Instruction, pc: usize, pos: usize) MatchError!struct { matched: bool, end_pos: usize } {
         switch (inst.opcode) {
-            .CHAR32 => {
-                // Match specific character
-                const expected = @as(u8, @intCast(inst.operands[0]));
-                if (pos >= self.input.len) {
-                    return .{ .matched = false, .end_pos = pos };
-                }
-                if (self.input[pos] != expected) {
+            .BYTE => {
+                // A raw byte: compared, not decoded (see opcodes.zig).
+                if (pos >= self.input.len or self.input[pos] != inst.operands[0]) {
                     return .{ .matched = false, .end_pos = pos };
                 }
                 return .{ .matched = true, .end_pos = pos + 1 };
             },
 
-            .CHAR => {
-                // Match any Unicode scalar value except a LineTerminator
-                // (dot without /s)
-                if (pos >= self.input.len or isLineTerminatorAt(self.input, pos)) {
-                    return .{ .matched = false, .end_pos = pos };
-                }
-                return .{ .matched = true, .end_pos = pos + utf8SeqLenAt(self.input, pos) };
-            },
-
-            .CHAR_ANY => {
-                // Match any Unicode scalar value, including newline (dot with /s)
-                if (pos >= self.input.len) {
-                    return .{ .matched = false, .end_pos = pos };
-                }
-                return .{ .matched = true, .end_pos = pos + utf8SeqLenAt(self.input, pos) };
-            },
-
-            .CHAR_RANGE => {
-                // Match character in range
-                const min = @as(u8, @intCast(inst.operands[0]));
-                const max = @as(u8, @intCast(inst.operands[1]));
-                if (pos >= self.input.len) {
-                    return .{ .matched = false, .end_pos = pos };
-                }
-                const c = self.input[pos];
-                if (c < min or c > max) {
-                    return .{ .matched = false, .end_pos = pos };
-                }
-                return .{ .matched = true, .end_pos = pos + 1 };
-            },
-
-            .CHAR_RANGE_INV => {
-                // Match character NOT in range (consumes a full UTF-8
-                // sequence, like CHAR — see matchCharRangeInv)
-                const min = @as(u8, @intCast(inst.operands[0]));
-                const max = @as(u8, @intCast(inst.operands[1]));
-                if (pos >= self.input.len) {
-                    return .{ .matched = false, .end_pos = pos };
-                }
-                const c = self.input[pos];
-                // Inverted: match if NOT in range
-                if (c >= min and c <= max) {
-                    return .{ .matched = false, .end_pos = pos };
-                }
-                return .{ .matched = true, .end_pos = pos + utf8SeqLenAt(self.input, pos) };
-            },
-
-            .CHAR_CLASS => {
-                // Match character in class (bit table)
-                if (pos >= self.input.len) {
-                    return .{ .matched = false, .end_pos = pos };
-                }
-                if (pc + 33 > self.bytecode.len) {
-                    return .{ .matched = false, .end_pos = pos };
-                }
-                const table = self.bytecode[pc + 1 ..][0..32];
-                const c = self.input[pos];
-                const byte_idx = c / 8;
-                const bit_idx = @as(u3, @intCast(c % 8));
-                const is_in_class = (table[byte_idx] & (@as(u8, 1) << bit_idx)) != 0;
-                if (!is_in_class) {
-                    return .{ .matched = false, .end_pos = pos };
-                }
-                return .{ .matched = true, .end_pos = pos + 1 };
-            },
-
-            .CHAR_CLASS_INV => {
-                // Match character NOT in class (consumes a full UTF-8
-                // sequence, like CHAR — see matchCharClassInv)
-                if (pos >= self.input.len) {
-                    return .{ .matched = false, .end_pos = pos };
-                }
-                if (pc + 33 > self.bytecode.len) {
-                    return .{ .matched = false, .end_pos = pos };
-                }
-                const table = self.bytecode[pc + 1 ..][0..32];
-                const c = self.input[pos];
-                const byte_idx = c / 8;
-                const bit_idx = @as(u3, @intCast(c % 8));
-                const is_in_class = (table[byte_idx] & (@as(u8, 1) << bit_idx)) != 0;
-                // Inverted: match if NOT in class
-                if (is_in_class) {
-                    return .{ .matched = false, .end_pos = pos };
-                }
-                return .{ .matched = true, .end_pos = pos + utf8SeqLenAt(self.input, pos) };
+            .CHAR32, .CHAR, .CHAR_ANY, .CHAR_RANGE, .CHAR_RANGE_INV, .CHAR_CLASS, .CHAR_CLASS_INV => {
+                const d = self.decodeAt(pos) orelse return .{ .matched = false, .end_pos = pos };
+                const c = d.value;
+                const matched = switch (inst.opcode) {
+                    .CHAR32 => !d.invalid and c == inst.operands[0],
+                    .CHAR => !isLineTerminator(c),
+                    .CHAR_ANY => true,
+                    .CHAR_RANGE => c >= inst.operands[0] and c <= inst.operands[1],
+                    .CHAR_RANGE_INV => c < inst.operands[0] or c > inst.operands[1],
+                    .CHAR_CLASS, .CHAR_CLASS_INV => blk: {
+                        if (pc + 33 > self.bytecode.len) return error.UnexpectedEndOfBytecode;
+                        const in_class = inBitTable(self.bytecode[pc + 1 ..][0..32], c);
+                        break :blk if (inst.opcode == .CHAR_CLASS) in_class else !in_class;
+                    },
+                    else => unreachable,
+                };
+                return .{ .matched = matched, .end_pos = if (matched) d.pos else pos };
             },
 
             .CHAR_SET, .CHAR_SET_INV => {
@@ -1251,27 +1032,17 @@ pub const RecursiveMatcher = struct {
         // Find the end of the lookbehind body
         const lookbehind_end_pc = try self.findLookbehindEnd(pc + inst_size);
 
-        // Try different lookbehind lengths (starting positions)
-        // We try from pos backwards up to a reasonable limit
-        const max_lookbehind_len = @min(pos, 100); // Limit to 100 chars for performance
-
+        // Try start positions going back one character at a time (F3b:
+        // never from inside a character), closest first, up to 100
+        // characters back.
         var found_match = false;
+        var start_pos = pos;
+        var steps: usize = 0;
+        while (steps < 100) : (steps += 1) {
+            start_pos = (self.decodeBefore(start_pos) orelse break).pos;
 
-        // DEBUG: uncomment to see what's happening
-        // std.debug.print("matchLookbehind: pos={}, max_len={}\n", .{pos, max_lookbehind_len});
-
-        // Try different starting positions, from closest to farthest
-        var try_len: usize = 1;
-        while (try_len <= max_lookbehind_len) : (try_len += 1) {
-            const start_pos = pos - try_len;
-
-            // Try to match the pattern from start_pos
+            // Try to match the pattern from start_pos, ending exactly at pos
             const result = try self.matchFrom(pc + inst_size, start_pos);
-
-            // DEBUG: uncomment to see results
-            // std.debug.print("  try_len={}, start_pos={}, matched={}, end_pos={}\n", .{try_len, start_pos, result.matched, result.end_pos});
-
-            // Check if match ends exactly at current position (pos)
             if (result.matched and result.end_pos == pos) {
                 found_match = true;
                 break;
@@ -1281,8 +1052,6 @@ pub const RecursiveMatcher = struct {
         // Also try empty match (zero-length lookbehind)
         if (!found_match) {
             const result = try self.matchFrom(pc + inst_size, pos);
-            // DEBUG
-            // std.debug.print("  empty match: matched={}, end_pos={}\n", .{result.matched, result.end_pos});
             if (result.matched and result.end_pos == pos) {
                 found_match = true;
             }
@@ -1383,34 +1152,41 @@ pub const RecursiveMatcher = struct {
         if (cap_end < cap_start) return .{ .matched = true, .end_pos = pos };
         const cap_len = cap_end - cap_start;
 
-        if (pos + cap_len > self.input.len) {
-            return .{ .matched = false, .end_pos = pos };
-        }
-
-        const captured_text = self.input[cap_start..cap_end];
-        const current_text = self.input[pos .. pos + cap_len];
-
-        for (captured_text, 0..) |cap_char, i| {
-            const cur_char = current_text[i];
+        // Compare character by character: equal values that take the same
+        // number of units (so an ill-formed byte never equals a code point
+        // with its value). With `i`, ASCII letters fold (F5 brings
+        // Canonicalize).
+        var cap_pos = cap_start;
+        var cur_pos = pos;
+        while (cap_pos < cap_end) {
+            const a = self.subject().decodeAt(.code_unit, cap_pos).?;
+            const b = self.subject().decodeAt(.code_unit, cur_pos) orelse return .{ .matched = false, .end_pos = pos };
             const eq = if (case_insensitive)
-                std.ascii.toLower(cap_char) == std.ascii.toLower(cur_char)
+                foldAscii(a.value) == foldAscii(b.value)
             else
-                cap_char == cur_char;
-            if (!eq) return .{ .matched = false, .end_pos = pos };
+                a.value == b.value;
+            if (!eq or a.invalid != b.invalid or a.pos - cap_pos != b.pos - cur_pos) return .{ .matched = false, .end_pos = pos };
+            cap_pos = a.pos;
+            cur_pos = b.pos;
         }
+        _ = cap_len;
 
-        return .{ .matched = true, .end_pos = pos + cap_len };
+        return .{ .matched = true, .end_pos = cur_pos };
+    }
+
+    fn foldAscii(c: u32) u32 {
+        return if (c >= 'A' and c <= 'Z') c + ('a' - 'A') else c;
     }
 
     /// Check if position is at word boundary
-    fn isWordBoundary(self: Self, pos: usize) bool {
-        const before_is_word = if (pos > 0) isWordChar(self.input[pos - 1]) else false;
-        const after_is_word = if (pos < self.input.len) isWordChar(self.input[pos]) else false;
+    fn isWordBoundary(self: *const Self, pos: usize) bool {
+        const before_is_word = if (self.decodeBefore(pos)) |d| isWordChar(d.value) else false;
+        const after_is_word = if (self.decodeAt(pos)) |d| isWordChar(d.value) else false;
         return before_is_word != after_is_word;
     }
 
     /// Check if character is word character
-    fn isWordChar(c: u8) bool {
+    fn isWordChar(c: u32) bool {
         return (c >= 'a' and c <= 'z') or
             (c >= 'A' and c <= 'Z') or
             (c >= '0' and c <= '9') or

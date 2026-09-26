@@ -7,6 +7,10 @@
 //! - Each instruction starts with an 8-bit opcode
 //! - Followed by operands (size depends on opcode)
 //! - All multi-byte values are little-endian
+//!
+//! Since F3b every character opcode decodes one character of the subject
+//! (`subject.Subject.decodeAt`) and tests its value; "decodes a UTF-8
+//! sequence" below means that. Only BYTE reads a raw byte.
 
 const std = @import("std");
 
@@ -23,8 +27,10 @@ pub const Opcode = enum(u8) {
     /// Format: [CHAR]
     CHAR = 0x00,
 
-    /// Match specific character
-    /// Format: [CHAR c:u32]
+    /// Match one character of the subject: a code point, as decoded at the
+    /// current position (F3b). An ill-formed WTF-8 byte never matches it,
+    /// even one with the same value (see BYTE).
+    /// Format: [CHAR32 c:u32]
     CHAR32 = 0x01,
 
     /// Match one of two characters (optimization)
@@ -258,12 +264,19 @@ pub const Opcode = enum(u8) {
     /// Format: [CHECK_POS]
     CHECK_POS = 0x61,
 
+    /// Match one raw byte of a WTF-8 subject (F3b): a lone byte 0x80-0xFF of
+    /// an ill-formed pattern (`hir.LitUnit.raw_byte`), which is not a code
+    /// point. Advances one byte; never matches a UTF-16 subject. Outside
+    /// 0x00-0x0F only because that range is full.
+    /// Format: [BYTE b:u8]
+    BYTE = 0x70,
+
     _,
 
     /// Get the category of this opcode
     pub fn category(self: Opcode) OpcodeCategory {
         return switch (self) {
-            .CHAR, .CHAR32, .CHAR2, .CHAR_RANGE, .CHAR_RANGE_INV, .CHAR_CLASS, .CHAR_CLASS_INV, .CHAR_ANY, .CHAR_SET, .CHAR_SET_INV, .UNICODE_PROPERTY, .UNICODE_PROPERTY_INV, .UNICODE_SCRIPT, .UNICODE_SCRIPT_INV, .UNICODE_SCRIPT_EXTENSIONS, .UNICODE_SCRIPT_EXTENSIONS_INV => .character_match,
+            .CHAR, .CHAR32, .BYTE, .CHAR2, .CHAR_RANGE, .CHAR_RANGE_INV, .CHAR_CLASS, .CHAR_CLASS_INV, .CHAR_ANY, .CHAR_SET, .CHAR_SET_INV, .UNICODE_PROPERTY, .UNICODE_PROPERTY_INV, .UNICODE_SCRIPT, .UNICODE_SCRIPT_INV, .UNICODE_SCRIPT_EXTENSIONS, .UNICODE_SCRIPT_EXTENSIONS_INV => .character_match,
             .MATCH, .GOTO, .SPLIT, .SPLIT_GREEDY, .SPLIT_LAZY, .SPLIT_POSSESSIVE, .LOOP => .control_flow,
             .SAVE_START, .SAVE_END, .SAVE_START_NAMED, .SAVE_END_NAMED, .CLEAR_CAPTURE => .capture,
             .BACK_REF, .BACK_REF_I => .backreference,
@@ -284,7 +297,7 @@ pub const Opcode = enum(u8) {
             .SAVE_START, .SAVE_END, .BACK_REF, .BACK_REF_I, .CLEAR_CAPTURE => 3,
 
             // 2 bytes (opcode + u8)
-            .UNICODE_PROPERTY, .UNICODE_PROPERTY_INV, .UNICODE_SCRIPT, .UNICODE_SCRIPT_INV, .UNICODE_SCRIPT_EXTENSIONS, .UNICODE_SCRIPT_EXTENSIONS_INV => 2,
+            .UNICODE_PROPERTY, .UNICODE_PROPERTY_INV, .UNICODE_SCRIPT, .UNICODE_SCRIPT_INV, .UNICODE_SCRIPT_EXTENSIONS, .UNICODE_SCRIPT_EXTENSIONS_INV, .BYTE => 2,
 
             // 5 bytes (opcode + u32)
             .CHAR32, .CHAR_SET, .CHAR_SET_INV, .LOOKAHEAD, .NEGATIVE_LOOKAHEAD, .LOOKBEHIND, .NEGATIVE_LOOKBEHIND => 5,
