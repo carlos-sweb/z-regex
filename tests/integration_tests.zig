@@ -329,3 +329,6 @@ test {
 test {
     _ = @import("fuzz_parser.zig");
 }
+test {
+    _ = @import("syntax_tests.zig");
+}

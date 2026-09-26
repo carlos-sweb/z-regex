@@ -196,6 +196,12 @@ pub const Parser = struct {
             .current_token = undefined,
             .group_counter = 0,
         };
+        // ECMA-262 parses with [N] (named groups on) under `u` or when the
+        // pattern has any named group, and resolves `\N` against the total
+        // group count -- both need the whole pattern, so scan it first.
+        const scan = Lexer.scanGroups(lexer.pattern, lexer.v_mode);
+        lexer.named_groups = lexer.unicode_mode or scan.has_named;
+        lexer.group_total = scan.count;
         // Prime the parser with the first token
         try self.advance();
         return self;
@@ -354,6 +360,15 @@ pub const Parser = struct {
         const atom = try self.parseAtom();
         errdefer atom.deinit();
 
+        // A lookbehind is never quantifiable; a lookahead only in Annex B
+        // (non-`u`) patterns (QuantifiableAssertion).
+        const quantifiable = switch (atom.type) {
+            .lookbehind, .negative_lookbehind => false,
+            .lookahead, .negative_lookahead => !self.lexer.unicode_mode,
+            else => true,
+        };
+        if (!quantifiable and self.isQuantifierToken()) return error.InvalidQuantifier;
+
         // Check for quantifier (greedy)
         if (self.check(.star)) {
             try self.advance();
@@ -401,6 +416,13 @@ pub const Parser = struct {
         }
 
         return atom;
+    }
+
+    fn isQuantifierToken(self: Self) bool {
+        return switch (self.current_token.type) {
+            .star, .plus, .question, .repeat, .lazy_star, .lazy_plus, .lazy_question, .possessive_star, .possessive_plus, .possessive_question => true,
+            else => false,
+        };
     }
 
     /// Parse atom: char | '.' | group | charclass | anchor | escape
@@ -805,6 +827,7 @@ pub const Parser = struct {
                 // second negation of the whole enclosing class.
                 try self.appendShorthandToClass(class, self.current_token.type);
                 try self.advance();
+                try self.rejectClassEscapeRange();
             } else if (self.check(.unicode_prop) or self.check(.not_unicode_prop)) {
                 // \p{...}/\P{...} as a class member (e.g. `[\p{L}\d]`). Like
                 // a negated shorthand (`\D`/`\W`/`\S`), a `\P{...}` member's
@@ -815,9 +838,13 @@ pub const Parser = struct {
                 const name = self.lexer.pattern[self.current_token.name_start..self.current_token.name_end];
                 const negated = self.current_token.type == .not_unicode_prop;
                 try self.advance();
-                const prop_node = try self.resolveUnicodePropertyNode(name, negated);
-                errdefer prop_node.deinit();
-                try class.appendChild(prop_node);
+                {
+                    const prop_node = try self.resolveUnicodePropertyNode(name, negated);
+                    errdefer prop_node.deinit();
+                    try class.appendChild(prop_node);
+                }
+                // Outside the block above: `class` owns `prop_node` now.
+                try self.rejectClassEscapeRange();
             } else if (self.isClassCharToken()) {
                 const first_char = self.classCharValue();
                 try self.advance();
@@ -838,14 +865,12 @@ pub const Parser = struct {
                         errdefer range.deinit();
                         try class.appendChild(range);
                     } else {
-                        // Hyphen at end or before ']', treat as literal
-                        const first = try Node.createChar(self.allocator, first_char);
-                        errdefer first.deinit();
-                        try class.appendChild(first);
-
-                        const hyphen_char = try Node.createChar(self.allocator, '-');
-                        errdefer hyphen_char.deinit();
-                        try class.appendChild(hyphen_char);
+                        // Hyphen before ']' (or, in Annex B, before a class
+                        // escape like `\d`): literal. Under `u` a class escape
+                        // can't be a range endpoint.
+                        if (self.lexer.unicode_mode and !self.check(.rbracket)) return error.InvalidCharRange;
+                        try self.appendClassChar(class, first_char);
+                        try self.appendClassChar(class, '-');
                     }
                 } else {
                     // Single character
@@ -854,11 +879,24 @@ pub const Parser = struct {
                     try class.appendChild(char_node);
                 }
             } else if (self.check(.hyphen)) {
-                // Literal hyphen
+                // A hyphen where a ClassAtom is expected is the atom `-`
+                // itself: `[-a]`, or the start of a range such as `[--0]`.
                 try self.advance();
-                const hyphen = try Node.createChar(self.allocator, '-');
-                errdefer hyphen.deinit();
-                try class.appendChild(hyphen);
+                if (self.check(.hyphen)) {
+                    try self.advance(); // the range operator
+                    if (self.isClassCharToken()) {
+                        const last_char = self.classCharValue();
+                        try self.advance();
+                        if (last_char < '-') return error.InvalidCharRange;
+                        const range = try Node.createCharRange(self.allocator, '-', last_char);
+                        errdefer range.deinit();
+                        try class.appendChild(range);
+                        continue;
+                    }
+                    if (self.lexer.unicode_mode and !self.check(.rbracket)) return error.InvalidCharRange;
+                    try self.appendClassChar(class, '-');
+                }
+                try self.appendClassChar(class, '-');
             } else {
                 return error.UnexpectedToken;
             }
@@ -971,6 +1009,26 @@ pub const Parser = struct {
     /// range endpoint: a plain char, an escaped char (`\x41`, `\n`, ...), or
     /// a multi-byte Unicode code point (`\u{1F600}`, or a literal non-ASCII
     /// character in the pattern).
+    /// Under `u`, a class escape (`\d`, `\p{..}`, ...) just parsed as a class
+    /// member can't start a range: `[\d-a]` is a SyntaxError (Annex B reads
+    /// the `-` as a literal). A `-` right before `]` is still a literal.
+    fn rejectClassEscapeRange(self: *Self) ParseError!void {
+        if (!self.lexer.unicode_mode or !self.check(.hyphen)) return;
+        const saved = self.lexer.pos;
+        const after = try self.lexer.next();
+        self.lexer.rewindTo(saved);
+        if (after.type != .rbracket) return error.InvalidCharRange;
+    }
+
+    /// Append a single-character member to `class`. Its own scope for the
+    /// errdefer: once appended, `class` owns the node, so a later failure in
+    /// the caller must not free it a second time.
+    fn appendClassChar(self: *Self, class: *Node, cp: u32) !void {
+        const node = try Node.createChar(self.allocator, cp);
+        errdefer node.deinit();
+        try class.appendChild(node);
+    }
+
     fn isClassCharToken(self: *Self) bool {
         return self.check(.char) or self.check(.escaped_char) or self.check(.multibyte_char);
     }

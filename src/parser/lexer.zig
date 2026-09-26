@@ -217,7 +217,66 @@ pub const Lexer = struct {
     deviation: ?QuantifierDeviation = null,
     deviation_pos: usize = 0,
 
+    /// ECMA-262's `[N]` grammar parameter: set by the parser (from
+    /// `scanGroups`) when `unicode_mode` is on or the pattern has any named
+    /// group. Under it `\k` must be a well-formed `\k<GroupName>`
+    /// (SyntaxError otherwise); without it `\k` is an Annex B identity
+    /// escape.
+    named_groups: bool = false,
+
+    /// Total number of capturing groups in the whole pattern (from
+    /// `scanGroups`, so it counts groups that appear after a reference).
+    /// Under `unicode_mode` a `\N` with N greater than this is a SyntaxError.
+    group_total: u32 = 0,
+
     const Self = @This();
+
+    pub const GroupScan = struct { count: u32 = 0, has_named: bool = false };
+
+    /// Pre-scan the pattern for its capturing groups, as ECMA-262 does
+    /// before parsing (it needs the total count for `\N` and whether any
+    /// group is named for `\k`). Skips escapes and class contents (nested
+    /// classes under `v_mode`). Purely lexical: a malformed pattern still
+    /// scans, and the parser reports the error.
+    pub fn scanGroups(pattern: []const u8, v_mode: bool) GroupScan {
+        var out: GroupScan = .{};
+        var class_depth: usize = 0;
+        var i: usize = 0;
+        while (i < pattern.len) : (i += 1) {
+            const c = pattern[i];
+            if (c == '\\') {
+                i += 1; // skip the escaped byte
+                continue;
+            }
+            if (class_depth > 0) {
+                if (c == ']') {
+                    class_depth -= 1;
+                } else if (c == '[' and v_mode) {
+                    class_depth += 1;
+                }
+                continue;
+            }
+            switch (c) {
+                '[' => class_depth = 1,
+                '(' => {
+                    if (i + 1 < pattern.len and pattern[i + 1] == '?') {
+                        // `(?<name>` captures; `(?<=`/`(?<!`, `(?:`, `(?=`,
+                        // `(?!` don't.
+                        if (i + 2 < pattern.len and pattern[i + 2] == '<' and
+                            i + 3 < pattern.len and pattern[i + 3] != '=' and pattern[i + 3] != '!')
+                        {
+                            out.count +|= 1;
+                            out.has_named = true;
+                        }
+                    } else {
+                        out.count +|= 1;
+                    }
+                },
+                else => {},
+            }
+        }
+        return out;
+    }
 
     /// Initialize a new lexer
     pub fn init(pattern: []const u8) Self {
@@ -517,17 +576,17 @@ pub const Lexer = struct {
             // below), so the parser's `parseCharClass` can splice a
             // property/script/script-extensions node into the class the
             // same way it already splices `\d`/`\w`/`\s` shorthand members.
-            'p' => return self.parseUnicodeProperty(false, start_pos),
-            'P' => return self.parseUnicodeProperty(true, start_pos),
+            'p' => return try self.parseUnicodeProperty(false, start_pos),
+            'P' => return try self.parseUnicodeProperty(true, start_pos),
             'b' => return Token.escaped(0x08, start_pos), // backspace inside a class
             'n' => return Token.escaped('\n', start_pos),
             'r' => return Token.escaped('\r', start_pos),
             't' => return Token.escaped('\t', start_pos),
             'v' => return Token.escaped(0x0B, start_pos),
             'f' => return Token.escaped(0x0C, start_pos),
-            'x' => return self.parseHexEscape(start_pos),
-            'u' => return self.parseUnicodeEscape(start_pos),
-            'c' => return self.parseControlEscape(start_pos),
+            'x' => return try self.parseHexEscape(start_pos),
+            'u' => return try self.parseUnicodeEscape(start_pos),
+            'c' => return try self.parseControlEscape(start_pos),
             '0' => {
                 if (self.pos < self.pattern.len and isAsciiDigit(self.pattern[self.pos])) {
                     // Legacy Annex B octal (`\01`), never valid under `u`.
@@ -659,8 +718,8 @@ pub const Lexer = struct {
             'W' => return Token.simple(.not_word, start_pos),
             's' => return Token.simple(.whitespace, start_pos),
             'S' => return Token.simple(.not_whitespace, start_pos),
-            'p' => return self.parseUnicodeProperty(false, start_pos),
-            'P' => return self.parseUnicodeProperty(true, start_pos),
+            'p' => return try self.parseUnicodeProperty(false, start_pos),
+            'P' => return try self.parseUnicodeProperty(true, start_pos),
             'b' => return Token.simple(.word_boundary, start_pos),
             'B' => return Token.simple(.not_word_boundary, start_pos),
             'n' => return Token.escaped('\n', start_pos),
@@ -668,22 +727,25 @@ pub const Lexer = struct {
             't' => return Token.escaped('\t', start_pos),
             'v' => return Token.escaped(0x0B, start_pos),
             'f' => return Token.escaped(0x0C, start_pos),
-            'x' => return self.parseHexEscape(start_pos),
-            'u' => return self.parseUnicodeEscape(start_pos),
-            'c' => return self.parseControlEscape(start_pos),
-            // \k<name> named backreference. Falls back to a literal 'k' if
-            // not followed by a validly-formed <name> (Annex-B-style
-            // leniency, same as \x/\u/\c when malformed).
+            'x' => return try self.parseHexEscape(start_pos),
+            'u' => return try self.parseUnicodeEscape(start_pos),
+            'c' => return try self.parseControlEscape(start_pos),
+            // \k<name> named backreference. With `named_groups` ([N]: `u`
+            // mode, or the pattern has a named group) it must be a
+            // well-formed `\k<GroupName>`; otherwise it falls back to a
+            // literal 'k' (Annex B identity escape).
             'k' => {
                 if (self.pos < self.pattern.len and self.pattern[self.pos] == '<') {
                     const saved_pos = self.pos;
                     self.pos += 1; // consume '<'
                     if (self.parseGroupName()) |name| {
                         return Token.namedBackRef(name.start, name.end, start_pos);
-                    } else |_| {
+                    } else |err| {
+                        if (self.named_groups) return err;
                         self.pos = saved_pos;
                     }
                 }
+                if (self.named_groups) return error.InvalidGroupName;
                 return Token.escaped('k', start_pos);
             },
             // \0 is NUL, but only when not followed by another digit.
@@ -697,9 +759,11 @@ pub const Lexer = struct {
                 }
                 return Token.escaped(0, start_pos);
             },
-            // Backreferences \1-\9
+            // Backreferences \1-\9. Under `u` a reference past the pattern's
+            // last capturing group is a SyntaxError (no Annex B octal).
             '1', '2', '3', '4', '5', '6', '7', '8', '9' => {
                 const group = @as(u8, c - '0');
+                if (self.unicode_mode and group > self.group_total) return error.InvalidEscape;
                 return Token.backref_token(group, start_pos);
             },
             '\\', '.', '*', '+', '?', '|', '(', ')', '[', ']', '{', '}', '^', '$' => {
@@ -774,16 +838,19 @@ pub const Lexer = struct {
     /// Parse `\p{Name}` / `\P{Name}` (Unicode property escape). Called with
     /// `self.pos` positioned right after `p`/`P`. Falls back to a literal
     /// `p`/`P` if not followed by a validly-formed `{Name}` (Annex-B-style
-    /// leniency, same as `\x`/`\u`/`\c`/`\k` when malformed). This function
+    /// leniency, same as `\x`/`\u`/`\c`/`\k` when malformed) -- except
+    /// under `unicode_mode`, where a malformed property escape is a
+    /// SyntaxError. This function
     /// only extracts the name span -- it doesn't know whether the name is a
     /// property this engine actually implements; the parser resolves that
     /// and surfaces a clear error for an unknown property (see
     /// `parser.zig::parseAtom`) rather than silently ignoring it.
-    fn parseUnicodeProperty(self: *Self, negated: bool, start_pos: usize) Token {
+    fn parseUnicodeProperty(self: *Self, negated: bool, start_pos: usize) error{InvalidEscape}!Token {
         const saved_pos = self.pos;
         const fallback_char: u32 = if (negated) 'P' else 'p';
 
         if (self.pos >= self.pattern.len or self.pattern[self.pos] != '{') {
+            if (self.unicode_mode) return error.InvalidEscape;
             return Token.escaped(fallback_char, start_pos);
         }
         self.pos += 1; // consume '{'
@@ -793,6 +860,7 @@ pub const Lexer = struct {
         }
         const name_end = self.pos;
         if (name_end == name_start or self.pos >= self.pattern.len or self.pattern[self.pos] != '}') {
+            if (self.unicode_mode) return error.InvalidEscape;
             self.pos = saved_pos;
             return Token.escaped(fallback_char, start_pos);
         }
@@ -820,8 +888,9 @@ pub const Lexer = struct {
     }
 
     /// Parse \xHH (exactly 2 hex digits). If not followed by 2 hex digits,
-    /// falls back to a literal 'x' (Annex-B-style leniency).
-    fn parseHexEscape(self: *Self, start_pos: usize) Token {
+    /// falls back to a literal 'x' (Annex-B-style leniency; a SyntaxError
+    /// under `unicode_mode`).
+    fn parseHexEscape(self: *Self, start_pos: usize) error{InvalidEscape}!Token {
         if (self.pos + 1 < self.pattern.len and
             isHexDigit(self.pattern[self.pos]) and isHexDigit(self.pattern[self.pos + 1]))
         {
@@ -829,12 +898,14 @@ pub const Lexer = struct {
             self.pos += 2;
             return Token.escaped(value, start_pos);
         }
+        if (self.unicode_mode) return error.InvalidEscape;
         return Token.escaped('x', start_pos);
     }
 
     /// Parse \cX control character escape. If not followed by an ASCII
-    /// letter, falls back to a literal 'c' (Annex-B-style leniency).
-    fn parseControlEscape(self: *Self, start_pos: usize) Token {
+    /// letter, falls back to a literal 'c' (Annex-B-style leniency; a
+    /// SyntaxError under `unicode_mode`).
+    fn parseControlEscape(self: *Self, start_pos: usize) error{InvalidEscape}!Token {
         if (self.pos < self.pattern.len) {
             const c = self.pattern[self.pos];
             if ((c >= 'a' and c <= 'z') or (c >= 'A' and c <= 'Z')) {
@@ -843,12 +914,14 @@ pub const Lexer = struct {
                 return Token.escaped(upper - 'A' + 1, start_pos);
             }
         }
+        if (self.unicode_mode) return error.InvalidEscape;
         return Token.escaped('c', start_pos);
     }
 
     /// Parse \uHHHH or \u{H+}. Falls back to a literal 'u' if malformed
-    /// (Annex-B-style leniency).
-    fn parseUnicodeEscape(self: *Self, start_pos: usize) Token {
+    /// (Annex-B-style leniency; a SyntaxError under `unicode_mode`, which
+    /// includes a `\u{...}` above U+10FFFF).
+    fn parseUnicodeEscape(self: *Self, start_pos: usize) error{InvalidEscape}!Token {
         if (self.pos < self.pattern.len and self.pattern[self.pos] == '{') {
             const brace_start = self.pos;
             self.pos += 1;
@@ -865,6 +938,7 @@ pub const Lexer = struct {
                 self.pos += 1;
                 return codepointToken(value, start_pos);
             }
+            if (self.unicode_mode) return error.InvalidEscape;
             self.pos = brace_start;
             return Token.escaped('u', start_pos);
         }
@@ -879,6 +953,7 @@ pub const Lexer = struct {
             return codepointToken(value, start_pos);
         }
 
+        if (self.unicode_mode) return error.InvalidEscape;
         return Token.escaped('u', start_pos);
     }
 
