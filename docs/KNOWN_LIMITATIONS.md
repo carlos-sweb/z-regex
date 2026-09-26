@@ -573,6 +573,42 @@ with set algebra, and to `CHAR_SET`/`CHAR_SET_INV idx:u32` in the bytecode.
   differ by at most 2.0 % (`main`) and 4.6 % (F2b). Comparisons therefore use medians
   of 10 runs, and differences under ~5 % get no verdict.
 
+### F2c: HIR and lowering
+
+`compile()` is now parse → lower → generate: the parser's AST is lowered into a HIR
+(`src/ir/hir.zig`, built by `src/lower/lower.zig` in a per-compile arena) and the
+code generator reads only the HIR. The bytecode is unchanged: the bytecode snapshot
+(`tests/snapshots/bytecode.txt`, 699 flag/pattern pairs since `0a43ff0`) passes with 0
+differences, and an old-vs-new comparison of 40,636 patterns found identical programs
+(or errors) and identical matches for every one.
+
+The HIR keeps what the current backtracker's behavior depends on:
+
+- `Repeat.syntax_form` (**semantic**): `a?`/`a??` clear the captures inside them when
+  they skip; `a{0,1}` doesn't. This is the pre-F4b iteration semantics (see the 394
+  divergences above).
+- `LitUnit.raw_byte` (**semantic**): a lone pattern byte 0x80–0xFF (invalid UTF-8, or
+  `\` followed by a non-ASCII character) matches that byte, not U+0080–U+00FF.
+- `CharSet.encoding_hint` (cosmetic): which bytecode encoding a class uses. What a
+  CharSet node matches is its `set`, checked against the compiled program by
+  `tests/hir_contract_tests.zig`.
+- Case folding per class path (see "Unicode Case Folding" below).
+
+**Expected divergence between Tiers, F4b to F6a.** T0 (F4a on) generates its own
+program from the HIR with the spec's repetition semantics (captures cleared at the
+start of every iteration, no `syntax_form`), while patterns that stay in the current
+backtracker (T2) keep today's semantics, `syntax_form` included, until F6a replaces
+it. So between F4b and F6a a quantified group can get different captures depending on
+the Tier that runs it — `(a){0,1}` versus `(a)?` is the `syntax_form` case, `(?:(a)|b)*`
+the per-iteration one. That divergence is known and attributed to T2 (§5.5 of the
+plan), not a regression.
+
+Stack per nesting level (capturing groups, minimum stack measured): code generation
+~0.68 KiB in Debug and ~0.12 KiB in ReleaseSafe (was ~0.56 and ~0.04 before F2c);
+non-capturing groups no longer cost the code generator any stack; the new lowering
+pass takes ~0.6 KiB in Debug and ~0.24 KiB in ReleaseSafe. 256 levels stay far below
+1 MiB in every stage.
+
 ### test262 baseline (F0b)
 
 The real test262 measurement that replaces the sample above as the semantic
@@ -859,8 +895,12 @@ var re = try Regex.compileWithOptions(allocator, "[\xc3\x80-\xc3\x96]", options)
 try re.test_("à"); // false — the range itself isn't case-folded, only individual members
 ```
 
-`case_insensitive` folds ASCII `a-z`/`A-Z` fully (standalone, in ranges, and in classes),
-and — as of a same-session Phase 4 follow-up — a literal non-ASCII character's simple
+`case_insensitive` folds ASCII `a-z`/`A-Z` standalone, in ranges and in classes whose
+members are all ASCII — **but not an ASCII range inside a class that also has a non-ASCII
+or `\p{...}` member**: `[a-z]` under `i` matches `A`, `[a-zé]` doesn't (confirmed while
+building the F2c lowering, which reproduces it as is; the per-path folding rule is in
+`src/lower/lower.zig`, and F3's case-folding work replaces it with the spec's). And
+— as of a same-session Phase 4 follow-up — a literal non-ASCII character's simple
 case-fold pair too, both standalone (`café` also matches `CAFÉ`) and as a single
 character-class member (`[é]` also matches `É`; mixed ASCII/non-ASCII members like
 `[aé]` fold both). Quantifiers over a case-folded non-ASCII literal work correctly
