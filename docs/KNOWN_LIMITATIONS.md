@@ -105,15 +105,14 @@ older internal notes had previously (incorrectly) listed as broken:
   character in `parseAtom`.
 - **Character classes can contain multi-byte members and ranges** *(added in Phase 3)* —
   `[é]`, `[a-\u{2FF}]`, `[\u{1F600}-\u{1F64F}]` (and negated forms, `[^...]`) now work
-  correctly, including with quantifiers (`[é]+`). New `CHAR_CLASS_RANGES`/
-  `CHAR_CLASS_RANGES_INV` opcodes hold up to `opcodes.MAX_CLASS_RANGES` code-point
-  ranges (30 since F1a; 8 before) and decode UTF-8 at match time; classes with only
-  byte-range (≤ U+007F) members still use the original 256-bit bitmap opcodes,
-  unchanged. Since F1a the codegen sorts and merges overlapping/adjacent ranges first
-  (`[\s\S]` is one range). A class still needing more than 30 ranges after merging is
-  a compile-time `error.TooManyRanges` rather than a silent truncation. This
-  closes out the character-class work Phase 1 deliberately deferred (see Phase 1's notes
-  in the compatibility plan).
+  correctly, including with quantifiers (`[é]+`). Classes with only byte-range
+  (≤ U+007F) members use the original 256-bit bitmap opcodes. Any other class is,
+  **since F2b**, a CharSet materialized at compile time and matched by `CHAR_SET`/
+  `CHAR_SET_INV idx:u32` against `CompileResult.charsets`, with no cap on its size
+  other than `MAX_PROGRAM_BYTES` (see "F2b: dynamic CharSet" below). Before F2b the
+  `CHAR_CLASS_RANGES(_INV)` opcodes held a fixed table of 30 ranges (8 before F1a) and
+  a larger class was `error.TooManyRanges`. This closes out the character-class work
+  Phase 1 deliberately deferred (see Phase 1's notes in the compatibility plan).
 - **`sticky` option (JS `y` flag)** *(added in Phase 5a)* — `CompileOptions{ .sticky =
   true }` makes `find` only match starting exactly at position 0 (no scanning ahead), and
   makes `findAll` stop at the first non-matching position instead of skipping past it.
@@ -361,18 +360,13 @@ older internal notes had previously (incorrectly) listed as broken:
   file fetch was needed for either — both simplest of the whole `\p{...}` property
   set to add, since the data was already being read.
 - **`\p{...}`/`\P{...}` as a character-class member** (`[\p{L}\d]`, `[\P{Alphabetic}a-z]`,
-  `[^\p{L}\d]`) *(added after Phase 3)* — up to 4 property/script/script-extensions
-  tests per class (`error.TooManyClassProperties` beyond that), via a new
-  `CHAR_CLASS_UNICODE`/`CHAR_CLASS_UNICODE_INV` opcode pair that ORs an inline
-  code-point-range table (same layout `CHAR_CLASS_RANGES` uses, for the class's literal
-  chars/ranges/spliced shorthand like `\d`) with a small table of property tests. Each
-  property test carries its *own* `negated` bit for `\P{...}` used as a class member —
-  `[\P{L}\d]` ("not-a-letter, or a digit," a per-member complement inside the union) is
-  a different thing from the whole class's `[^...]` negation (`[^\p{L}\d]`, still
-  applied once via the opcode's `_INV` form, the same single-XOR-at-the-end approach
-  `CHAR_CLASS_RANGES_INV` already used correctly — verified both stay distinct via a
-  dedicated regression test). This closes out the one remaining Phase 3 follow-up that
-  needed real new opcode/matcher work rather than reusing an existing mechanism as-is.
+  `[^\p{L}\d]`) *(added after Phase 3)* — any number of property/script/script-extensions
+  members per class since F2b (4 before, `error.TooManyClassProperties`): the class is
+  materialized into one CharSet at compile time, each `\p{...}` contributing its range
+  table and each `\P{...}` member its complement. A member's own `\P` — `[\P{L}\d]`
+  ("not-a-letter, or a digit," a per-member complement inside the union) — is a
+  different thing from the whole class's `[^...]` negation (`[^\p{L}\d]`, applied once
+  via the `CHAR_SET_INV` opcode); a regression test keeps the two distinct.
 - **`case_insensitive` folds a literal non-ASCII character's simple case pair**
   *(Phase 4, added later in the session)* — a literal non-ASCII character, standalone
   (`café` also matches `CAFÉ`) or as a single character-class member (`[é]` also
@@ -422,12 +416,12 @@ older internal notes had previously (incorrectly) listed as broken:
   character-class set operations, `[A--B]` (difference) and `[A&&B]` (intersection),
   exactly one per class (no chaining, `error.ChainedClassSetOperatorNotSupported`; no
   nesting beyond one bracket level), each operand an ordinary class body, a bare
-  `\p{...}`/`\P{...}` atom, or a nested (possibly `[^...]`-negated) `[...]` class. A new
-  opcode, `CHAR_CLASS_SET_OP`, evaluates both operands' own `CHAR_CLASS_UNICODE`-shaped
-  membership tests against one decoded code point at *match* time and combines with
-  AND/AND-NOT — deliberately not compile-time range arithmetic, since a real operand
-  like `\p{L}` (~700 ranges) would blow past the fixed 8-slot range table every other
-  class opcode uses; per-operand match-time evaluation sidesteps that. `--`/`&&`/`[`
+  `\p{...}`/`\P{...}` atom, or a nested (possibly `[^...]`-negated) `[...]` class. Since
+  F2b the operation is computed at compile time with CharSet algebra (intersection or
+  difference of the two operands' sets, a negated operand as a complement) and matched
+  with one `CHAR_SET` lookup; before F2b a `CHAR_CLASS_SET_OP` opcode evaluated both
+  operands at match time, because the fixed range tables couldn't hold an operand like
+  `\p{L}` (~700 ranges). `--`/`&&`/`[`
   (nested operand) only tokenize specially inside a class when `v_mode` is on (default
   `false` — existing patterns using literal `-`/`&`/`[` in a class are unaffected). Four
   real bugs found and fixed while building this (a double-free from duplicate `errdefer`
@@ -542,6 +536,32 @@ of them (`(?:a{65536}){51}` compiles, `{52}` doesn't, tested), and a program
 at the cap compiles in ~124 ms in ReleaseSafe (~400 ms in Debug); the i32
 jump-offset limit is 128x higher. F5's counted loops (D10) remove the
 unrolling.
+
+### F2b: dynamic CharSet
+
+Every character class that doesn't fit the ASCII bitmap (a non-ASCII member, a
+`\p{...}` member, a `v`-mode set operation, `[]`) compiles to one CharSet
+(`src/ir/charset.zig`: sorted, merged code point ranges), computed at compile time
+with set algebra, and to `CHAR_SET`/`CHAR_SET_INV idx:u32` in the bytecode.
+
+- **Gone:** `MAX_CLASS_RANGES` (30), `MAX_SET_OP_RANGES` (13 per set-operation
+  operand), `MAX_CLASS_PROPERTIES` (4), `error.TooManyRanges`,
+  `error.TooManyClassProperties` and the three fixed-table opcodes.
+- **The bytecode is not executable alone.** The table lives in
+  `CompileResult.charsets`, not in the bytecode; `Matcher.initCompiled` carries it.
+  Running a program's bytecode without its table fails with `error.InvalidCharSet`.
+  The bytecode is not a stable serialization format; persisting compiled patterns
+  would need a versioned serializer that writes bytecode and tables together (not
+  planned before F7, only on demand).
+- **Size:** the table's bytes (8 per range) count toward `MAX_PROGRAM_BYTES` with the
+  bytecode. Equal classes share one entry, and an unrolled counted repeat reuses its
+  class's entry, so `(?:[\p{L}]){65536}` has a one-entry table. Indices follow the
+  first appearance of each class, so the same pattern always yields the same program.
+- **No semantic change.** Case folding under `i` is exactly what it was (literal
+  members only; see "Unicode Case Folding" below). An old-vs-new comparison over 3,001
+  patterns (the test corpora plus 2,453 random classes, flags `""`/`i`/`u`/`v`/`iu`/`iv`)
+  and 20.8 M code point checks found 0 differences; 25 of those patterns used to be
+  rejected by the old caps and now compile.
 
 ### test262 baseline (F0b)
 
@@ -793,8 +813,27 @@ incorrect examples in this repository's own README and doc comments.
 
 ## Confirmed bugs (still open)
 
-*(none currently tracked here — see "Genuinely unimplemented" below for known gaps, all
-of which are scoped-out features, not bugs in what's implemented)*
+- **`v` set operation whose last operand is a bracketed class fails under `unicode = true`**
+  *(found in F2b, introduced in F1b(2) `3c0470a`; not fixed, outside F2b's scope)*:
+
+  ```zig
+  Regex.compileWithOptions(a, "[[a]&&[a]]", .{ .v = true });                  // ok
+  Regex.compileWithOptions(a, "[[a]&&[a]]", .{ .v = true, .unicode = true }); // error.UnmatchedBracket
+  Regex.compileWithOptions(a, "[\\p{L}&&[a]]", .{ .v = true, .unicode = true }); // error.UnmatchedBracket
+  Regex.compileWithOptions(a, "[[a]--\\p{Lu}]", .{ .v = true, .unicode = true }); // ok
+  ```
+
+  After a nested `[...]` operand, `parseCharClass`/`parseClassSetOperand` fetch the
+  next token in normal (outside-a-class) mode and only then rewind and re-read it in
+  class mode. Since F1b(2), under `unicode` a `]` outside a class is a SyntaxError
+  (D2), so when that next character is the outer `]` the lexer fails before the
+  rewind. Only the Zig API can reach it: the C API, the test262 harness and the
+  differential pass `v` without `unicode`, and test262's `v` tests are still
+  `skipped_feature`. Fix: rewind before fetching (or fetch the token after a nested
+  class in class mode).
+
+Otherwise see "Genuinely unimplemented" below for known gaps, all of which are
+scoped-out features, not bugs in what's implemented.
 
 ---
 
@@ -859,13 +898,12 @@ matches `A` but not `B`) and intersection (`[A&&B]`, matches both) — **but onl
 operation per class, no chaining (`[A--B--C]` is `error.ChainedClassSetOperatorNotSupported`)
 and no nesting beyond one bracket level**. Each operand (`A`/`B`) is either an ordinary
 class body (`\p{L}`, `a-z\d`, a bare `\p{...}`/`\P{...}` atom, ...) or a nested `[...]`
-class, which may itself be `[^...]`-negated (`[[a-z]&&[^x]]`). Implemented via a new
-opcode, `CHAR_CLASS_SET_OP`, that evaluates *two* independent `CHAR_CLASS_UNICODE`-shaped
-operand specs against one decoded code point at match time and combines them with AND
-(intersection) or AND-NOT (difference) — deliberately not compile-time range-set
-arithmetic, since a real operand like `\p{L}` has ~700 ranges, far past the fixed 8-slot
-range table every other class opcode in this engine uses; evaluating each operand's own
-membership test independently at match time sidesteps that entirely. `--`/`&&`/`[` (for
+class, which may itself be `[^...]`-negated (`[[a-z]&&[^x]]`). Since F2b the operation
+is range-set arithmetic at compile time (`src/ir/charset.zig`), matched with one
+`CHAR_SET` lookup, with no cap on operand size; before F2b a `CHAR_CLASS_SET_OP` opcode
+evaluated both operands at match time, since the fixed range tables couldn't hold an
+operand like `\p{L}` (~700 ranges). With `unicode = true` as well, an operation whose
+last operand is a bracketed class currently fails (see "Confirmed bugs"). `--`/`&&`/`[` (for
 a nested operand) only tokenize specially inside a class when `v_mode` is on (default
 `false`), so existing patterns using literal `-`/`&`/`[` inside a class are unaffected.
 **Four real bugs found and fixed while building this** (all in `src/parser/parser.zig`,
@@ -1007,9 +1045,6 @@ strictness is itself only the unrecognized-escape slice — see above).
 - Patterns requiring ReDoS protection guarantees
 
 ### ⚠️ Use with Caution:
-- Character classes needing more than 30 non-ASCII ranges/members after merging
-  (`error.TooManyRanges`) or more than 4 `\p{...}`/`\P{...}` tests
-  (`error.TooManyClassProperties`), until F2b (dynamic CharSet)
 - Nesting of groups, lookarounds and classes deeper than 256 levels is
   `error.NestingTooDeep` in every build mode. Parsing 256 levels fits in a
   1 MiB stack in every mode: since F2a a level takes ~0.5 KiB in ReleaseSafe

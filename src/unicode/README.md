@@ -72,17 +72,14 @@ What's real and tested (see `properties.zig`/`casefold.zig`'s own tests, and the
   properties actually diverge, so `scx == sc` for everything else, and the generator
   doesn't recompute either table from scratch.
 - **`\p{...}`/`\P{...}` as a character-class member** (e.g. `[\p{L}\d]`,
-  `[\P{Alphabetic}a-z]`, `[^\p{L}\d]`) — up to `opcodes.MAX_CLASS_PROPERTIES` (4)
-  property/script/script-extensions tests per class (`error.TooManyClassProperties`
-  beyond that, same fixed-capacity policy as the plain-range case below), combined via
-  a new `CHAR_CLASS_UNICODE`/`CHAR_CLASS_UNICODE_INV` opcode pair that ORs an inline
-  range table (same `MAX_CLASS_RANGES`-slot layout `CHAR_CLASS_RANGES` uses, for the
-  class's literal chars/ranges/spliced shorthand) with a small table of property tests.
-  Each property test carries its *own* `negated` bit for `\P{...}` used as a class
-  member -- e.g. `[\P{L}\d]` means "not-a-letter, or a digit" (a per-member complement
-  contributing to the union), which is a different thing from the whole class's
-  `[^...]` negation (`[^\p{L}\d]`, applied once via the opcode's `_INV` form, same
-  single-XOR-at-the-end approach `CHAR_CLASS_RANGES_INV` already used correctly).
+  `[\P{Alphabetic}a-z]`, `[^\p{L}\d]`) -- since F2b the code generator materializes
+  the whole class into one CharSet (`src/ir/charset.zig`) at compile time: each
+  `\p{...}` member contributes its range table (`properties.propertyRanges`,
+  `scriptRanges`, `scriptExtensionsRanges`), each `\P{...}` member its complement, and
+  the matcher does a single lookup (`CHAR_SET`). No limit on the number of members.
+  A member's own `\P` -- `[\P{L}\d]`, "not-a-letter, or a digit" -- is a different
+  thing from the whole class's `[^...]` negation (`[^\p{L}\d]`, applied once via
+  `CHAR_SET_INV`).
 - **Simple case mapping** (`casefold.zig`) — `toUpper`/`toLower` binary-search a
   codepoint's 1-to-1 case pair, wired into `case_insensitive` matching for two shapes:
   a literal non-ASCII character (standalone, e.g. `é`, or as a single character-class
