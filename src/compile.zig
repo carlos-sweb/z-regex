@@ -6,13 +6,13 @@
 const std = @import("std");
 const Allocator = std.mem.Allocator;
 
-const generator_mod = @import("tier2/codegen/generator.zig");
-const optimizer_mod = @import("tier2/codegen/optimizer.zig");
-const bytecode_writer = @import("tier2/bytecode/writer.zig");
-const format_mod = @import("tier2/bytecode/format.zig");
-const charset_mod = @import("ir/charset.zig");
-const lower_mod = @import("frontend/lower/lower.zig");
-const program_mod = @import("tier2/program.zig");
+const generator_mod = @import("tier2").generator;
+const optimizer_mod = @import("tier2").optimizer;
+const bytecode_writer = @import("tier2").writer;
+const format_mod = @import("tier2").format;
+const charset_mod = @import("ir").charset;
+const lower_mod = @import("frontend").lower;
+const program_mod = @import("tier2").program;
 
 const CodeGenerator = generator_mod.CodeGenerator;
 const Optimizer = optimizer_mod.Optimizer;

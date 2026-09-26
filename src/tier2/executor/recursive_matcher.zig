@@ -13,8 +13,8 @@ const std = @import("std");
 const Allocator = std.mem.Allocator;
 const opcodes = @import("../bytecode/opcodes.zig");
 const format = @import("../bytecode/format.zig");
-const properties = @import("../../unicode/properties.zig");
-const CharSet = @import("../../ir/charset.zig").CharSet;
+const properties = @import("unicode").properties;
+const CharSet = @import("ir").charset.CharSet;
 
 const Opcode = opcodes.Opcode;
 const Instruction = format.Instruction;

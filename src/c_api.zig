@@ -4,11 +4,11 @@
 //! It handles memory management, error handling, and type conversions between C and Zig.
 
 const std = @import("std");
-const regex = @import("regex.zig");
+const regex = @import("zregex");
 const Regex = regex.Regex;
 const MatchResult = regex.MatchResult;
 const Allocator = std.mem.Allocator;
-const nextSearchStart = @import("tier2/executor/recursive_matcher.zig").RecursiveMatcher.nextSearchStart;
+const nextSearchStart = regex.tier2.RecursiveMatcher.nextSearchStart;
 
 // =============================================================================
 // Global State
@@ -160,7 +160,7 @@ export fn zregex_compile(pattern: [*:0]const u8, options: ?*const ZRegexOptions)
     // Note: max_recursion_depth and max_steps are runtime execution limits,
     // not compilation options. They are handled by the Matcher, not the compiler.
     const re = if (options) |opts| blk: {
-        const compile_opts = @import("compile.zig").CompileOptions{
+        const compile_opts = regex.CompileOptions{
             .case_insensitive = opts.case_insensitive,
             .multiline = opts.multiline,
             .dot_all = opts.dot_all,
@@ -559,7 +559,7 @@ export fn zregex_clear_error() void {
 export fn zregex_compile_n(pattern: [*]const u8, len: usize, options: ?*const ZRegexOptions) ?*ZRegex {
     clearError();
     const pattern_slice = pattern[0..len];
-    const compile_opts: @import("compile.zig").CompileOptions = if (options) |opts| .{
+    const compile_opts: regex.CompileOptions = if (options) |opts| .{
         .case_insensitive = opts.case_insensitive,
         .multiline = opts.multiline,
         .dot_all = opts.dot_all,

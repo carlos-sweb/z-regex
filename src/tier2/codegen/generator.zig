@@ -8,13 +8,13 @@
 
 const std = @import("std");
 const Allocator = std.mem.Allocator;
-const hir = @import("../../ir/hir.zig");
+const hir = @import("ir").hir;
 const bytecode = @import("../bytecode/writer.zig");
 const opcodes = @import("../bytecode/opcodes.zig");
-const bittable_mod = @import("../../utils/bittable.zig");
+const bittable_mod = @import("utils").bittable;
 const BitTable = bittable_mod.BitTable;
-const casefold = @import("../../unicode/casefold.zig");
-const charset_mod = @import("../../ir/charset.zig");
+const casefold = @import("unicode").casefold;
+const charset_mod = @import("ir").charset;
 const CharSet = charset_mod.CharSet;
 const Range = charset_mod.Range;
 

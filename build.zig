@@ -1,5 +1,63 @@
 const std = @import("std");
 
+/// The module layers (docs/REGEX_TIERS_PLAN.md, F2e): each module may import
+/// only the modules listed as its `deps`, so dependencies go downwards. This
+/// table is the single source of truth: the module graph is built from it,
+/// and `check-layers` checks the sources against it.
+pub const Layer = struct {
+    name: []const u8,
+    /// The module's root file; the module owns that file's directory.
+    root: []const u8,
+    deps: []const []const u8,
+};
+
+pub const layers = [_]Layer{
+    .{ .name = "ir", .root = "src/ir/root.zig", .deps = &.{} },
+    .{ .name = "unicode", .root = "src/unicode/root.zig", .deps = &.{} },
+    .{ .name = "utils", .root = "src/utils/root.zig", .deps = &.{} },
+    .{ .name = "frontend", .root = "src/frontend/root.zig", .deps = &.{ "ir", "unicode" } },
+    .{ .name = "tier2", .root = "src/tier2/root.zig", .deps = &.{ "ir", "unicode", "utils" } },
+    .{ .name = "zregex", .root = "src/main.zig", .deps = &.{ "ir", "unicode", "utils", "frontend", "tier2" } },
+};
+
+/// One build of the whole module graph (per target/optimize mode).
+const Modules = struct {
+    by_name: std.StringArrayHashMapUnmanaged(*std.Build.Module),
+
+    fn get(self: Modules, name: []const u8) *std.Build.Module {
+        return self.by_name.get(name).?;
+    }
+};
+
+/// Create every layer's module with exactly its declared imports. With
+/// `public`, `zregex` is the package's exported module (`b.addModule`); the
+/// others are always internal.
+fn addModules(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.builtin.OptimizeMode, public: bool) Modules {
+    var mods: Modules = .{ .by_name = .empty };
+    for (layers) |layer| {
+        const opts: std.Build.Module.CreateOptions = .{
+            .root_source_file = b.path(layer.root),
+            .target = target,
+            .optimize = optimize,
+        };
+        const m = if (public and std.mem.eql(u8, layer.name, "zregex")) b.addModule("zregex", opts) else b.createModule(opts);
+        for (layer.deps) |dep| m.addImport(dep, mods.get(dep));
+        mods.by_name.put(b.allocator, layer.name, m) catch @panic("OOM");
+    }
+    return mods;
+}
+
+/// The C ABI module (src/c_api.zig), on top of `zregex` only.
+fn addCApiModule(b: *std.Build, mods: Modules, target: std.Build.ResolvedTarget, optimize: std.builtin.OptimizeMode) *std.Build.Module {
+    const m = b.createModule(.{
+        .root_source_file = b.path("src/c_api.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    m.addImport("zregex", mods.get("zregex"));
+    return m;
+}
+
 pub fn build(b: *std.Build) void {
     // Standard target and optimize options
     const target = b.standardTargetOptions(.{});
@@ -11,19 +69,12 @@ pub fn build(b: *std.Build) void {
     // Phase 8) drives zregex through from Node.js. Anyone else wanting to call zregex
     // from C/C++ can link against the shared library and write their own bindings
     // against these exported symbols.
-    const c_api_module = b.createModule(.{
-        .root_source_file = b.path("src/c_api.zig"),
-        .target = target,
-        .optimize = optimize,
-    });
-
     // Public module exposed to downstream consumers via the Zig package manager
-    // (e.g. `b.dependency("zregex", .{}).module("zregex")`).
-    const lib_module = b.addModule("zregex", .{
-        .root_source_file = b.path("src/main.zig"),
-        .target = target,
-        .optimize = optimize,
-    });
+    // (e.g. `b.dependency("zregex", .{}).module("zregex")`), with the
+    // internal layer modules underneath it.
+    const mods = addModules(b, target, optimize, true);
+    const lib_module = mods.get("zregex");
+    const c_api_module = addCApiModule(b, mods, target, optimize);
 
     // =============================================================================
     // Library Compilation
@@ -45,12 +96,16 @@ pub fn build(b: *std.Build) void {
     // Testing
     // =============================================================================
 
-    // Create unit test executable
-    const tests = b.addTest(.{
-        .root_module = lib_module,
-    });
-
-    const run_tests = b.addRunArtifact(tests);
+    // Unit tests: one test binary per layer module, compiled with only the
+    // modules that layer may import, so the tests obey the layering too.
+    const test_step = b.step("test", "Run all tests");
+    const unit_test_step = b.step("test-unit", "Run unit tests only");
+    for (layers) |layer| {
+        const layer_tests = b.addTest(.{ .name = b.fmt("test-{s}", .{layer.name}), .root_module = mods.get(layer.name) });
+        const run_layer_tests = b.addRunArtifact(layer_tests);
+        test_step.dependOn(&run_layer_tests.step);
+        unit_test_step.dependOn(&run_layer_tests.step);
+    }
 
     // Tests for the exported C ABI (src/c_api.zig), which has its own root.
     const c_api_tests = b.addTest(.{
@@ -72,15 +127,9 @@ pub fn build(b: *std.Build) void {
 
     const run_integration_tests = b.addRunArtifact(integration_tests);
 
-    // Test step (runs all tests)
-    const test_step = b.step("test", "Run all tests");
-    test_step.dependOn(&run_tests.step);
     test_step.dependOn(&run_c_api_tests.step);
     test_step.dependOn(&run_integration_tests.step);
-
-    // Individual test steps
-    const unit_test_step = b.step("test-unit", "Run unit tests only");
-    unit_test_step.dependOn(&run_tests.step);
+    unit_test_step.dependOn(&run_c_api_tests.step);
 
     const integration_test_step = b.step("test-integration", "Run integration tests only");
     integration_test_step.dependOn(&run_integration_tests.step);
@@ -147,13 +196,10 @@ pub fn build(b: *std.Build) void {
     // needs Node, `npm ci --prefix scripts/test262` and the pinned test262
     // checkout from scripts/test262/fetch.sh. Always runs against a
     // ReleaseSafe build so engine bugs surface as crashes, not silent UB.
+    const safe_mods = addModules(b, target, .ReleaseSafe, false);
     const test262_lib = b.addLibrary(.{
         .name = "zregex-test262",
-        .root_module = b.createModule(.{
-            .root_source_file = b.path("src/c_api.zig"),
-            .target = target,
-            .optimize = .ReleaseSafe,
-        }),
+        .root_module = addCApiModule(b, safe_mods, target, .ReleaseSafe),
         .linkage = .dynamic,
     });
     const run_test262 = b.addSystemCommand(&.{ "node", "scripts/test262/run.mjs", "--check-baseline", "scripts/test262/baseline.json", "--lib" });
@@ -175,11 +221,7 @@ pub fn build(b: *std.Build) void {
 
     // Performance baseline (bench/bench.zig, docs/REGEX_TIERS_PLAN.md F0d).
     // Always ReleaseFast, whatever -Doptimize says, so numbers are comparable.
-    const bench_zregex = b.createModule(.{
-        .root_source_file = b.path("src/main.zig"),
-        .target = target,
-        .optimize = .ReleaseFast,
-    });
+    const bench_zregex = addModules(b, target, .ReleaseFast, false).get("zregex");
     const bench_module = b.createModule(.{
         .root_source_file = b.path("bench/bench.zig"),
         .target = target,

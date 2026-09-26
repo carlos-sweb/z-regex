@@ -4,7 +4,7 @@
 //! for consumption by the parser.
 
 const std = @import("std");
-const properties = @import("../../unicode/properties.zig");
+const properties = @import("unicode").properties;
 const Allocator = std.mem.Allocator;
 
 /// Token types in regex syntax

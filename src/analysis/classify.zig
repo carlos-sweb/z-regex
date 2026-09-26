@@ -27,8 +27,8 @@
 const std = @import("std");
 const Allocator = std.mem.Allocator;
 
-const lower_mod = @import("../frontend/lower/lower.zig");
-const hir = @import("../ir/hir.zig");
+const lower_mod = @import("frontend").lower;
+const hir = @import("ir").hir;
 const Node = hir.Node;
 
 pub const Tier = enum(u2) {

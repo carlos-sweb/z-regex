@@ -5,7 +5,7 @@
 const std = @import("std");
 const Allocator = std.mem.Allocator;
 const format_mod = @import("bytecode/format.zig");
-const charset_mod = @import("../ir/charset.zig");
+const charset_mod = @import("ir").charset;
 
 pub const NamedGroup = format_mod.NamedGroup;
 pub const CharSet = charset_mod.CharSet;

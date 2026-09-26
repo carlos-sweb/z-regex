@@ -19,7 +19,7 @@ const std = @import("std");
 const Allocator = std.mem.Allocator;
 const lexer_mod = @import("lexer.zig");
 const ast_mod = @import("ast.zig");
-const properties = @import("../../unicode/properties.zig");
+const properties = @import("unicode").properties;
 
 const Lexer = lexer_mod.Lexer;
 const Token = lexer_mod.Token;

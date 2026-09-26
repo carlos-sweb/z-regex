@@ -13,7 +13,7 @@ const Capture = thread_mod.Capture;
 const nextSearchStart = RecursiveMatcher.nextSearchStart;
 pub const NamedGroup = format_mod.NamedGroup;
 const CompileResult = @import("../program.zig").CompileResult;
-const CharSet = @import("../../ir/charset.zig").CharSet;
+const CharSet = @import("ir").charset.CharSet;
 
 /// A capture's [start, end) byte offsets into the matched input (the JS `d`
 /// / `hasIndices` flag equivalent — see `MatchResult.getCaptureIndices`).
