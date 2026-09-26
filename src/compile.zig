@@ -141,10 +141,8 @@ pub fn compileTiers(allocator: Allocator, pattern: []const u8, options: CompileO
     const use_vm = try route(fe, options);
     const bt = try generate(allocator, fe, options);
     errdefer bt.deinit();
-    const t0: ?tier0.Program = if (use_vm) tier0.compileWith(allocator, fe.root, .{ .prefilters = options.t0_prefilters }) catch |err| switch (err) {
-        error.Ineligible => unreachable, // `route` checked
-        else => |e| return e,
-    } else null;
+    // `route` ran `tier0.check`.
+    const t0: ?tier0.Program = if (use_vm) try tier0.compileAccepted(allocator, fe.root, .{ .prefilters = options.t0_prefilters }) else null;
     return .{ .bt = bt, .t0 = t0 };
 }
 

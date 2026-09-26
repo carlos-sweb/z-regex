@@ -62,11 +62,12 @@ pub const Literal = struct { utf8: []const u8, utf16: []const u16 };
 
 /// `C+` (`min` 1) or `C*` (`min` 0) over an ASCII class, greedy.
 pub const ClassRun = struct {
-    ascii: [2]u64,
+    /// Membership of each unit below 256 (only ASCII members are set).
+    table: [256]bool,
     min: u1,
 
-    pub inline fn has(self: ClassRun, c: u32) bool {
-        return c < 128 and self.ascii[c / 64] & (@as(u64, 1) << @intCast(c % 64)) != 0;
+    pub inline fn has(self: *const ClassRun, c: u32) bool {
+        return c < 256 and self.table[c];
     }
 };
 
@@ -143,11 +144,8 @@ fn classRunOf(root: *const hir.Node) ?ClassRun {
     if (r.max != null or r.min > 1 or r.policy != .greedy or r.body.* != .char_set) return null;
     const ranges = r.body.char_set.set.ranges;
     if (ranges.len == 0 or ranges[ranges.len - 1].hi >= 0x80) return null;
-    var run: ClassRun = .{ .ascii = .{ 0, 0 }, .min = @intCast(r.min) };
-    for (ranges) |range| {
-        var c = range.lo;
-        while (c <= range.hi) : (c += 1) run.ascii[c / 64] |= @as(u64, 1) << @intCast(c % 64);
-    }
+    var run: ClassRun = .{ .table = @splat(false), .min = @intCast(r.min) };
+    for (ranges) |range| @memset(run.table[range.lo .. range.hi + 1], true);
     return run;
 }
 
@@ -155,6 +153,7 @@ fn classRunOf(root: *const hir.Node) ?ClassRun {
 /// (the closure from pc 0 reaches `match`) or can start anywhere.
 fn firstOf(prog: *const Program) ?First {
     var f: First = .{ .utf8 = @splat(false), .utf16 = @splat(false), .high = false, .single8 = null, .single16 = null };
+    var counts: Counts = .{};
     // Depth-first over the epsilon closure of pc 0, asserts passed over.
     var seen = std.StaticBitSet(max_scan).initEmpty();
     var stack: [max_scan]u32 = undefined;
@@ -182,22 +181,14 @@ fn firstOf(prog: *const Program) ?First {
                 stack[sp] = pc + 1;
                 sp += 1;
             },
-            .char => |c| mark(&f, c, c),
-            .set => |i| for (prog.sets[i].set.ranges) |r| mark(&f, r.lo, r.hi),
+            .char => |c| mark(&f, &counts, c, c),
+            .set => |i| for (prog.sets[i].set.ranges) |r| mark(&f, &counts, r.lo, r.hi),
         }
     }
-    var n8: usize = 0;
-    for (f.utf8, 0..) |on, b| if (on) {
-        n8 += 1;
-        f.single8 = @intCast(b);
-    };
-    if (n8 != 1) f.single8 = null;
-    var n16: usize = 0;
-    for (f.utf16, 0..) |on, u| if (on) {
-        n16 += 1;
-        f.single16 = @intCast(u);
-    };
-    if (n16 != 1 or f.high) f.single16 = null;
+    // `mark` counted the units as it set them.
+    const n8 = counts.ascii8 + @as(usize, if (counts.high8) 128 else 0);
+    if (n8 == 1) f.single8 = counts.last8;
+    if (counts.n16 == 1 and !f.high) f.single16 = counts.last16;
     // Everything possible: nothing to skip.
     if (n8 == 256) return null;
     return f;
@@ -207,12 +198,34 @@ fn firstOf(prog: *const Program) ?First {
 /// visited set are fixed-size); they still run, on the plain VM.
 const max_scan = 4096;
 
-fn mark(f: *First, lo: u32, hi: u32) void {
+/// How many units `mark` has set, so `firstOf` needn't scan the tables.
+const Counts = struct {
+    ascii8: usize = 0,
+    last8: u8 = 0,
+    /// Every byte from 0x80 up is set.
+    high8: bool = false,
+    n16: usize = 0,
+    last16: u8 = 0,
+};
+
+fn mark(f: *First, n: *Counts, lo: u32, hi: u32) void {
     var c = lo;
-    while (c <= @min(hi, 0x7F)) : (c += 1) f.utf8[c] = true;
-    if (hi >= 0x80) @memset(f.utf8[0x80..], true);
+    while (c <= @min(hi, 0x7F)) : (c += 1) if (!f.utf8[c]) {
+        f.utf8[c] = true;
+        n.ascii8 += 1;
+        n.last8 = @intCast(c);
+    };
+    if (hi >= 0x80 and !n.high8) {
+        @memset(f.utf8[0x80..], true);
+        n.high8 = true;
+        n.last8 = 0x80;
+    }
     c = lo;
-    while (c <= @min(hi, 0xFF)) : (c += 1) f.utf16[c] = true;
+    while (c <= @min(hi, 0xFF)) : (c += 1) if (!f.utf16[c]) {
+        f.utf16[c] = true;
+        n.n16 += 1;
+        n.last16 = @intCast(c);
+    };
     if (hi >= 0x100) f.high = true;
 }
 

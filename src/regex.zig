@@ -217,7 +217,7 @@ pub const Regex = struct {
     /// One execution on WTF-8 `input` into a new `MatchResult` (byte
     /// offsets), for the facade above. An index inside a character is no
     /// match.
-    fn execResult(self: Self, input: []const u8, index: usize, sticky: bool, scratch: *Scratch) RegexError!?MatchResult {
+    fn execResult(self: *const Self, input: []const u8, index: usize, sticky: bool, scratch: *Scratch) RegexError!?MatchResult {
         // Slots on the stack when they fit (most patterns), so a facade
         // call allocates only its result.
         var stack_slots: [64]?usize = undefined;
@@ -269,13 +269,13 @@ pub const Regex = struct {
     /// positions). An `index` past the end is no match; one inside a
     /// character is `error.InvalidIndex`. With a warm `scratch` it doesn't
     /// allocate.
-    pub fn execAt(self: Self, subject: Subject, index: usize, scratch: *Scratch, out: *MatchSlots, limits: ExecLimits) ExecError!bool {
+    pub fn execAt(self: *const Self, subject: Subject, index: usize, scratch: *Scratch, out: *MatchSlots, limits: ExecLimits) ExecError!bool {
         return self.exec(subject, index, self.sticky, scratch, out.slots, limits);
     }
 
     /// The dispatcher (F4a): T0's VM when the pattern has a `t0` program,
     /// the backtracker otherwise. The VM is linear and ignores `limits`.
-    fn exec(self: Self, subject: Subject, index: usize, sticky: bool, scratch: *Scratch, slots: []?usize, limits: ExecLimits) ExecError!bool {
+    fn exec(self: *const Self, subject: Subject, index: usize, sticky: bool, scratch: *Scratch, slots: []?usize, limits: ExecLimits) ExecError!bool {
         scratch.acquire();
         defer scratch.release();
         if (self.t0) |*p| return switch (subject) {

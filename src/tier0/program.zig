@@ -41,8 +41,10 @@ pub const Set = struct {
 
     pub fn init(gpa: Allocator, set: CharSet) Allocator.Error!Set {
         var ascii: [2]u64 = .{ 0, 0 };
-        for (0..128) |c| {
-            if (set.contains(@intCast(c))) ascii[c / 64] |= @as(u64, 1) << @intCast(c % 64);
+        for (set.ranges) |r| {
+            if (r.lo >= 128) break;
+            var c = r.lo;
+            while (c <= @min(r.hi, 127)) : (c += 1) ascii[c / 64] |= @as(u64, 1) << @intCast(c % 64);
         }
         return .{ .set = try set.clone(gpa), .ascii = ascii };
     }
@@ -53,15 +55,35 @@ pub const Set = struct {
     }
 };
 
+/// The epsilon closure of one pc: `Program.follow[start..][0..len]`, the
+/// `char`, `set` and `match` pcs it reaches, in priority order. `dynamic`
+/// when it passes through an `assert` (its result depends on the
+/// position), or when the table's size cap was reached.
+pub const Closure = struct {
+    start: u32,
+    len: u32,
+
+    pub const dynamic: Closure = .{ .start = 0, .len = std.math.maxInt(u32) };
+
+    pub fn isDynamic(self: Closure) bool {
+        return self.len == std.math.maxInt(u32);
+    }
+};
+
 pub const Program = struct {
     insts: []const Inst,
     sets: []const Set,
+    /// One per pc (the VM's `addThread`); empty for a program built by hand.
+    closures: []const Closure = &.{},
+    follow: []const u32 = &.{},
     /// Fast paths and the start-position skip (`prefilter.zig`); empty when
     /// compiled without them.
     prefilter: Prefilter = .{},
 
     pub fn deinit(self: Program, gpa: Allocator) void {
         self.prefilter.deinit(gpa);
+        gpa.free(self.closures);
+        gpa.free(self.follow);
         for (self.sets) |s| s.set.deinit(gpa);
         gpa.free(self.sets);
         gpa.free(self.insts);

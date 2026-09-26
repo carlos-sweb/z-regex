@@ -38,26 +38,38 @@ pub const ExecError = Allocator.Error || error{ InvalidIndex, SlotsTooSmall };
 
 pub const ExistsError = Allocator.Error || error{ InvalidIndex, Unsupported, StepLimitExceeded };
 
-/// A thread list: a sparse set of pcs in insertion (= priority) order, with
-/// each thread's start position. Every pc the closure passes through is
-/// inserted (so it is visited once per position); only `char`, `set` and
-/// `match` do anything when the list steps.
+/// A thread list: pcs in insertion (= priority) order, with each thread's
+/// start position, and a generation stamp per pc for membership (one load
+/// and compare; clearing the list is bumping the generation). Every pc the
+/// dynamic closure passes through is inserted (so it is visited once per
+/// position); only `char`, `set` and `match` do anything when the list
+/// steps.
 const List = struct {
     dense: []u32 = &.{},
     starts: []usize = &.{},
-    sparse: []u32 = &.{},
+    stamp: []u32 = &.{},
+    gen: u32 = 1,
     len: u32 = 0,
 
     inline fn contains(self: *const List, pc: u32) bool {
-        const i = self.sparse[pc];
-        return i < self.len and self.dense[i] == pc;
+        return self.stamp[pc] == self.gen;
     }
 
     inline fn insert(self: *List, pc: u32, start: usize) void {
-        self.sparse[pc] = self.len;
+        self.stamp[pc] = self.gen;
         self.dense[self.len] = pc;
         self.starts[self.len] = start;
         self.len += 1;
+    }
+
+    inline fn clear(self: *List) void {
+        self.len = 0;
+        self.gen +%= 1;
+        if (self.gen == 0) {
+            // Wrapped: no stale stamp may equal the new generation.
+            @memset(self.stamp, 0);
+            self.gen = 1;
+        }
     }
 };
 
@@ -83,7 +95,7 @@ pub const VmScratch = struct {
         for (&self.lists) |*l| {
             self.gpa.free(l.dense);
             self.gpa.free(l.starts);
-            self.gpa.free(l.sparse);
+            self.gpa.free(l.stamp);
         }
         self.gpa.free(self.stack);
     }
@@ -96,17 +108,16 @@ pub const VmScratch = struct {
         errdefer for (fresh[0..done]) |l| {
             self.gpa.free(l.dense);
             self.gpa.free(l.starts);
-            self.gpa.free(l.sparse);
+            self.gpa.free(l.stamp);
         };
         for (&fresh) |*l| {
             const dense = try self.gpa.alloc(u32, n);
             errdefer self.gpa.free(dense);
             const starts = try self.gpa.alloc(usize, n);
             errdefer self.gpa.free(starts);
-            const sparse = try self.gpa.alloc(u32, n);
-            // Defined contents: `contains` reads any entry.
-            @memset(sparse, 0);
-            l.* = .{ .dense = dense, .starts = starts, .sparse = sparse };
+            const stamp = try self.gpa.alloc(u32, n);
+            @memset(stamp, 0);
+            l.* = .{ .dense = dense, .starts = starts, .stamp = stamp };
             done += 1;
         }
         const stack = try self.gpa.alloc(u32, n);
@@ -135,7 +146,7 @@ pub fn exec(prog: *const Program, comptime Unit: type, input: []const Unit, mode
     // The fast paths never touch `scratch` (prefilter.zig's invariant).
     const found = if (use_pf) switch (pf.kind) {
         .literal => |l| literalSearch(Unit, input, if (Unit == u8) l.utf8 else l.utf16, index, sticky),
-        .class_run => |c| classRun(Unit, input, c, index, sticky),
+        .class_run => |*c| classRun(Unit, input, c, index, sticky),
         .first, .none => null,
     } else null;
     const result = found orelse blk: {
@@ -163,7 +174,7 @@ fn literalSearch(comptime Unit: type, input: []const Unit, needle: []const Unit,
 /// The class-run fast path: `C+` from the first member at `index` or after
 /// (only at `index` when sticky), `C*` at `index` itself, then the longest
 /// run.
-fn classRun(comptime Unit: type, input: []const Unit, c: prefilter.ClassRun, index: usize, sticky: bool) ?[2]usize {
+fn classRun(comptime Unit: type, input: []const Unit, c: *const prefilter.ClassRun, index: usize, sticky: bool) ?[2]usize {
     var start = index;
     if (c.min == 1) {
         if (sticky) {
@@ -228,7 +239,7 @@ fn Vm(comptime Unit: type) type {
         fn search(self: Self, index: usize, sticky: bool, first: ?*const prefilter.First, scratch: *VmScratch) ?[2]usize {
             var clist = &scratch.lists[0];
             var nlist = &scratch.lists[1];
-            clist.len = 0;
+            clist.clear();
             var found: ?[2]usize = null;
             var pos = index;
             while (true) {
@@ -240,7 +251,7 @@ fn Vm(comptime Unit: type) type {
                 if (found == null and (!sticky or pos == index)) self.addThread(clist, scratch.stack, 0, pos, pos);
                 if (clist.len == 0 and (found != null or sticky)) break;
                 const d = self.decodeAt(pos);
-                nlist.len = 0;
+                nlist.clear();
                 if (clist.len != 0) {
                     const next = if (d) |c| c.pos else pos;
                     for (clist.dense[0..clist.len], clist.starts[0..clist.len]) |pc, start| {
@@ -287,14 +298,14 @@ fn Vm(comptime Unit: type) type {
         fn exists(self: Self, pos0: usize, scratch: *VmScratch, budget: *Budget) error{StepLimitExceeded}!bool {
             var clist = &scratch.lists[0];
             var nlist = &scratch.lists[1];
-            clist.len = 0;
+            clist.clear();
             self.addThread(clist, scratch.stack, 0, pos0, pos0);
             var pos = pos0;
             while (clist.len != 0) {
                 try budget.charge(clist.len);
                 const d = self.decodeAt(pos);
                 const next = if (d) |c| c.pos else pos;
-                nlist.len = 0;
+                nlist.clear();
                 for (clist.dense[0..clist.len]) |pc| {
                     switch (self.prog.insts[pc]) {
                         .char => |c| if (d) |x| {
@@ -316,7 +327,23 @@ fn Vm(comptime Unit: type) type {
 
         /// The epsilon closure of `pc0` at `pos`, appended to `list` in
         /// priority order (depth first, a split's `x` before its `y`).
-        fn addThread(self: Self, list: *List, stack: []u32, pc0: u32, start: usize, pos: usize) void {
+        inline fn addThread(self: Self, list: *List, stack: []u32, pc0: u32, start: usize, pos: usize) void {
+            // The precomputed closure when it has no assert: the same pcs
+            // in the same order as the walk below (a subtree the walk would
+            // skip as visited only holds pcs already in the list).
+            if (pc0 < self.prog.closures.len) {
+                const cl = self.prog.closures[pc0];
+                if (!cl.isDynamic()) {
+                    for (self.prog.follow[cl.start..][0..cl.len]) |pc| {
+                        if (!list.contains(pc)) list.insert(pc, start);
+                    }
+                    return;
+                }
+            }
+            self.addClosure(list, stack, pc0, start, pos);
+        }
+
+        fn addClosure(self: Self, list: *List, stack: []u32, pc0: u32, start: usize, pos: usize) void {
             var sp: usize = 1;
             stack[0] = pc0;
             while (sp != 0) {

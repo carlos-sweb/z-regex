@@ -121,8 +121,17 @@ pub fn compile(gpa: Allocator, root: *const hir.Node) Error!Program {
 
 pub fn compileWith(gpa: Allocator, root: *const hir.Node, options: Options) Error!Program {
     if (check(root) != null) return error.Ineligible;
+    return compileAccepted(gpa, root, options);
+}
+
+/// `compileWith` for a `root` the caller has already passed through
+/// `check` (the dispatcher does, to decide the route): the check isn't run
+/// twice.
+pub fn compileAccepted(gpa: Allocator, root: *const hir.Node, options: Options) Allocator.Error!Program {
+    std.debug.assert(check(root) == null);
     var b: Builder = .{ .gpa = gpa };
     errdefer b.deinit();
+    try b.insts.ensureTotalCapacity(gpa, size(root) + 1);
     try b.emit(root, .{});
     try b.insts.append(gpa, .match);
     const insts = try b.insts.toOwnedSlice(gpa);
@@ -132,8 +141,67 @@ pub fn compileWith(gpa: Allocator, root: *const hir.Node, options: Options) Erro
     };
     var prog: Program = .{ .insts = insts, .sets = sets };
     errdefer prog.deinit(gpa);
+    try buildClosures(gpa, &prog);
     if (options.prefilters) prog.prefilter = try prefilter.analyze(gpa, root, &prog);
     return prog;
+}
+
+/// Total entries of `Program.follow` before the remaining pcs get dynamic
+/// closures (a long alternation's closures can overlap: quadratic).
+const max_follow: usize = 1 << 16;
+
+/// Precomputes each pc's epsilon closure (`program.Closure`), so the VM's
+/// `addThread` copies a list instead of walking splits and jumps. A pc
+/// whose closure reaches an `assert` stays dynamic: the assert's outcome
+/// depends on the position.
+fn buildClosures(gpa: Allocator, prog: *Program) Allocator.Error!void {
+    const n = prog.insts.len;
+    const closures = try gpa.alloc(program.Closure, n);
+    errdefer gpa.free(closures);
+    var follow: std.ArrayListUnmanaged(u32) = .empty;
+    errdefer follow.deinit(gpa);
+    // Visited stamps (the pc being closed + 1) and the DFS stack (at most
+    // two entries per visited pc), in one allocation.
+    const work = try gpa.alloc(u32, 3 * n + 1);
+    defer gpa.free(work);
+    const stamp = work[0..n];
+    @memset(stamp, 0);
+    const stack = work[n..];
+    for (closures, 0..) |*cl, pc0| {
+        const mark: u32 = @intCast(pc0 + 1);
+        const start = follow.items.len;
+        var sp: usize = 1;
+        stack[0] = @intCast(pc0);
+        var dynamic = false;
+        while (sp != 0 and !dynamic) {
+            sp -= 1;
+            const pc = stack[sp];
+            if (stamp[pc] == mark) continue;
+            stamp[pc] = mark;
+            switch (prog.insts[pc]) {
+                .jmp => |t| {
+                    stack[sp] = t;
+                    sp += 1;
+                },
+                // `y` first on the stack, so `x` is closed first.
+                .split => |s| {
+                    stack[sp] = s.y;
+                    stack[sp + 1] = s.x;
+                    sp += 2;
+                },
+                .assert => dynamic = true,
+                .char, .set, .match => try follow.append(gpa, @intCast(pc)),
+            }
+        }
+        if (dynamic or follow.items.len > max_follow) {
+            follow.shrinkRetainingCapacity(start);
+            cl.* = .dynamic;
+        } else {
+            cl.* = .{ .start = @intCast(start), .len = @intCast(follow.items.len - start) };
+        }
+    }
+    prog.follow = try follow.toOwnedSlice(gpa);
+    prog.closures = closures;
 }
 
 const Builder = struct {
@@ -157,8 +225,10 @@ const Builder = struct {
         return at;
     }
 
-    /// Adds a set the program owns (a copy of `set`).
+    /// Adds a set the program owns (a copy of `set`), or reuses an equal
+    /// one (an unrolled `\d{3}` is one set, not three).
     fn addSet(self: *Builder, set: CharSet) Allocator.Error!u32 {
+        for (self.sets.items, 0..) |s, i| if (s.set.eql(set)) return @intCast(i);
         try self.sets.ensureUnusedCapacity(self.gpa, 1);
         const s = try Set.init(self.gpa, set);
         self.sets.appendAssumeCapacity(s);
