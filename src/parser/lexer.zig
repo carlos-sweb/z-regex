@@ -4,6 +4,7 @@
 //! for consumption by the parser.
 
 const std = @import("std");
+const properties = @import("../unicode/properties.zig");
 const Allocator = std.mem.Allocator;
 
 /// Token types in regex syntax
@@ -845,31 +846,108 @@ pub const Lexer = struct {
 
     /// Parse a group name for `(?<name>` / `\k<name>`. Called with `self.pos`
     /// positioned right after the opening `<`. On success, consumes through
-    /// the closing `>` and returns the name's byte range in the pattern
-    /// (practical ASCII identifier subset: letter/`_`/`$` then
-    /// letter/digit/`_`/`$`*, not the full Unicode identifier grammar).
+    /// the closing `>` and returns the name's raw byte range in the pattern
+    /// (escapes not decoded; see `decodeGroupName`). The name is a
+    /// RegExpIdentifierName (F1c): an ID_Start code point, `$` or `_`, then
+    /// ID_Continue, `$`, ZWNJ or ZWJ; any of them may be written as a
+    /// `\uXXXX`, `\u{...}` or `\uLead\uTrail` escape, with or without `u`.
     fn parseGroupName(self: *Self) !struct { start: usize, end: usize } {
         const name_start = self.pos;
-        if (self.pos >= self.pattern.len) return error.InvalidGroupName;
-        const first = self.pattern[self.pos];
-        if (!(std.ascii.isAlphabetic(first) or first == '_' or first == '$')) {
-            return error.InvalidGroupName;
+        var first = true;
+        while (true) {
+            if (self.pos >= self.pattern.len) return error.InvalidGroupName;
+            if (self.pattern[self.pos] == '>') break;
+            const cp = try nextNameCodePoint(self.pattern, &self.pos);
+            if (!(if (first) isIdentifierStart(cp) else isIdentifierPart(cp))) return error.InvalidGroupName;
+            first = false;
         }
-        self.pos += 1;
-        while (self.pos < self.pattern.len) {
-            const c = self.pattern[self.pos];
-            if (std.ascii.isAlphanumeric(c) or c == '_' or c == '$') {
-                self.pos += 1;
-            } else {
-                break;
-            }
-        }
+        if (first) return error.InvalidGroupName; // empty name
         const name_end = self.pos;
-        if (self.pos >= self.pattern.len or self.pattern[self.pos] != '>') {
-            return error.InvalidGroupName;
-        }
         self.pos += 1; // consume '>'
         return .{ .start = name_start, .end = name_end };
+    }
+
+    fn isIdentifierStart(cp: u21) bool {
+        return cp == '$' or cp == '_' or properties.isInCategory(cp, .ID_Start);
+    }
+
+    fn isIdentifierPart(cp: u21) bool {
+        return cp == '$' or cp == 0x200C or cp == 0x200D or properties.isInCategory(cp, .ID_Continue);
+    }
+
+    /// Decode one code point of a group name at `pos.*`, advancing past it:
+    /// a `\u` escape (a `\uLead\uTrail` pair is one code point), a literal
+    /// UTF-8/WTF-8 sequence, or a WTF-8 lead surrogate followed by a trail
+    /// (one code point, as `UnicodeLeadSurrogate UnicodeTrailSurrogate`).
+    fn nextNameCodePoint(pattern: []const u8, pos: *usize) error{InvalidGroupName}!u21 {
+        const p = pos.*;
+        if (pattern[p] == '\\') {
+            if (p + 1 >= pattern.len or pattern[p + 1] != 'u') return error.InvalidGroupName;
+            var q = p + 2;
+            if (q < pattern.len and pattern[q] == '{') {
+                q += 1;
+                var value: u32 = 0;
+                const digits_start = q;
+                while (q < pattern.len and isHexDigit(pattern[q])) : (q += 1) {
+                    value = value * 16 + hexValue(pattern[q]);
+                    if (value > 0x10FFFF) return error.InvalidGroupName;
+                }
+                if (q == digits_start or q >= pattern.len or pattern[q] != '}') return error.InvalidGroupName;
+                pos.* = q + 1;
+                return @intCast(value);
+            }
+            const lead = hex4At(pattern, q) orelse return error.InvalidGroupName;
+            q += 4;
+            if (lead >= 0xD800 and lead <= 0xDBFF and q + 1 < pattern.len and pattern[q] == '\\' and pattern[q + 1] == 'u') {
+                if (hex4At(pattern, q + 2)) |trail| {
+                    if (trail >= 0xDC00 and trail <= 0xDFFF) {
+                        pos.* = q + 6;
+                        return @intCast(0x10000 + ((lead - 0xD800) << 10) + (trail - 0xDC00));
+                    }
+                }
+            }
+            pos.* = q;
+            return @intCast(lead);
+        }
+        const len = std.unicode.utf8ByteSequenceLength(pattern[p]) catch return error.InvalidGroupName;
+        if (p + len > pattern.len) return error.InvalidGroupName;
+        const cp = std.unicode.wtf8Decode(pattern[p..][0..len]) catch return error.InvalidGroupName;
+        pos.* = p + len;
+        if (cp >= 0xD800 and cp <= 0xDBFF and pos.* + 3 <= pattern.len) {
+            if (std.unicode.wtf8Decode(pattern[pos.*..][0..3])) |trail| {
+                if (trail >= 0xDC00 and trail <= 0xDFFF) {
+                    pos.* += 3;
+                    return 0x10000 + ((cp - 0xD800) << 10) + (trail - 0xDC00);
+                }
+            } else |_| {}
+        }
+        return cp;
+    }
+
+    fn hex4At(pattern: []const u8, pos: usize) ?u32 {
+        if (pos + 4 > pattern.len) return null;
+        var value: u32 = 0;
+        for (pattern[pos..][0..4]) |h| {
+            if (!isHexDigit(h)) return null;
+            value = value * 16 + hexValue(h);
+        }
+        return value;
+    }
+
+    /// The group name in `raw` (a range `parseGroupName` accepted) with its
+    /// escapes decoded, as UTF-8 owned by the caller: `\u{03C0}` and `π`
+    /// are the same name.
+    pub fn decodeGroupName(allocator: std.mem.Allocator, raw: []const u8) ![]u8 {
+        var out: std.ArrayListUnmanaged(u8) = .empty;
+        errdefer out.deinit(allocator);
+        var pos: usize = 0;
+        while (pos < raw.len) {
+            const cp = nextNameCodePoint(raw, &pos) catch unreachable; // validated
+            var buf: [4]u8 = undefined;
+            const n = std.unicode.wtf8Encode(cp, &buf) catch unreachable;
+            try out.appendSlice(allocator, buf[0..n]);
+        }
+        return out.toOwnedSlice(allocator);
     }
 
     /// Parse `\p{Name}` / `\P{Name}` (Unicode property escape). Called with

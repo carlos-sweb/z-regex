@@ -212,3 +212,86 @@ test "a backreference to a group re-entered but not closed yet matches empty (wa
     try testing.expectEqual(@as(usize, 4), m.end);
     try testing.expectEqualStrings("ab", m.getCapture(1, "abab").?);
 }
+
+// --- Group names (F1c) ---
+
+fn namedIndex(re: zregex.Regex, name: []const u8) ?u16 {
+    for (re.compiled.named_groups) |g| {
+        if (std.mem.eql(u8, g.name, name)) return g.index;
+    }
+    return null;
+}
+
+test "group names are RegExpIdentifierNames: Unicode, astral, escaped" {
+    const gpa = testing.allocator;
+    const cases = [_]struct { pattern: []const u8, name: []const u8, opts: zregex.CompileOptions }{
+        .{ .pattern = "(?<\xCF\x80>a)", .name = "\xCF\x80", .opts = .{} }, // π
+        .{ .pattern = "(?<\\u{03C0}>a)", .name = "\xCF\x80", .opts = .{} },
+        .{ .pattern = "(?<\\u03C0>a)", .name = "\xCF\x80", .opts = .{ .unicode = true } },
+        .{ .pattern = "(?<\xF0\x9D\x91\x93\xF0\x9D\x91\x9C\xF0\x9D\x91\xA5>a)", .name = "\xF0\x9D\x91\x93\xF0\x9D\x91\x9C\xF0\x9D\x91\xA5", .opts = .{} }, // 𝑓𝑜𝑥
+        .{ .pattern = "(?<\\ud835\\udc53>a)", .name = "\xF0\x9D\x91\x93", .opts = .{} }, // escaped pair, no u
+        .{ .pattern = "(?<$\xF0\x90\x92\xA4>a)", .name = "$\xF0\x90\x92\xA4", .opts = .{ .unicode = true } }, // $𐒤
+        .{ .pattern = "(?<_\\u200C>a)", .name = "_\xE2\x80\x8C", .opts = .{} }, // ZWNJ
+        .{ .pattern = "(?<_\\u200D>a)", .name = "_\xE2\x80\x8D", .opts = .{} }, // ZWJ
+        .{ .pattern = "(?<\xE0\xB2\xA0_\xE0\xB2\xA0>a)", .name = "\xE0\xB2\xA0_\xE0\xB2\xA0", .opts = .{} }, // ಠ_ಠ
+        .{ .pattern = "(?<a\xF0\x9D\x9F\x9A>a)", .name = "a\xF0\x9D\x9F\x9A", .opts = .{} }, // 𝟚 continues
+    };
+    for (cases) |c| {
+        var re = try zregex.Regex.compileWithOptions(gpa, c.pattern, c.opts);
+        defer re.deinit();
+        try testing.expectEqual(@as(?u16, 1), namedIndex(re, c.name));
+    }
+}
+
+test "invalid group names are SyntaxErrors" {
+    const gpa = testing.allocator;
+    for ([_][]const u8{
+        "(?<\xF0\x9F\xA6\x8A>a)", // 🦊 isn't ID_Start
+        "(?<a\xF0\x9F\x90\x95>a)", // 🐕 isn't ID_Continue
+        "(?<\xF0\x9D\x9F\x9A>a)", // 𝟚 can't start
+        "(?<1a>a)",
+        "(?<>a)",
+        "(?<a-b>a)",
+        "(?<\\u{110000}>a)",
+        "(?<\\x41>a)",
+    }) |p| {
+        if (zregex.Regex.compile(gpa, p)) |re| {
+            re.deinit();
+            std.debug.print("\n/{s}/ compiled\n", .{p});
+            return error.TestExpectedError;
+        } else |_| {}
+    }
+}
+
+test "\\k<name> resolves after the parse: forward and self references" {
+    const gpa = testing.allocator;
+    const Case = struct { pattern: []const u8, input: []const u8, match: ?[]const u8 };
+    for ([_]Case{
+        .{ .pattern = "\\k<a>(?<a>b)\\w\\k<a>", .input = "bab", .match = "bab" },
+        .{ .pattern = "(?<a>\\k<a>\\w)..", .input = "bab", .match = "bab" },
+        .{ .pattern = "(?<b>b)\\k<a>(?<a>a)\\k<b>", .input = "bab", .match = "bab" },
+        .{ .pattern = "(?<b>.).\\k<b>", .input = "baa", .match = null },
+        .{ .pattern = "(?<\\u{03C0}>a)\\k<\xCF\x80>", .input = "aa", .match = "aa" },
+    }) |c| {
+        var re = try zregex.Regex.compile(gpa, c.pattern);
+        defer re.deinit();
+        const m = try re.find(c.input);
+        defer if (m) |x| x.deinit();
+        if (c.match) |want| {
+            try testing.expectEqualStrings(want, m.?.group(c.input));
+        } else try testing.expect(m == null);
+    }
+    try testing.expectError(error.UnknownGroupName, zregex.Regex.compile(gpa, "(?<a>x)\\k<b>"));
+    try testing.expectError(error.UnknownGroupName, zregex.Regex.compile(gpa, "\\k<b>(?<a>x)"));
+}
+
+test "group names: no leak on any allocation failure" {
+    for ([_][]const u8{ "\\k<a>(?<a>b)(?<\\u{03C0}>c)\\k<\xCF\x80>", "(?<a>x)|(?<a>y)\\k<a>", "(?<a>(?<b>x)\\k<b>)" }) |p| {
+        try testing.checkAllAllocationFailures(testing.allocator, struct {
+            fn run(a: std.mem.Allocator, pattern: []const u8) !void {
+                var re = try zregex.Regex.compile(a, pattern);
+                re.deinit();
+            }
+        }.run, .{p});
+    }
+}

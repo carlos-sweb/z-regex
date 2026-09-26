@@ -109,6 +109,8 @@ pub const ParseError = error{
 /// no stack per level.
 pub const MAX_NESTING_DEPTH: u32 = 256;
 
+pub const PendingNamedRef = struct { node: *Node, name: []const u8 };
+
 pub const GroupNameEntry = struct {
     name: []const u8,
     index: u16,
@@ -161,10 +163,14 @@ pub const Parser = struct {
     nesting_depth: u32 = 0,
     /// Nesting limit; a field so tests can lower it.
     max_nesting_depth: u32 = MAX_NESTING_DEPTH,
-    /// Names are slices into the original pattern (borrowed, valid only for
-    /// the lifetime of the pattern passed to the lexer); callers that need
-    /// them to outlive the parser must copy them (see `codegen/compiler.zig`).
+    /// Names are decoded (escapes resolved, UTF-8) and owned by the parser
+    /// (freed in `deinit`); callers that need them to outlive the parser
+    /// copy them (see `codegen/compiler.zig`). In source order.
     group_names: std.ArrayListUnmanaged(GroupNameEntry) = .empty,
+    /// `\k<name>` references waiting for `finish` (F1c): a reference may come
+    /// before its group, or inside it. `node` is borrowed (owned by the AST);
+    /// `name` is decoded and owned here.
+    pending_named_refs: std.ArrayListUnmanaged(PendingNamedRef) = .empty,
     /// Live stack of the alternation branches currently being parsed --
     /// pushed/popped by `parseAlternation`, snapshotted into a
     /// `GroupNameEntry.branch_path` whenever a named group is created. See
@@ -204,22 +210,40 @@ pub const Parser = struct {
     /// Free internal bookkeeping state (not the AST, which has its own
     /// `deinit`, and not the pattern-borrowed name strings).
     pub fn deinit(self: *Self) void {
-        for (self.group_names.items) |entry| self.allocator.free(entry.branch_path);
+        for (self.group_names.items) |entry| {
+            self.allocator.free(entry.branch_path);
+            self.allocator.free(entry.name);
+        }
         self.group_names.deinit(self.allocator);
+        for (self.pending_named_refs.items) |ref| self.allocator.free(ref.name);
+        self.pending_named_refs.deinit(self.allocator);
         self.branch_stack.deinit(self.allocator);
     }
 
     /// Parse a complete regex pattern
     pub fn parse(self: *Self) !*Node {
         const root = try self.parseAlternation();
+        errdefer root.deinit();
 
         // Ensure we consumed all tokens
-        if (self.current_token.type != .eof) {
-            root.deinit();
-            return error.UnexpectedToken;
-        }
+        if (self.current_token.type != .eof) return error.UnexpectedToken;
 
+        try self.finish();
         return root;
+    }
+
+    /// Resolve every `\k<name>` against the complete list of named groups
+    /// (F1c: one recursive pass, references resolved at the end), so a
+    /// reference before its group or inside it works. An unknown name is
+    /// `error.UnknownGroupName`. With duplicate names (mutually exclusive
+    /// branches) the reference takes the first group of that name.
+    fn finish(self: *Self) ParseError!void {
+        for (self.pending_named_refs.items) |ref| {
+            const entry = for (self.group_names.items) |e| {
+                if (std.mem.eql(u8, e.name, ref.name)) break e;
+            } else return error.UnknownGroupName;
+            ref.node.group_index = entry.index;
+        }
     }
 
     /// Advance to the next token
@@ -563,7 +587,10 @@ pub const Parser = struct {
 
             // Named capturing group (?<name>...)
             .named_group_start => {
-                const name = self.lexer.pattern[self.current_token.name_start..self.current_token.name_end];
+                const raw = self.lexer.pattern[self.current_token.name_start..self.current_token.name_end];
+                const name = try Lexer.decodeGroupName(self.allocator, raw);
+                var name_owned = true; // until `group_names` takes it
+                errdefer if (name_owned) self.allocator.free(name);
                 try self.advance(); // consume '(?<name>'
 
                 // A duplicate name is only a SyntaxError if the two groups
@@ -586,13 +613,15 @@ pub const Parser = struct {
 
                 const group_index = try self.nextGroupIndex();
 
+                // Registered before its body, in source order.
+                try self.group_names.append(self.allocator, .{ .name = name, .index = group_index, .branch_path = path_copy });
+                name_owned = false;
+                path_owned = false;
+
                 const inner = try self.parseAlternation();
                 errdefer inner.deinit();
 
                 _ = try self.consume(.rparen);
-
-                try self.group_names.append(self.allocator, .{ .name = name, .index = group_index, .branch_path = path_copy });
-                path_owned = false;
 
                 return Node.createGroup(self.allocator, inner, group_index);
             },
@@ -681,15 +710,16 @@ pub const Parser = struct {
 
             // Named backreference \k<name>
             .named_back_ref => {
-                const name = self.lexer.pattern[self.current_token.name_start..self.current_token.name_end];
+                const raw = self.lexer.pattern[self.current_token.name_start..self.current_token.name_end];
+                const name = try Lexer.decodeGroupName(self.allocator, raw);
+                errdefer self.allocator.free(name);
                 try self.advance();
 
-                for (self.group_names.items) |entry| {
-                    if (std.mem.eql(u8, entry.name, name)) {
-                        return Node.createBackRef(self.allocator, entry.index);
-                    }
-                }
-                return error.UnknownGroupName;
+                // Resolved in `finish`, once every group is known.
+                const node = try Node.createBackRef(self.allocator, 0);
+                errdefer node.deinit();
+                try self.pending_named_refs.append(self.allocator, .{ .node = node, .name = name });
+                return node;
             },
 
             else => {
