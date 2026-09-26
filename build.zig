@@ -52,6 +52,12 @@ pub fn build(b: *std.Build) void {
 
     const run_tests = b.addRunArtifact(tests);
 
+    // Tests for the exported C ABI (src/c_api.zig), which has its own root.
+    const c_api_tests = b.addTest(.{
+        .root_module = c_api_module,
+    });
+    const run_c_api_tests = b.addRunArtifact(c_api_tests);
+
     // Create integration test executable
     const integration_module = b.createModule(.{
         .root_source_file = b.path("tests/integration_tests.zig"),
@@ -69,6 +75,7 @@ pub fn build(b: *std.Build) void {
     // Test step (runs all tests)
     const test_step = b.step("test", "Run all tests");
     test_step.dependOn(&run_tests.step);
+    test_step.dependOn(&run_c_api_tests.step);
     test_step.dependOn(&run_integration_tests.step);
 
     // Individual test steps
@@ -97,6 +104,76 @@ pub fn build(b: *std.Build) void {
 
     const conformance_step = b.step("test-conformance", "Run test262-derived conformance sample");
     conformance_step.dependOn(&run_conformance_tests.step);
+
+    // Parser fuzz stress (tests/fuzz_stress.zig, docs/REGEX_TIERS_PLAN.md
+    // F0d): 20,000 generated patterns, ~16 s in Debug. Kept out of the
+    // default `test` step deliberately (run by hand or in weekly CI); the
+    // corpus part of the fuzzer stays in `test`.
+    const fuzz_stress_module = b.createModule(.{
+        .root_source_file = b.path("tests/fuzz_stress.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    fuzz_stress_module.addImport("zregex", lib_module);
+
+    const fuzz_stress_tests = b.addTest(.{
+        .root_module = fuzz_stress_module,
+    });
+    const run_fuzz_stress_tests = b.addRunArtifact(fuzz_stress_tests);
+
+    const fuzz_stress_step = b.step("test-fuzz-stress", "Parser fuzz stress: 20,000 generated patterns (manual or weekly CI)");
+    fuzz_stress_step.dependOn(&run_fuzz_stress_tests.step);
+
+    // test262 gate (scripts/test262, docs/REGEX_TIERS_PLAN.md F0b). Opt-in: it
+    // needs Node, `npm ci --prefix scripts/test262` and the pinned test262
+    // checkout from scripts/test262/fetch.sh. Always runs against a
+    // ReleaseSafe build so engine bugs surface as crashes, not silent UB.
+    const test262_lib = b.addLibrary(.{
+        .name = "zregex-test262",
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/c_api.zig"),
+            .target = target,
+            .optimize = .ReleaseSafe,
+        }),
+        .linkage = .dynamic,
+    });
+    const run_test262 = b.addSystemCommand(&.{ "node", "scripts/test262/run.mjs", "--check-baseline", "scripts/test262/baseline.json", "--lib" });
+    run_test262.addArtifactArg(test262_lib);
+    run_test262.has_side_effects = true;
+    const test262_step = b.step("test262", "Run test262 against the committed baseline (needs Node + scripts/test262/fetch.sh)");
+    test262_step.dependOn(&run_test262.step);
+
+    // Differential test against V8 (scripts/test262/differential.mjs,
+    // docs/REGEX_TIERS_PLAN.md F1c): generated patterns with captures and
+    // backreferences, compared with Node's own RegExp. A manual tool for
+    // suspected capture regressions, not a gate: known deviations show up
+    // too, so compare against a reference run.
+    const run_differential = b.addSystemCommand(&.{ "node", "scripts/test262/differential.mjs", "--lib" });
+    run_differential.addArtifactArg(test262_lib);
+    run_differential.has_side_effects = true;
+    const differential_step = b.step("differential-v8", "Compare zregex with V8 on generated patterns (needs Node + koffi)");
+    differential_step.dependOn(&run_differential.step);
+
+    // Performance baseline (bench/bench.zig, docs/REGEX_TIERS_PLAN.md F0d).
+    // Always ReleaseFast, whatever -Doptimize says, so numbers are comparable.
+    const bench_zregex = b.createModule(.{
+        .root_source_file = b.path("src/main.zig"),
+        .target = target,
+        .optimize = .ReleaseFast,
+    });
+    const bench_module = b.createModule(.{
+        .root_source_file = b.path("bench/bench.zig"),
+        .target = target,
+        .optimize = .ReleaseFast,
+    });
+    bench_module.addImport("zregex", bench_zregex);
+    const bench_exe = b.addExecutable(.{ .name = "bench", .root_module = bench_module });
+    const run_bench = b.addRunArtifact(bench_exe);
+    run_bench.setCwd(b.path("."));
+    run_bench.addArg("zig-out/bench/results.json");
+    run_bench.has_side_effects = true;
+    const bench_step = b.step("bench", "Run the performance baseline (ReleaseFast)");
+    bench_step.dependOn(&run_bench.step);
 
     // =============================================================================
     // Library-specific build steps

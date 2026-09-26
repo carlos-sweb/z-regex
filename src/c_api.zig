@@ -8,6 +8,7 @@ const regex = @import("regex.zig");
 const Regex = regex.Regex;
 const MatchResult = regex.MatchResult;
 const Allocator = std.mem.Allocator;
+const nextSearchStart = @import("executor/recursive_matcher.zig").RecursiveMatcher.nextSearchStart;
 
 // =============================================================================
 // Global State
@@ -19,6 +20,12 @@ const allocator = gpa.allocator();
 
 /// Thread-local error state
 threadlocal var last_error: ZRegexError = .ZREGEXP_OK;
+
+/// `@errorName` of the Zig error behind `last_error` ("" when none). The
+/// coarse `ZRegexError` codes lump most syntax errors into UNKNOWN; this
+/// keeps the precise reason for callers that need it (the test262
+/// harness tells a zregex SyntaxError apart from a resource limit).
+threadlocal var last_error_name: [*:0]const u8 = "";
 
 // =============================================================================
 // Opaque Type Definitions
@@ -79,8 +86,14 @@ fn setError(err: ZRegexError) void {
     last_error = err;
 }
 
+fn setZigError(err: anyerror) void {
+    last_error = zigErrorToC(err);
+    last_error_name = @errorName(err);
+}
+
 fn clearError() void {
     last_error = .ZREGEXP_OK;
+    last_error_name = "";
 }
 
 fn zigErrorToC(err: anytype) ZRegexError {
@@ -206,7 +219,7 @@ export fn zregex_named_group_name(re: *ZRegex, index: usize) ?[*:0]u8 {
     return @ptrCast(@constCast(buf.ptr));
 }
 
-export fn zregex_named_group_index(re: *ZRegex, index: usize) u8 {
+export fn zregex_named_group_index(re: *ZRegex, index: usize) usize {
     if (index >= re.compiled.named_groups.len) return 0;
     return re.compiled.named_groups[index].index;
 }
@@ -356,7 +369,7 @@ export fn zregex_match_end(match: *ZMatch) usize {
     return match.result.end;
 }
 
-export fn zregex_match_group(match: *ZMatch, group_index: u8) ?[*:0]u8 {
+export fn zregex_match_group(match: *ZMatch, group_index: usize) ?[*:0]u8 {
     // Group 0 is the full match; it isn't stored in the internal captures
     // array (which is 1-indexed by capture group number), so it needs its
     // own path rather than going through `MatchResult.getCapture`.
@@ -368,7 +381,9 @@ export fn zregex_match_group(match: *ZMatch, group_index: u8) ?[*:0]u8 {
         return @ptrCast(@constCast(buf.ptr));
     }
 
-    if (group_index >= 10) {
+    // Any group the pattern has (D9: no fixed cap); past the last one it's
+    // an invalid group, not merely an unmatched one.
+    if (group_index >= match.result.captures.len) {
         setError(.ZREGEXP_ERROR_INVALID_GROUP);
         return null;
     }
@@ -388,7 +403,7 @@ export fn zregex_match_group(match: *ZMatch, group_index: u8) ?[*:0]u8 {
 /// `ZREGEXP_NO_CAPTURE` in zregex.h.
 const NO_CAPTURE: usize = std.math.maxInt(usize);
 
-export fn zregex_match_capture_start(match: *ZMatch, group_index: u8) usize {
+export fn zregex_match_capture_start(match: *ZMatch, group_index: usize) usize {
     // See the comment in zregex_match_group: group 0 (the full match)
     // isn't in the internal captures array and needs its own path.
     if (group_index == 0) return match.result.start;
@@ -396,7 +411,7 @@ export fn zregex_match_capture_start(match: *ZMatch, group_index: u8) usize {
     return idx.start;
 }
 
-export fn zregex_match_capture_end(match: *ZMatch, group_index: u8) usize {
+export fn zregex_match_capture_end(match: *ZMatch, group_index: usize) usize {
     if (group_index == 0) return match.result.end;
     const idx = match.result.getCaptureIndices(group_index) orelse return NO_CAPTURE;
     return idx.end;
@@ -532,6 +547,86 @@ export fn zregex_clear_error() void {
 }
 
 // =============================================================================
+// Length-taking entry points
+// =============================================================================
+//
+// The NUL-terminated functions above can't represent a pattern or subject
+// that contains U+0000, which test262 exercises. These take an explicit
+// byte length and otherwise behave like their NUL-terminated counterparts;
+// they add no engine behavior. Offsets are byte offsets into the subject.
+
+/// Like `zregex_compile`, for a pattern of `len` bytes that may contain NUL.
+export fn zregex_compile_n(pattern: [*]const u8, len: usize, options: ?*const ZRegexOptions) ?*ZRegex {
+    clearError();
+    const pattern_slice = pattern[0..len];
+    const compile_opts: @import("codegen/compiler.zig").CompileOptions = if (options) |opts| .{
+        .case_insensitive = opts.case_insensitive,
+        .multiline = opts.multiline,
+        .dot_all = opts.dot_all,
+        .sticky = opts.sticky,
+        .unicode = opts.unicode,
+        .v = opts.v,
+    } else .{};
+    const re = Regex.compileWithOptions(allocator, pattern_slice, compile_opts) catch |err| {
+        setZigError(err);
+        return null;
+    };
+    const heap_re = allocator.create(Regex) catch {
+        re.deinit();
+        setZigError(error.OutOfMemory);
+        return null;
+    };
+    heap_re.* = re;
+    return heap_re;
+}
+
+/// Match anchored exactly at `start` (no scanning ahead), like
+/// `zregex_find_at`, for a subject of `len` bytes that may contain NUL.
+/// Returns null on no match; check `zregex_last_error` to tell a failure
+/// (e.g. a step limit) from a plain non-match.
+export fn zregex_match_at_n(re: *ZRegex, input: [*]const u8, len: usize, start: usize) ?*ZMatch {
+    clearError();
+    const input_slice = input[0..len];
+    const result = re.findAt(input_slice, start) catch |err| {
+        setZigError(err);
+        return null;
+    };
+    if (result) |match| return wrapMatch(input_slice, match);
+    return null;
+}
+
+/// First match starting at or after byte `start`, trying each start
+/// position in turn exactly like `Matcher.find` does from 0 (including its
+/// byte-at-a-time stepping). Returns null on no match; see
+/// `zregex_match_at_n` for telling failures apart.
+export fn zregex_search_n(re: *ZRegex, input: [*]const u8, len: usize, start: usize) ?*ZMatch {
+    clearError();
+    const input_slice = input[0..len];
+    var pos = start;
+    // Step by whole UTF-8/WTF-8 sequences, like `Regex.find`: a search never
+    // starts in the middle of a character.
+    while (pos <= len) : (pos = nextSearchStart(input_slice, pos)) {
+        const result = re.findAt(input_slice, pos) catch |err| {
+            setZigError(err);
+            return null;
+        };
+        if (result) |match| return wrapMatch(input_slice, match);
+    }
+    return null;
+}
+
+/// Number of capturing groups in the pattern (not counting group 0).
+export fn zregex_group_count(re: *ZRegex) usize {
+    return re.compiled.group_count;
+}
+
+/// `@errorName` of the last failure on this thread, or "" if none. The
+/// string is static; don't free it.
+export fn zregex_last_error_name() [*:0]const u8 {
+    return last_error_name;
+}
+
+// =============================================================================
 // Utility Functions
 // =============================================================================
 
@@ -578,4 +673,62 @@ export fn zregex_is_valid_pattern(pattern: [*:0]const u8) bool {
     defer re.deinit();
 
     return true;
+}
+
+// =============================================================================
+// Tests
+// =============================================================================
+
+test "zregex_compile_n / zregex_search_n handle embedded NUL" {
+    const pattern = "a\x00b";
+    const re = zregex_compile_n(pattern.ptr, pattern.len, null).?;
+    defer zregex_free(re);
+
+    const subject = "xxa\x00bxx";
+    const m = zregex_search_n(re, subject.ptr, subject.len, 0).?;
+    defer zregex_match_free(m);
+    try std.testing.expectEqual(@as(usize, 2), zregex_match_start(m));
+    try std.testing.expectEqual(@as(usize, 5), zregex_match_end(m));
+}
+
+test "zregex_search_n starts scanning at the given offset" {
+    const pattern = "a";
+    const re = zregex_compile_n(pattern.ptr, pattern.len, null).?;
+    defer zregex_free(re);
+
+    const subject = "abca";
+    const m = zregex_search_n(re, subject.ptr, subject.len, 1).?;
+    defer zregex_match_free(m);
+    try std.testing.expectEqual(@as(usize, 3), zregex_match_start(m));
+    try std.testing.expect(zregex_search_n(re, subject.ptr, subject.len, 4) == null);
+}
+
+test "zregex_match_at_n is anchored at the offset" {
+    const pattern = "b";
+    const re = zregex_compile_n(pattern.ptr, pattern.len, null).?;
+    defer zregex_free(re);
+
+    const subject = "abc";
+    try std.testing.expect(zregex_match_at_n(re, subject.ptr, subject.len, 0) == null);
+    const m = zregex_match_at_n(re, subject.ptr, subject.len, 1).?;
+    defer zregex_match_free(m);
+    try std.testing.expectEqual(@as(usize, 2), zregex_match_end(m));
+}
+
+test "zregex_group_count counts capturing groups only" {
+    const pattern = "(a)(?:b)(?<n>c)";
+    const re = zregex_compile_n(pattern.ptr, pattern.len, null).?;
+    defer zregex_free(re);
+    try std.testing.expectEqual(@as(usize, 2), zregex_group_count(re));
+}
+
+test "zregex_last_error_name reports the precise compile error" {
+    const pattern = "(a";
+    try std.testing.expect(zregex_compile_n(pattern.ptr, pattern.len, null) == null);
+    try std.testing.expectEqualStrings("UnexpectedToken", std.mem.span(zregex_last_error_name()));
+
+    const ok = "a";
+    const re = zregex_compile_n(ok.ptr, ok.len, null).?;
+    zregex_free(re);
+    try std.testing.expectEqualStrings("", std.mem.span(zregex_last_error_name()));
 }

@@ -87,7 +87,7 @@ pub const Regex = struct {
 
     /// Test if pattern matches entire input
     pub fn matchFull(self: Self, input: []const u8) RegexError!bool {
-        const m = Matcher.init(self.allocator, self.compiled.bytecode);
+        const m = Matcher.initWithGroups(self.allocator, self.compiled.bytecode, self.compiled.named_groups, self.compiled.group_count);
         return try m.matchFull(input);
     }
 
@@ -99,7 +99,7 @@ pub const Regex = struct {
     /// Find first match in input. If `sticky`, only matches at position 0
     /// (no scanning ahead) — use `findAt` directly to check a later position.
     pub fn find(self: Self, input: []const u8) RegexError!?MatchResult {
-        const m = Matcher.initWithNamedGroups(self.allocator, self.compiled.bytecode, self.compiled.named_groups);
+        const m = Matcher.initWithGroups(self.allocator, self.compiled.bytecode, self.compiled.named_groups, self.compiled.group_count);
         if (self.sticky) return try m.findAt(input, 0);
         return try m.find(input);
     }
@@ -109,14 +109,14 @@ pub const Regex = struct {
     /// iteration from a caller-tracked position, similar to how JS code
     /// tracks `lastIndex` when using a sticky regex.
     pub fn findAt(self: Self, input: []const u8, start_pos: usize) RegexError!?MatchResult {
-        const m = Matcher.initWithNamedGroups(self.allocator, self.compiled.bytecode, self.compiled.named_groups);
+        const m = Matcher.initWithGroups(self.allocator, self.compiled.bytecode, self.compiled.named_groups, self.compiled.group_count);
         return try m.findAt(input, start_pos);
     }
 
     /// Find all matches in input. If `sticky`, stops at the first position
     /// that doesn't match instead of scanning ahead for the next one.
     pub fn findAll(self: Self, input: []const u8) RegexError!std.ArrayListUnmanaged(MatchResult) {
-        const m = Matcher.initWithNamedGroups(self.allocator, self.compiled.bytecode, self.compiled.named_groups);
+        const m = Matcher.initWithGroups(self.allocator, self.compiled.bytecode, self.compiled.named_groups, self.compiled.group_count);
         return try m.findAll(input, self.sticky);
     }
 
@@ -189,7 +189,7 @@ fn expandReplacement(
     match: MatchResult,
     input: []const u8,
     named_groups: []const format_mod.NamedGroup,
-    group_count: u8,
+    group_count: u16,
 ) !void {
     var i: usize = 0;
     while (i < replacement.len) {
@@ -512,9 +512,18 @@ test "Regex: greedy vs lazy comparison" {
 }
 
 test "Regex: possessive quantifiers" {
+    // An opt-in extension since F1b (D8): by default, as in ECMA-262, the
+    // second quantifier has nothing to repeat.
+    for ([_][]const u8{ "a*+", "a++", "a?+" }) |p| {
+        if (Regex.compile(std.testing.allocator, p)) |re| {
+            re.deinit();
+            return error.TestExpectedError;
+        } else |_| {}
+    }
+
     // Possessive star: consumes all without backtracking
     {
-        var re = try Regex.compile(std.testing.allocator, "a*+");
+        var re = try Regex.compileWithOptions(std.testing.allocator, "a*+", .{ .possessive = true });
         defer re.deinit();
         try std.testing.expect(try re.test_(""));
         try std.testing.expect(try re.test_("aaa"));
@@ -528,7 +537,7 @@ test "Regex: possessive quantifiers" {
 
     // Possessive plus: at least one, then all without backtracking
     {
-        var re = try Regex.compile(std.testing.allocator, "a++");
+        var re = try Regex.compileWithOptions(std.testing.allocator, "a++", .{ .possessive = true });
         defer re.deinit();
         try std.testing.expect(!try re.test_(""));
         try std.testing.expect(try re.test_("aaa"));
@@ -542,7 +551,7 @@ test "Regex: possessive quantifiers" {
 
     // Possessive question: 0 or 1 without backtracking
     {
-        var re = try Regex.compile(std.testing.allocator, "a?+");
+        var re = try Regex.compileWithOptions(std.testing.allocator, "a?+", .{ .possessive = true });
         defer re.deinit();
         try std.testing.expect(try re.test_(""));
         try std.testing.expect(try re.test_("a"));
@@ -568,7 +577,7 @@ test "Regex: greedy vs lazy vs possessive comparison" {
     }
 
     {
-        var possessive = try Regex.compile(std.testing.allocator, "a*+");
+        var possessive = try Regex.compileWithOptions(std.testing.allocator, "a*+", .{ .possessive = true });
         defer possessive.deinit();
         const match3 = try possessive.find("aaa");
         defer if (match3) |m| m.deinit();
@@ -1838,10 +1847,20 @@ test "Regex: $<name> replacement finds whichever duplicate-named group actually 
 }
 
 test "Regex: unknown named backreference is rejected" {
+    // With named groups in the pattern (or with `u`), `\k<name>` must name
+    // one of them.
     try std.testing.expectError(
         error.UnknownGroupName,
-        Regex.compile(std.testing.allocator, "\\k<nope>"),
+        Regex.compile(std.testing.allocator, "(?<a>x)\\k<nope>"),
     );
+    try std.testing.expectError(
+        error.UnknownGroupName,
+        Regex.compileWithOptions(std.testing.allocator, "\\k<nope>", .{ .unicode = true }),
+    );
+    // Without any, Annex B reads it as the text "k<nope>" (F1b).
+    var re = try Regex.compile(std.testing.allocator, "\\k<nope>");
+    defer re.deinit();
+    try std.testing.expect(try re.test_("k<nope>"));
 }
 
 test "Regex: character class range with multi-byte endpoints" {
@@ -1884,11 +1903,26 @@ test "Regex: quantifiers on a multi-byte character class" {
 }
 
 test "Regex: character class with more than MAX_CLASS_RANGES multi-byte members is rejected" {
-    // 9 distinct multi-byte single-char members; MAX_CLASS_RANGES is 8.
-    try std.testing.expectError(
-        error.TooManyRanges,
-        Regex.compile(std.testing.allocator, "[\u{1F600}\u{1F601}\u{1F602}\u{1F603}\u{1F604}\u{1F605}\u{1F606}\u{1F607}\u{1F608}]"),
-    );
+    const max = @import("bytecode/opcodes.zig").MAX_CLASS_RANGES;
+    // `n` non-adjacent members (every other code point from U+1F600), so the
+    // codegen can't merge them into fewer ranges.
+    const Build = struct {
+        fn pattern(buf: []u8, n: usize, step: u21) []const u8 {
+            var len: usize = 0;
+            buf[len] = '[';
+            len += 1;
+            for (0..n) |i| len += std.unicode.utf8Encode(0x1F600 + @as(u21, @intCast(i)) * step, buf[len..]) catch unreachable;
+            buf[len] = ']';
+            return buf[0 .. len + 1];
+        }
+    };
+    var buf: [512]u8 = undefined;
+    try std.testing.expectError(error.TooManyRanges, Regex.compile(std.testing.allocator, Build.pattern(&buf, max + 1, 2)));
+    var at_max = try Regex.compile(std.testing.allocator, Build.pattern(&buf, max, 2));
+    at_max.deinit();
+    // Adjacent members merge into one range, so many of them fit.
+    var merged = try Regex.compile(std.testing.allocator, Build.pattern(&buf, max * 3, 1));
+    merged.deinit();
 }
 
 test "Regex: sticky flag only matches at the current position" {
@@ -2026,8 +2060,11 @@ test "Regex: [^] (negated empty class) matches any character" {
     try std.testing.expect(try re.test_("\n"));
     try std.testing.expect(try re.test_("\x00"));
 
-    // Non-inverted empty class remains a compile error.
-    try std.testing.expectError(error.EmptyCharClass, Regex.compile(allocator, "[]"));
+    // `[]` is valid too (D3, F1b) and never matches.
+    var empty = try Regex.compile(allocator, "[]");
+    defer empty.deinit();
+    try std.testing.expect(!try empty.test_("x"));
+    try std.testing.expect(!try empty.test_(""));
 }
 
 test "Regex: \\s and \\S include form feed and vertical tab" {
@@ -3005,11 +3042,12 @@ test "Regex: unicode flag rejects legacy octal escapes (\\0 followed by a digit)
 test "Regex: unicode flag off (default) keeps legacy octal Annex-B leniency" {
     const allocator = std.testing.allocator;
 
-    // \01 falls back to a literal '0' (matching prior behavior) when the
-    // unicode flag isn't set.
+    // \01 is Annex B legacy octal (U+0001) when the unicode flag isn't set
+    // (F1b; before it fell back to a literal '0').
     var re = try Regex.compile(allocator, "\\01");
     defer re.deinit();
-    try std.testing.expect(try re.test_("01"));
+    try std.testing.expect(try re.test_("\x01"));
+    try std.testing.expect(!try re.test_("01"));
 }
 
 test "Regex: v flag class set difference [A--B]" {

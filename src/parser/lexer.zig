@@ -4,6 +4,7 @@
 //! for consumption by the parser.
 
 const std = @import("std");
+const properties = @import("../unicode/properties.zig");
 const Allocator = std.mem.Allocator;
 
 /// Token types in regex syntax
@@ -96,7 +97,7 @@ pub const Token = struct {
     repeat_max: u32 = 0,
 
     /// Backreference group number (for back_ref token)
-    backref_group: u8 = 0,
+    backref_group: u16 = 0,
 
     /// UTF-8 byte sequence (for multibyte_char token, e.g. a \u{...} escape
     /// whose code point doesn't fit in a single byte)
@@ -159,7 +160,7 @@ pub const Token = struct {
     }
 
     /// Create a backreference token
-    pub fn backref_token(group: u8, pos: usize) Token {
+    pub fn backref_token(group: u16, pos: usize) Token {
         return .{
             .type = .back_ref,
             .position = pos,
@@ -169,6 +170,15 @@ pub const Token = struct {
 };
 
 /// Lexer for tokenizing regex patterns
+/// A `{...}` quantifier the lexer accepts with a meaning ECMA-262 doesn't
+/// give it (docs/REGEX_TIERS_PLAN.md §2.3). Recorded, not corrected. D1
+/// (`{,5}` read as `{0,5}`) was one until F1b; it is now literal text
+/// (Annex B) or a SyntaxError (`u`).
+pub const QuantifierDeviation = enum {
+    /// D10: minimum above `MAX_REPEAT_UNROLL`, silently clamped (F5).
+    min_clamped,
+};
+
 pub const Lexer = struct {
     pattern: []const u8,
     pos: usize,
@@ -197,7 +207,81 @@ pub const Lexer = struct {
     /// `.class_minus_minus`/`.class_and_and`.
     v_mode: bool = false,
 
+    /// First quantifier this lexer accepted whose current meaning is known
+    /// to deviate from ECMA-262 (see `QuantifierDeviation`), and where it
+    /// starts. Pure instrumentation for `analysis/classify.zig`: tokenization
+    /// is unaffected. Cleared by `rewindTo` when the parser discards a
+    /// speculatively fetched token, so a `{,5}` that is really class content
+    /// (`[{,5}]`) isn't reported.
+    deviation: ?QuantifierDeviation = null,
+    deviation_pos: usize = 0,
+
+    /// ECMA-262's `[N]` grammar parameter: set by the parser (from
+    /// `scanGroups`) when `unicode_mode` is on or the pattern has any named
+    /// group. Under it `\k` must be a well-formed `\k<GroupName>`
+    /// (SyntaxError otherwise); without it `\k` is an Annex B identity
+    /// escape.
+    named_groups: bool = false,
+
+    /// Opt-in extension (D8, F1b): read `*+`, `++`, `?+` as possessive
+    /// quantifiers. Off by default, as in ECMA-262, where `a*+` is a
+    /// SyntaxError (the `+` has nothing to repeat). Set by `compile()` from
+    /// `CompileOptions.possessive`.
+    possessive: bool = false,
+
+    /// Total number of capturing groups in the whole pattern (from
+    /// `scanGroups`, so it counts groups that appear after a reference).
+    /// Under `unicode_mode` a `\N` with N greater than this is a SyntaxError.
+    group_total: u32 = 0,
+
     const Self = @This();
+
+    pub const GroupScan = struct { count: u32 = 0, has_named: bool = false };
+
+    /// Pre-scan the pattern for its capturing groups, as ECMA-262 does
+    /// before parsing (it needs the total count for `\N` and whether any
+    /// group is named for `\k`). Skips escapes and class contents (nested
+    /// classes under `v_mode`). Purely lexical: a malformed pattern still
+    /// scans, and the parser reports the error.
+    pub fn scanGroups(pattern: []const u8, v_mode: bool) GroupScan {
+        var out: GroupScan = .{};
+        var class_depth: usize = 0;
+        var i: usize = 0;
+        while (i < pattern.len) : (i += 1) {
+            const c = pattern[i];
+            if (c == '\\') {
+                i += 1; // skip the escaped byte
+                continue;
+            }
+            if (class_depth > 0) {
+                if (c == ']') {
+                    class_depth -= 1;
+                } else if (c == '[' and v_mode) {
+                    class_depth += 1;
+                }
+                continue;
+            }
+            switch (c) {
+                '[' => class_depth = 1,
+                '(' => {
+                    if (i + 1 < pattern.len and pattern[i + 1] == '?') {
+                        // `(?<name>` captures; `(?<=`/`(?<!`, `(?:`, `(?=`,
+                        // `(?!` don't.
+                        if (i + 2 < pattern.len and pattern[i + 2] == '<' and
+                            i + 3 < pattern.len and pattern[i + 3] != '=' and pattern[i + 3] != '!')
+                        {
+                            out.count +|= 1;
+                            out.has_named = true;
+                        }
+                    } else {
+                        out.count +|= 1;
+                    }
+                },
+                else => {},
+            }
+        }
+        return out;
+    }
 
     /// Initialize a new lexer
     pub fn init(pattern: []const u8) Self {
@@ -205,6 +289,21 @@ pub const Lexer = struct {
             .pattern = pattern,
             .pos = 0,
         };
+    }
+
+    /// Move back to `pos` to re-tokenize from there (the parser's
+    /// speculative-lookahead rewind), forgetting any deviation recorded at
+    /// or after it -- it belonged to a token that is being discarded.
+    pub fn rewindTo(self: *Self, pos: usize) void {
+        self.pos = pos;
+        if (self.deviation != null and self.deviation_pos >= pos) self.deviation = null;
+    }
+
+    fn noteDeviation(self: *Self, kind: QuantifierDeviation, pos: usize) void {
+        if (self.deviation == null) {
+            self.deviation = kind;
+            self.deviation_pos = pos;
+        }
     }
 
     /// Get the next token
@@ -241,7 +340,7 @@ pub const Lexer = struct {
                     if (next_char == '?') {
                         self.pos += 1;
                         return Token.simple(.lazy_star, start_pos);
-                    } else if (next_char == '+') {
+                    } else if (next_char == '+' and self.possessive) {
                         self.pos += 1;
                         return Token.simple(.possessive_star, start_pos);
                     }
@@ -256,7 +355,7 @@ pub const Lexer = struct {
                     if (next_char == '?') {
                         self.pos += 1;
                         return Token.simple(.lazy_plus, start_pos);
-                    } else if (next_char == '+') {
+                    } else if (next_char == '+' and self.possessive) {
                         self.pos += 1;
                         return Token.simple(.possessive_plus, start_pos);
                     }
@@ -271,7 +370,7 @@ pub const Lexer = struct {
                     if (next_char == '?') {
                         self.pos += 1;
                         return Token.simple(.lazy_question, start_pos);
-                    } else if (next_char == '+') {
+                    } else if (next_char == '+' and self.possessive) {
                         self.pos += 1;
                         return Token.simple(.possessive_question, start_pos);
                     }
@@ -334,9 +433,18 @@ pub const Lexer = struct {
                 self.pos += 1;
                 return Token.simple(.lbracket, start_pos);
             },
+            // A `]` or `}` outside a class, and a `{` that doesn't start a
+            // braced quantifier, are Annex B ExtendedPatternCharacters
+            // (literal text, D2); under `u` they are SyntaxErrors.
             ']' => {
                 self.pos += 1;
-                return Token.simple(.rbracket, start_pos);
+                if (self.unicode_mode) return error.UnmatchedBracket;
+                return Token.char_token(']', start_pos);
+            },
+            '}' => {
+                self.pos += 1;
+                if (self.unicode_mode) return error.InvalidRepeat;
+                return Token.char_token('}', start_pos);
             },
             '-' => {
                 self.pos += 1;
@@ -344,7 +452,11 @@ pub const Lexer = struct {
             },
             '{' => {
                 self.pos += 1;
-                return try self.parseRepeat(start_pos);
+                return self.parseRepeat(start_pos) catch |err| {
+                    if (self.unicode_mode) return err;
+                    self.pos = start_pos + 1;
+                    return Token.char_token('{', start_pos);
+                };
             },
             '\\' => {
                 self.pos += 1;
@@ -482,24 +594,31 @@ pub const Lexer = struct {
             // below), so the parser's `parseCharClass` can splice a
             // property/script/script-extensions node into the class the
             // same way it already splices `\d`/`\w`/`\s` shorthand members.
-            'p' => return self.parseUnicodeProperty(false, start_pos),
-            'P' => return self.parseUnicodeProperty(true, start_pos),
+            'p' => return try self.parseUnicodeProperty(false, start_pos),
+            'P' => return try self.parseUnicodeProperty(true, start_pos),
             'b' => return Token.escaped(0x08, start_pos), // backspace inside a class
             'n' => return Token.escaped('\n', start_pos),
             'r' => return Token.escaped('\r', start_pos),
             't' => return Token.escaped('\t', start_pos),
             'v' => return Token.escaped(0x0B, start_pos),
             'f' => return Token.escaped(0x0C, start_pos),
-            'x' => return self.parseHexEscape(start_pos),
-            'u' => return self.parseUnicodeEscape(start_pos),
-            'c' => return self.parseControlEscape(start_pos),
+            'x' => return try self.parseHexEscape(start_pos),
+            'u' => return try self.parseUnicodeEscape(start_pos),
+            'c' => return try self.parseControlEscape(start_pos, true),
             '0' => {
                 if (self.pos < self.pattern.len and isAsciiDigit(self.pattern[self.pos])) {
                     // Legacy Annex B octal (`\01`), never valid under `u`.
                     if (self.unicode_mode) return error.InvalidEscape;
-                    return Token.escaped('0', start_pos);
+                    return self.legacyOctal('0', start_pos);
                 }
                 return Token.escaped(0, start_pos);
+            },
+            // Annex B: in a class a decimal escape is never a backreference;
+            // `\1`-`\7` are legacy octal, `\8`/`\9` identity escapes. Both
+            // are SyntaxErrors under `u`.
+            '1'...'7' => {
+                if (self.unicode_mode) return error.InvalidEscape;
+                return self.legacyOctal(c, start_pos);
             },
             // \], \\, \-, \^, \B, backref digits, and anything else: no
             // special class meaning, fall back to the literal character --
@@ -539,12 +658,21 @@ pub const Lexer = struct {
         return v * 10 + digit;
     }
 
+    /// Record D1/D10 for a quantifier `parseRepeat` is about to accept.
+    fn noteRepeatDeviation(self: *Self, min: u64, start_pos: usize) void {
+        if (min > MAX_REPEAT_UNROLL) self.noteDeviation(.min_clamped, start_pos);
+    }
+
     /// Parse repeat quantifier {n,m}
     fn parseRepeat(self: *Self, start_pos: usize) !Token {
         const unbounded = std.math.maxInt(u32);
         var min: u64 = 0;
         var max: u64 = 0;
         var has_comma = false;
+
+        // A braced quantifier needs its minimum: `{}`, `{,}` and `{,5}` are
+        // not quantifiers (D1).
+        if (self.pos >= self.pattern.len or !isAsciiDigit(self.pattern[self.pos])) return error.InvalidRepeat;
 
         // Parse min
         while (self.pos < self.pattern.len) {
@@ -560,6 +688,7 @@ pub const Lexer = struct {
                 // {n} form: exactly n. A count past the limit degrades to
                 // "clamped min, unbounded max" (see MAX_REPEAT_UNROLL).
                 self.pos += 1;
+                self.noteRepeatDeviation(min, start_pos);
                 const n: u32 = @intCast(@min(min, MAX_REPEAT_UNROLL));
                 const m: u32 = if (min > MAX_REPEAT_UNROLL) unbounded else n;
                 return Token.repeat_token(n, m, start_pos);
@@ -578,6 +707,7 @@ pub const Lexer = struct {
                 self.pos += 1;
             } else if (c == '}') {
                 self.pos += 1;
+                self.noteRepeatDeviation(min, start_pos);
                 const n: u32 = @intCast(@min(min, MAX_REPEAT_UNROLL));
                 // {n,} (no max digits) is unlimited; a max past the limit is
                 // treated as unlimited too -- correct for any real input.
@@ -611,8 +741,8 @@ pub const Lexer = struct {
             'W' => return Token.simple(.not_word, start_pos),
             's' => return Token.simple(.whitespace, start_pos),
             'S' => return Token.simple(.not_whitespace, start_pos),
-            'p' => return self.parseUnicodeProperty(false, start_pos),
-            'P' => return self.parseUnicodeProperty(true, start_pos),
+            'p' => return try self.parseUnicodeProperty(false, start_pos),
+            'P' => return try self.parseUnicodeProperty(true, start_pos),
             'b' => return Token.simple(.word_boundary, start_pos),
             'B' => return Token.simple(.not_word_boundary, start_pos),
             'n' => return Token.escaped('\n', start_pos),
@@ -620,39 +750,59 @@ pub const Lexer = struct {
             't' => return Token.escaped('\t', start_pos),
             'v' => return Token.escaped(0x0B, start_pos),
             'f' => return Token.escaped(0x0C, start_pos),
-            'x' => return self.parseHexEscape(start_pos),
-            'u' => return self.parseUnicodeEscape(start_pos),
-            'c' => return self.parseControlEscape(start_pos),
-            // \k<name> named backreference. Falls back to a literal 'k' if
-            // not followed by a validly-formed <name> (Annex-B-style
-            // leniency, same as \x/\u/\c when malformed).
+            'x' => return try self.parseHexEscape(start_pos),
+            'u' => return try self.parseUnicodeEscape(start_pos),
+            'c' => return try self.parseControlEscape(start_pos, false),
+            // \k<name> named backreference. With `named_groups` ([N]: `u`
+            // mode, or the pattern has a named group) it must be a
+            // well-formed `\k<GroupName>`; otherwise it falls back to a
+            // literal 'k' (Annex B identity escape).
             'k' => {
+                // Without [N], `\k` is an Annex B identity escape: `\k<a>` is
+                // the text "k<a>", even when the name is well formed.
+                if (!self.named_groups) return Token.escaped('k', start_pos);
                 if (self.pos < self.pattern.len and self.pattern[self.pos] == '<') {
                     const saved_pos = self.pos;
                     self.pos += 1; // consume '<'
                     if (self.parseGroupName()) |name| {
                         return Token.namedBackRef(name.start, name.end, start_pos);
-                    } else |_| {
+                    } else |err| {
+                        if (self.named_groups) return err;
                         self.pos = saved_pos;
                     }
                 }
-                return Token.escaped('k', start_pos);
+                return error.InvalidGroupName;
             },
-            // \0 is NUL, but only when not followed by another digit.
-            // \0<digit> is legacy Annex B octal, not yet implemented; fall back
-            // to a literal '0' (matching prior behavior) rather than guessing --
-            // unless `unicode_mode` is set, where legacy octal is never valid.
+            // \0 is NUL, but only when not followed by another digit;
+            // \0<digit> is Annex B legacy octal, never valid under `u`.
             '0' => {
                 if (self.pos < self.pattern.len and isAsciiDigit(self.pattern[self.pos])) {
                     if (self.unicode_mode) return error.InvalidEscape;
-                    return Token.escaped('0', start_pos);
+                    return self.legacyOctal('0', start_pos);
                 }
                 return Token.escaped(0, start_pos);
             },
-            // Backreferences \1-\9
-            '1', '2', '3', '4', '5', '6', '7', '8', '9' => {
-                const group = @as(u8, c - '0');
-                return Token.backref_token(group, start_pos);
+            // DecimalEscape: all the digits form N. N up to the pattern's
+            // capturing-group count (from `scanGroups`, so groups after the
+            // reference count) is a backreference. Past it, `u` makes it a
+            // SyntaxError; Annex B reads `\8`/`\9` as identity escapes and
+            // anything else as a legacy octal escape.
+            '1'...'9' => {
+                var n: u64 = c - '0';
+                var end = self.pos;
+                while (end < self.pattern.len and isAsciiDigit(self.pattern[end])) : (end += 1) {
+                    n = @min(n * 10 + (self.pattern[end] - '0'), std.math.maxInt(u32));
+                }
+                if (n <= self.group_total) {
+                    // `group_total` is capped by the parser's u16 counter
+                    // (TooManyCaptures), so a valid reference fits.
+                    if (n > std.math.maxInt(u16)) return error.InvalidEscape;
+                    self.pos = end;
+                    return Token.backref_token(@intCast(n), start_pos);
+                }
+                if (self.unicode_mode) return error.InvalidEscape;
+                if (c >= '8') return Token.escaped(c, start_pos);
+                return self.legacyOctal(c, start_pos);
             },
             '\\', '.', '*', '+', '?', '|', '(', ')', '[', ']', '{', '}', '^', '$' => {
                 return Token.escaped(c, start_pos);
@@ -696,46 +846,126 @@ pub const Lexer = struct {
 
     /// Parse a group name for `(?<name>` / `\k<name>`. Called with `self.pos`
     /// positioned right after the opening `<`. On success, consumes through
-    /// the closing `>` and returns the name's byte range in the pattern
-    /// (practical ASCII identifier subset: letter/`_`/`$` then
-    /// letter/digit/`_`/`$`*, not the full Unicode identifier grammar).
+    /// the closing `>` and returns the name's raw byte range in the pattern
+    /// (escapes not decoded; see `decodeGroupName`). The name is a
+    /// RegExpIdentifierName (F1c): an ID_Start code point, `$` or `_`, then
+    /// ID_Continue, `$`, ZWNJ or ZWJ; any of them may be written as a
+    /// `\uXXXX`, `\u{...}` or `\uLead\uTrail` escape, with or without `u`.
     fn parseGroupName(self: *Self) !struct { start: usize, end: usize } {
         const name_start = self.pos;
-        if (self.pos >= self.pattern.len) return error.InvalidGroupName;
-        const first = self.pattern[self.pos];
-        if (!(std.ascii.isAlphabetic(first) or first == '_' or first == '$')) {
-            return error.InvalidGroupName;
+        var first = true;
+        while (true) {
+            if (self.pos >= self.pattern.len) return error.InvalidGroupName;
+            if (self.pattern[self.pos] == '>') break;
+            const cp = try nextNameCodePoint(self.pattern, &self.pos);
+            if (!(if (first) isIdentifierStart(cp) else isIdentifierPart(cp))) return error.InvalidGroupName;
+            first = false;
         }
-        self.pos += 1;
-        while (self.pos < self.pattern.len) {
-            const c = self.pattern[self.pos];
-            if (std.ascii.isAlphanumeric(c) or c == '_' or c == '$') {
-                self.pos += 1;
-            } else {
-                break;
-            }
-        }
+        if (first) return error.InvalidGroupName; // empty name
         const name_end = self.pos;
-        if (self.pos >= self.pattern.len or self.pattern[self.pos] != '>') {
-            return error.InvalidGroupName;
-        }
         self.pos += 1; // consume '>'
         return .{ .start = name_start, .end = name_end };
+    }
+
+    fn isIdentifierStart(cp: u21) bool {
+        return cp == '$' or cp == '_' or properties.isInCategory(cp, .ID_Start);
+    }
+
+    fn isIdentifierPart(cp: u21) bool {
+        return cp == '$' or cp == 0x200C or cp == 0x200D or properties.isInCategory(cp, .ID_Continue);
+    }
+
+    /// Decode one code point of a group name at `pos.*`, advancing past it:
+    /// a `\u` escape (a `\uLead\uTrail` pair is one code point), a literal
+    /// UTF-8/WTF-8 sequence, or a WTF-8 lead surrogate followed by a trail
+    /// (one code point, as `UnicodeLeadSurrogate UnicodeTrailSurrogate`).
+    fn nextNameCodePoint(pattern: []const u8, pos: *usize) error{InvalidGroupName}!u21 {
+        const p = pos.*;
+        if (pattern[p] == '\\') {
+            if (p + 1 >= pattern.len or pattern[p + 1] != 'u') return error.InvalidGroupName;
+            var q = p + 2;
+            if (q < pattern.len and pattern[q] == '{') {
+                q += 1;
+                var value: u32 = 0;
+                const digits_start = q;
+                while (q < pattern.len and isHexDigit(pattern[q])) : (q += 1) {
+                    value = value * 16 + hexValue(pattern[q]);
+                    if (value > 0x10FFFF) return error.InvalidGroupName;
+                }
+                if (q == digits_start or q >= pattern.len or pattern[q] != '}') return error.InvalidGroupName;
+                pos.* = q + 1;
+                return @intCast(value);
+            }
+            const lead = hex4At(pattern, q) orelse return error.InvalidGroupName;
+            q += 4;
+            if (lead >= 0xD800 and lead <= 0xDBFF and q + 1 < pattern.len and pattern[q] == '\\' and pattern[q + 1] == 'u') {
+                if (hex4At(pattern, q + 2)) |trail| {
+                    if (trail >= 0xDC00 and trail <= 0xDFFF) {
+                        pos.* = q + 6;
+                        return @intCast(0x10000 + ((lead - 0xD800) << 10) + (trail - 0xDC00));
+                    }
+                }
+            }
+            pos.* = q;
+            return @intCast(lead);
+        }
+        const len = std.unicode.utf8ByteSequenceLength(pattern[p]) catch return error.InvalidGroupName;
+        if (p + len > pattern.len) return error.InvalidGroupName;
+        const cp = std.unicode.wtf8Decode(pattern[p..][0..len]) catch return error.InvalidGroupName;
+        pos.* = p + len;
+        if (cp >= 0xD800 and cp <= 0xDBFF and pos.* + 3 <= pattern.len) {
+            if (std.unicode.wtf8Decode(pattern[pos.*..][0..3])) |trail| {
+                if (trail >= 0xDC00 and trail <= 0xDFFF) {
+                    pos.* += 3;
+                    return 0x10000 + ((cp - 0xD800) << 10) + (trail - 0xDC00);
+                }
+            } else |_| {}
+        }
+        return cp;
+    }
+
+    fn hex4At(pattern: []const u8, pos: usize) ?u32 {
+        if (pos + 4 > pattern.len) return null;
+        var value: u32 = 0;
+        for (pattern[pos..][0..4]) |h| {
+            if (!isHexDigit(h)) return null;
+            value = value * 16 + hexValue(h);
+        }
+        return value;
+    }
+
+    /// The group name in `raw` (a range `parseGroupName` accepted) with its
+    /// escapes decoded, as UTF-8 owned by the caller: `\u{03C0}` and `π`
+    /// are the same name.
+    pub fn decodeGroupName(allocator: std.mem.Allocator, raw: []const u8) ![]u8 {
+        var out: std.ArrayListUnmanaged(u8) = .empty;
+        errdefer out.deinit(allocator);
+        var pos: usize = 0;
+        while (pos < raw.len) {
+            const cp = nextNameCodePoint(raw, &pos) catch unreachable; // validated
+            var buf: [4]u8 = undefined;
+            const n = std.unicode.wtf8Encode(cp, &buf) catch unreachable;
+            try out.appendSlice(allocator, buf[0..n]);
+        }
+        return out.toOwnedSlice(allocator);
     }
 
     /// Parse `\p{Name}` / `\P{Name}` (Unicode property escape). Called with
     /// `self.pos` positioned right after `p`/`P`. Falls back to a literal
     /// `p`/`P` if not followed by a validly-formed `{Name}` (Annex-B-style
-    /// leniency, same as `\x`/`\u`/`\c`/`\k` when malformed). This function
+    /// leniency, same as `\x`/`\u`/`\c`/`\k` when malformed) -- except
+    /// under `unicode_mode`, where a malformed property escape is a
+    /// SyntaxError. This function
     /// only extracts the name span -- it doesn't know whether the name is a
     /// property this engine actually implements; the parser resolves that
     /// and surfaces a clear error for an unknown property (see
     /// `parser.zig::parseAtom`) rather than silently ignoring it.
-    fn parseUnicodeProperty(self: *Self, negated: bool, start_pos: usize) Token {
+    fn parseUnicodeProperty(self: *Self, negated: bool, start_pos: usize) error{InvalidEscape}!Token {
         const saved_pos = self.pos;
         const fallback_char: u32 = if (negated) 'P' else 'p';
 
         if (self.pos >= self.pattern.len or self.pattern[self.pos] != '{') {
+            if (self.unicode_mode) return error.InvalidEscape;
             return Token.escaped(fallback_char, start_pos);
         }
         self.pos += 1; // consume '{'
@@ -745,6 +975,7 @@ pub const Lexer = struct {
         }
         const name_end = self.pos;
         if (name_end == name_start or self.pos >= self.pattern.len or self.pattern[self.pos] != '}') {
+            if (self.unicode_mode) return error.InvalidEscape;
             self.pos = saved_pos;
             return Token.escaped(fallback_char, start_pos);
         }
@@ -772,35 +1003,61 @@ pub const Lexer = struct {
     }
 
     /// Parse \xHH (exactly 2 hex digits). If not followed by 2 hex digits,
-    /// falls back to a literal 'x' (Annex-B-style leniency).
-    fn parseHexEscape(self: *Self, start_pos: usize) Token {
+    /// falls back to a literal 'x' (Annex-B-style leniency; a SyntaxError
+    /// under `unicode_mode`).
+    fn parseHexEscape(self: *Self, start_pos: usize) error{InvalidEscape}!Token {
         if (self.pos + 1 < self.pattern.len and
             isHexDigit(self.pattern[self.pos]) and isHexDigit(self.pattern[self.pos + 1]))
         {
             const value = @as(u32, hexValue(self.pattern[self.pos])) * 16 + hexValue(self.pattern[self.pos + 1]);
             self.pos += 2;
-            return Token.escaped(value, start_pos);
+            // `\xHH` is the code point U+00HH (like `\u00HH`), not the raw
+            // byte: above 0x7F it must become its UTF-8 sequence to match
+            // text (`/\xFF/` matches "ÿ", C3 BF).
+            return codepointToken(value, start_pos);
         }
+        if (self.unicode_mode) return error.InvalidEscape;
         return Token.escaped('x', start_pos);
     }
 
-    /// Parse \cX control character escape. If not followed by an ASCII
-    /// letter, falls back to a literal 'c' (Annex-B-style leniency).
-    fn parseControlEscape(self: *Self, start_pos: usize) Token {
+    /// Parse \cX control character escape (X an ASCII letter: X % 32). In
+    /// Annex B, inside a class a digit or `_` works too (ClassControlLetter);
+    /// otherwise the `\` is a literal backslash and lexing resumes at the
+    /// `c` (`\c0` is the text "\c0"). A SyntaxError under `unicode_mode`.
+    fn parseControlEscape(self: *Self, start_pos: usize, in_class: bool) error{InvalidEscape}!Token {
         if (self.pos < self.pattern.len) {
             const c = self.pattern[self.pos];
-            if ((c >= 'a' and c <= 'z') or (c >= 'A' and c <= 'Z')) {
-                const upper = if (c >= 'a' and c <= 'z') c - 'a' + 'A' else c;
+            const letter = (c >= 'a' and c <= 'z') or (c >= 'A' and c <= 'Z');
+            const class_extra = in_class and !self.unicode_mode and (isAsciiDigit(c) or c == '_');
+            if (letter or class_extra) {
                 self.pos += 1;
-                return Token.escaped(upper - 'A' + 1, start_pos);
+                return Token.escaped(c % 32, start_pos);
             }
         }
-        return Token.escaped('c', start_pos);
+        if (self.unicode_mode) return error.InvalidEscape;
+        self.pos = start_pos + 1; // resume at the `c`
+        return Token.escaped('\\', start_pos);
+    }
+
+    /// Annex B LegacyOctalEscapeSequence starting with digit `first` (already
+    /// consumed): up to three octal digits, as long as the value stays
+    /// within \377. The value is a code point (`\377` is U+00FF).
+    fn legacyOctal(self: *Self, first: u8, start_pos: usize) Token {
+        var value: u32 = first - '0';
+        var digits: usize = 1;
+        while (digits < 3 and self.pos < self.pattern.len) : (digits += 1) {
+            const d = self.pattern[self.pos];
+            if (d < '0' or d > '7' or value * 8 + (d - '0') > 0o377) break;
+            value = value * 8 + (d - '0');
+            self.pos += 1;
+        }
+        return codepointToken(value, start_pos);
     }
 
     /// Parse \uHHHH or \u{H+}. Falls back to a literal 'u' if malformed
-    /// (Annex-B-style leniency).
-    fn parseUnicodeEscape(self: *Self, start_pos: usize) Token {
+    /// (Annex-B-style leniency; a SyntaxError under `unicode_mode`, which
+    /// includes a `\u{...}` above U+10FFFF).
+    fn parseUnicodeEscape(self: *Self, start_pos: usize) error{InvalidEscape}!Token {
         if (self.pos < self.pattern.len and self.pattern[self.pos] == '{') {
             const brace_start = self.pos;
             self.pos += 1;
@@ -817,6 +1074,7 @@ pub const Lexer = struct {
                 self.pos += 1;
                 return codepointToken(value, start_pos);
             }
+            if (self.unicode_mode) return error.InvalidEscape;
             self.pos = brace_start;
             return Token.escaped('u', start_pos);
         }
@@ -828,10 +1086,32 @@ pub const Lexer = struct {
             var value: u32 = 0;
             for (0..4) |i| value = value * 16 + hexValue(self.pattern[self.pos + i]);
             self.pos += 4;
+            // Under `u`, `\uLead\uTrail` is one code point
+            // (RegExpUnicodeEscapeSequence), inside a class too.
+            if (self.unicode_mode and value >= 0xD800 and value <= 0xDBFF) {
+                if (self.trailSurrogateEscapeAt(self.pos)) |trail| {
+                    self.pos += 6;
+                    return codepointToken(0x10000 + ((value - 0xD800) << 10) + (trail - 0xDC00), start_pos);
+                }
+            }
             return codepointToken(value, start_pos);
         }
 
+        if (self.unicode_mode) return error.InvalidEscape;
         return Token.escaped('u', start_pos);
+    }
+
+    /// The value of a `\uHHHH` trail surrogate escape (U+DC00-U+DFFF)
+    /// starting at `pos`, or null.
+    fn trailSurrogateEscapeAt(self: *const Self, pos: usize) ?u32 {
+        if (pos + 6 > self.pattern.len) return null;
+        if (self.pattern[pos] != '\\' or self.pattern[pos + 1] != 'u') return null;
+        var value: u32 = 0;
+        for (self.pattern[pos + 2 .. pos + 6]) |h| {
+            if (!isHexDigit(h)) return null;
+            value = value * 16 + hexValue(h);
+        }
+        return if (value >= 0xDC00 and value <= 0xDFFF) value else null;
     }
 
     /// Turn a decoded Unicode code point into a token: a single-byte
@@ -842,12 +1122,11 @@ pub const Lexer = struct {
         if (value <= 0x7F) {
             return Token.escaped(value, start_pos);
         }
+        // WTF-8, so a lone surrogate half (U+D800-U+DFFF) becomes the same
+        // 3-byte sequence the ecosystem uses for it in subjects (see
+        // `recursive_matcher.zig`'s `decodeSurrogateWtf8`).
         var buf: [4]u8 = undefined;
-        const len = std.unicode.utf8Encode(@intCast(value), &buf) catch {
-            // Lone surrogate half (0xD800-0xDFFF) or otherwise unencodable:
-            // no valid byte representation, fall back to literal 'u'.
-            return Token.escaped('u', start_pos);
-        };
+        const len = std.unicode.wtf8Encode(@intCast(value), &buf) catch unreachable; // value <= 0x10FFFF
         return Token.multibyteChar(buf, len, start_pos);
     }
 
@@ -898,7 +1177,9 @@ test "Lexer: special characters" {
     try std.testing.expectEqual(TokenType.rparen, (try lexer.next()).type);
     try std.testing.expectEqual(TokenType.plus, (try lexer.next()).type);
     try std.testing.expectEqual(TokenType.lbracket, (try lexer.next()).type);
-    try std.testing.expectEqual(TokenType.rbracket, (try lexer.next()).type);
+    // Outside a class `]` is literal text (Annex B, D2); the parser reads a
+    // class body in class mode, where it closes the class.
+    try std.testing.expectEqual(TokenType.char, (try lexer.next()).type);
     try std.testing.expectEqual(TokenType.question, (try lexer.next()).type);
 }
 
@@ -984,10 +1265,16 @@ test "Lexer: isAtEnd" {
     try std.testing.expect(lexer.isAtEnd());
 }
 
-test "Lexer: invalid repeat" {
+test "Lexer: a brace that isn't a quantifier is literal, or an error under u" {
     var lexer = Lexer.init("{abc}");
+    const t = try lexer.next();
+    try std.testing.expectEqual(TokenType.char, t.type);
+    try std.testing.expectEqual(@as(u32, '{'), t.char_value);
+    try std.testing.expectEqual(@as(usize, 1), lexer.pos);
 
-    try std.testing.expectError(error.InvalidRepeat, lexer.next());
+    var strict = Lexer.init("{abc}");
+    strict.unicode_mode = true;
+    try std.testing.expectError(error.InvalidRepeat, strict.next());
 }
 
 test "Lexer: position tracking" {
@@ -1029,6 +1316,7 @@ test "Lexer: distinguish greedy from lazy" {
 
 test "Lexer: possessive quantifiers" {
     var lexer = Lexer.init("a*+b++c?+");
+    lexer.possessive = true; // opt-in extension (D8)
 
     _ = try lexer.next(); // 'a'
     try std.testing.expectEqual(TokenType.possessive_star, (try lexer.next()).type);
@@ -1052,7 +1340,15 @@ test "Lexer: distinguish greedy/lazy/possessive" {
     }
     {
         var lexer = Lexer.init("a*+");
+        lexer.possessive = true;
         _ = try lexer.next();
         try std.testing.expectEqual(TokenType.possessive_star, (try lexer.next()).type);
+    }
+    // Without the opt-in (the default, as in ECMA-262) `*+` is `*` then `+`.
+    {
+        var lexer = Lexer.init("a*+");
+        _ = try lexer.next();
+        try std.testing.expectEqual(TokenType.star, (try lexer.next()).type);
+        try std.testing.expectEqual(TokenType.plus, (try lexer.next()).type);
     }
 }

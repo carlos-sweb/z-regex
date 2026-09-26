@@ -170,15 +170,16 @@ test "BytecodeReader: basic iteration" {
 }
 
 test "BytecodeReader: multiple instructions" {
-    // SAVE_START(0), CHAR32('a'), SAVE_END(0), MATCH
-    var bytecode: [8]u8 = undefined;
-    bytecode[0] = 0x20; // SAVE_START
+    // SAVE_START(0), CHAR32('a'), MATCH
+    var bytecode: [9]u8 = undefined;
+    bytecode[0] = 0x20; // SAVE_START, u16 group (D9)
     bytecode[1] = 0;
+    bytecode[2] = 0;
 
-    bytecode[2] = 0x01; // CHAR32
-    std.mem.writeInt(u32, bytecode[3..7], 'a', .little);
+    bytecode[3] = 0x01; // CHAR32
+    std.mem.writeInt(u32, bytecode[4..8], 'a', .little);
 
-    bytecode[7] = 0x10; // MATCH
+    bytecode[8] = 0x10; // MATCH
 
     var reader = BytecodeReader.init(&bytecode);
 

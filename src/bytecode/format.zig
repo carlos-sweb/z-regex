@@ -14,7 +14,7 @@ const Opcode = opcodes.Opcode;
 /// matching API, which uses it to answer `getNamedCapture` lookups).
 pub const NamedGroup = struct {
     name: []const u8,
-    index: u8,
+    index: u16,
 };
 
 /// Instruction represents a decoded bytecode instruction
@@ -78,12 +78,16 @@ pub fn decodeInstruction(bytecode: []const u8, offset: usize) !Instruction {
     // Decode operands based on opcode
     switch (opcode) {
         // No operands
-        .CHAR, .CHAR_ANY, .MATCH, .LINE_START, .LINE_END, .WORD_BOUNDARY, .NOT_WORD_BOUNDARY,
-        .STRING_START, .STRING_END, .LOOKAHEAD_END, .LOOKBEHIND_END,
-        .PUSH_POS, .CHECK_POS => {},
+        .CHAR, .CHAR_ANY, .MATCH, .LINE_START, .LINE_END, .WORD_BOUNDARY, .NOT_WORD_BOUNDARY, .STRING_START, .STRING_END, .LOOKAHEAD_END, .LOOKBEHIND_END, .PUSH_POS, .CHECK_POS => {},
+
+        // u16 capture group (D9)
+        .SAVE_START, .SAVE_END, .BACK_REF, .BACK_REF_I, .CLEAR_CAPTURE => {
+            inst.operands[0] = readU16(bytecode[offset + 1 ..]);
+            inst.operand_count = 1;
+        },
 
         // 1 byte operand
-        .SAVE_START, .SAVE_END, .BACK_REF, .BACK_REF_I, .CLEAR_CAPTURE, .UNICODE_PROPERTY, .UNICODE_PROPERTY_INV, .UNICODE_SCRIPT, .UNICODE_SCRIPT_INV, .UNICODE_SCRIPT_EXTENSIONS, .UNICODE_SCRIPT_EXTENSIONS_INV => {
+        .UNICODE_PROPERTY, .UNICODE_PROPERTY_INV, .UNICODE_SCRIPT, .UNICODE_SCRIPT_INV, .UNICODE_SCRIPT_EXTENSIONS, .UNICODE_SCRIPT_EXTENSIONS_INV => {
             inst.operands[0] = bytecode[offset + 1];
             inst.operand_count = 1;
         },
@@ -120,10 +124,10 @@ pub fn decodeInstruction(bytecode: []const u8, offset: usize) !Instruction {
             inst.operand_count = 1;
         },
 
-        // u8 + u32
+        // u16 + u32
         .SAVE_START_NAMED, .SAVE_END_NAMED => {
-            inst.operands[0] = bytecode[offset + 1];
-            inst.operands[1] = readU32(bytecode[offset + 2 ..]);
+            inst.operands[0] = readU16(bytecode[offset + 1 ..]);
+            inst.operands[1] = readU32(bytecode[offset + 3 ..]);
             inst.operand_count = 2;
         },
 
@@ -171,12 +175,16 @@ pub fn encodeInstruction(inst: Instruction, buffer: []u8) !usize {
     // Encode operands based on opcode
     switch (inst.opcode) {
         // No operands
-        .CHAR, .CHAR_ANY, .MATCH, .LINE_START, .LINE_END, .WORD_BOUNDARY, .NOT_WORD_BOUNDARY,
-        .STRING_START, .STRING_END, .LOOKAHEAD_END, .LOOKBEHIND_END,
-        .PUSH_POS, .CHECK_POS, .CHAR_CLASS_RANGES, .CHAR_CLASS_RANGES_INV, .CHAR_CLASS_UNICODE, .CHAR_CLASS_UNICODE_INV, .CHAR_CLASS_SET_OP => {},
+        .CHAR, .CHAR_ANY, .MATCH, .LINE_START, .LINE_END, .WORD_BOUNDARY, .NOT_WORD_BOUNDARY, .STRING_START, .STRING_END, .LOOKAHEAD_END, .LOOKBEHIND_END, .PUSH_POS, .CHECK_POS, .CHAR_CLASS_RANGES, .CHAR_CLASS_RANGES_INV, .CHAR_CLASS_UNICODE, .CHAR_CLASS_UNICODE_INV, .CHAR_CLASS_SET_OP => {},
+
+        // u16 capture group (D9)
+        .SAVE_START, .SAVE_END, .BACK_REF, .BACK_REF_I, .CLEAR_CAPTURE => {
+            writeU16(buffer[pos..], @intCast(inst.operands[0]));
+            pos += 2;
+        },
 
         // 1 byte operand
-        .SAVE_START, .SAVE_END, .BACK_REF, .BACK_REF_I, .CLEAR_CAPTURE, .UNICODE_PROPERTY, .UNICODE_PROPERTY_INV, .UNICODE_SCRIPT, .UNICODE_SCRIPT_INV, .UNICODE_SCRIPT_EXTENSIONS, .UNICODE_SCRIPT_EXTENSIONS_INV => {
+        .UNICODE_PROPERTY, .UNICODE_PROPERTY_INV, .UNICODE_SCRIPT, .UNICODE_SCRIPT_INV, .UNICODE_SCRIPT_EXTENSIONS, .UNICODE_SCRIPT_EXTENSIONS_INV => {
             buffer[pos] = @intCast(inst.operands[0]);
             pos += 1;
         },
@@ -193,10 +201,10 @@ pub fn encodeInstruction(inst: Instruction, buffer: []u8) !usize {
             pos += 4;
         },
 
-        // u8 + u32
+        // u16 + u32
         .SAVE_START_NAMED, .SAVE_END_NAMED => {
-            buffer[pos] = @intCast(inst.operands[0]);
-            pos += 1;
+            writeU16(buffer[pos..], @intCast(inst.operands[0]));
+            pos += 2;
             writeU32(buffer[pos..], inst.operands[1]);
             pos += 4;
         },
@@ -298,12 +306,18 @@ test "encode/decode: simple opcode" {
     try std.testing.expectEqual(@as(u8, 0), decoded.operand_count);
 }
 
-test "encode/decode: opcode with u8 operand" {
+test "encode/decode: capture group operand is u16 (D9)" {
     const inst = Instruction.with1(.SAVE_START, 3);
     var buffer: [10]u8 = undefined;
 
     const encoded_size = try encodeInstruction(inst, &buffer);
-    try std.testing.expectEqual(@as(usize, 2), encoded_size);
+    try std.testing.expectEqual(@as(usize, 3), encoded_size);
+
+    // A group past 255 survives the round trip (it was truncated to u8).
+    const big = try encodeInstruction(Instruction.with1(.BACK_REF, 1000), &buffer);
+    try std.testing.expectEqual(@as(usize, 3), big);
+    try std.testing.expectEqual(@as(u32, 1000), (try decodeInstruction(&buffer, 0)).operands[0]);
+    _ = try encodeInstruction(inst, &buffer);
 
     const decoded = try decodeInstruction(&buffer, 0);
     try std.testing.expectEqual(Opcode.SAVE_START, decoded.opcode);

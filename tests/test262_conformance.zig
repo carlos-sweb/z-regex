@@ -64,30 +64,47 @@ fn runCase(allocator: std.mem.Allocator, c: data.Case) Outcome {
     }
 }
 
+// A real gate: any failing or non-compiling case fails the test. On success
+// it prints nothing -- Zig 0.16's build runner treats stderr output from a
+// test run as a diagnostic and marks the step failed even when every test
+// passes -- and on failure it lists the cases and the pass-rate summary.
 test "test262 conformance sample" {
     const allocator = std.testing.allocator;
 
     var pass: usize = 0;
-    var fail: usize = 0;
-    var compile_errors: usize = 0;
+    var failed: std.ArrayListUnmanaged(struct { case: data.Case, outcome: Outcome }) = .empty;
+    defer failed.deinit(allocator);
 
     for (data.cases) |c| {
-        switch (runCase(allocator, c)) {
-            .pass => pass += 1,
-            .fail => {
-                fail += 1;
-                std.debug.print("[test262 FAIL] {s}: /{s}/{s} vs \"{s}\"\n", .{ c.file, c.pattern, c.flags, c.input });
-            },
-            .compile_error => {
-                compile_errors += 1;
-                std.debug.print("[test262 COMPILE-ERROR] {s}: /{s}/{s}\n", .{ c.file, c.pattern, c.flags });
-            },
+        const outcome = runCase(allocator, c);
+        if (outcome == .pass) {
+            pass += 1;
+        } else {
+            try failed.append(allocator, .{ .case = c, .outcome = outcome });
         }
     }
 
+    if (failed.items.len == 0) return;
+
+    var fail: usize = 0;
+    var compile_errors: usize = 0;
+    for (failed.items) |f| {
+        switch (f.outcome) {
+            .fail => {
+                fail += 1;
+                std.debug.print("[test262 FAIL] {s}: /{s}/{s} vs \"{s}\"\n", .{ f.case.file, f.case.pattern, f.case.flags, f.case.input });
+            },
+            .compile_error => {
+                compile_errors += 1;
+                std.debug.print("[test262 COMPILE-ERROR] {s}: /{s}/{s}\n", .{ f.case.file, f.case.pattern, f.case.flags });
+            },
+            .pass => unreachable,
+        }
+    }
     const total = data.cases.len;
     std.debug.print(
         "\ntest262 conformance sample: {}/{} passed ({d:.1}%), {} failed, {} compile errors\n",
         .{ pass, total, @as(f64, @floatFromInt(pass)) * 100.0 / @as(f64, @floatFromInt(total)), fail, compile_errors },
     );
+    return error.ConformanceSampleFailed;
 }

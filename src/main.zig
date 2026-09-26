@@ -31,7 +31,7 @@
 const std = @import("std");
 
 // Version information
-pub const version = "0.1.0";
+pub const version = "0.2.0";
 pub const zig_version_required = "0.16.0";
 
 // Utils module exports
@@ -61,6 +61,7 @@ pub const ParseError = @import("parser/parser.zig").ParseError;
 // Codegen module exports
 pub const CodeGenerator = @import("codegen/generator.zig").CodeGenerator;
 pub const CodegenError = @import("codegen/generator.zig").CodegenError;
+pub const MAX_PROGRAM_BYTES = @import("codegen/generator.zig").MAX_PROGRAM_BYTES;
 pub const Optimizer = @import("codegen/optimizer.zig").Optimizer;
 pub const OptLevel = @import("codegen/optimizer.zig").OptLevel;
 pub const compile = @import("codegen/compiler.zig").compile;
@@ -74,6 +75,12 @@ pub const Capture = @import("executor/thread.zig").Capture;
 pub const Matcher = @import("executor/matcher.zig").Matcher;
 pub const MatchResult = @import("executor/matcher.zig").MatchResult;
 pub const CaptureIndices = @import("executor/matcher.zig").CaptureIndices;
+
+// Tier classification (docs/REGEX_TIERS_PLAN.md, F0a prototype): reports
+// the features a pattern uses and the minimum execution tier they need.
+// Classification only -- nothing dispatches on it yet.
+pub const analysis = @import("analysis/classify.zig");
+pub const analyze = analysis.analyze;
 
 // High-level Regex API
 pub const Regex = @import("regex.zig").Regex;
@@ -119,6 +126,9 @@ test {
 
     // Unicode module tests (General_Category properties + simple case folding)
     _ = @import("unicode/unicode_tests.zig");
+
+    // Tier classifier (F0a)
+    _ = @import("analysis/classify.zig");
 }
 
 test "version info" {

@@ -15,7 +15,16 @@ const std = @import("std");
 /// CHAR_CLASS's fixed 32-byte bitmap) instead of requiring variable-length
 /// instruction decoding. Classes needing more ranges than this are a
 /// compile error (`error.TooManyRanges`) rather than silently truncated.
-pub const MAX_CLASS_RANGES = 8;
+/// 30 is the most that keeps CHAR_CLASS_UNICODE within the u8 instruction
+/// size (1 + 1 + 30*8 + 1 + MAX_CLASS_PROPERTIES*3 = 255); the codegen
+/// merges overlapping/adjacent ranges first. F2's dynamic CharSet removes
+/// the cap.
+pub const MAX_CLASS_RANGES = 30;
+
+/// Range slots per CHAR_CLASS_SET_OP operand: two operand blocks must fit the
+/// u8 instruction size (3 + 2 * CLASS_SET_OPERAND_SIZE <= 255). 13 holds a
+/// spliced `\S` (11 ranges).
+pub const MAX_SET_OP_RANGES = 13;
 
 /// Maximum number of `\p{...}`/`\P{...}` (property, script, or
 /// script-extensions) tests inline in a CHAR_CLASS_UNICODE(_INV)
@@ -35,12 +44,12 @@ pub const ClassPropertyKind = enum(u8) {
 };
 
 /// Byte size of one CHAR_CLASS_SET_OP operand block: negated:u8 +
-/// range_count:u8 + MAX_CLASS_RANGES*(u32+u32) + prop_count:u8 +
+/// range_count:u8 + MAX_SET_OP_RANGES*(u32+u32) + prop_count:u8 +
 /// MAX_CLASS_PROPERTIES*(u8+u8+u8) -- the same range/property-table layout
 /// CHAR_CLASS_UNICODE uses, plus one leading `negated` byte for this
 /// operand's own `[^...]` (only meaningful when the operand is a nested
 /// class; see CHAR_CLASS_SET_OP's doc comment).
-pub const CLASS_SET_OPERAND_SIZE = 1 + 1 + MAX_CLASS_RANGES * 8 + 1 + MAX_CLASS_PROPERTIES * 3;
+pub const CLASS_SET_OPERAND_SIZE = 1 + 1 + MAX_SET_OP_RANGES * 8 + 1 + MAX_CLASS_PROPERTIES * 3;
 
 /// One `\p{...}`/`\P{...}` test inline in a CHAR_CLASS_UNICODE(_INV)
 /// instruction. `negated` is this individual test's own `\P{...}`-ness
@@ -193,19 +202,19 @@ pub const Opcode = enum(u8) {
     // =========================================================================
 
     /// Save capture group start position
-    /// Format: [SAVE_START group:u8]
+    /// Format: [SAVE_START group:u16]
     SAVE_START = 0x20,
 
     /// Save capture group end position
-    /// Format: [SAVE_END group:u8]
+    /// Format: [SAVE_END group:u16]
     SAVE_END = 0x21,
 
     /// Save named capture group start
-    /// Format: [SAVE_START_NAMED group:u8 name_offset:u32]
+    /// Format: [SAVE_START_NAMED group:u16 name_offset:u32]
     SAVE_START_NAMED = 0x22,
 
     /// Save named capture group end
-    /// Format: [SAVE_END_NAMED group:u8 name_offset:u32]
+    /// Format: [SAVE_END_NAMED group:u16 name_offset:u32]
     SAVE_END_NAMED = 0x23,
 
     /// Reset a capture group to "unset" (both start and end cleared).
@@ -213,7 +222,7 @@ pub const Opcode = enum(u8) {
     /// optional inside a repeated group) so a capture set by an earlier
     /// iteration of an enclosing loop doesn't leak into a later iteration
     /// where this group's own atom didn't participate.
-    /// Format: [CLEAR_CAPTURE group:u8]
+    /// Format: [CLEAR_CAPTURE group:u16]
     CLEAR_CAPTURE = 0x24,
 
     // =========================================================================
@@ -221,11 +230,11 @@ pub const Opcode = enum(u8) {
     // =========================================================================
 
     /// Match backreference to capture group
-    /// Format: [BACK_REF group:u8]
+    /// Format: [BACK_REF group:u16]
     BACK_REF = 0x30,
 
     /// Match backreference (case insensitive)
-    /// Format: [BACK_REF_I group:u8]
+    /// Format: [BACK_REF_I group:u16]
     BACK_REF_I = 0x31,
 
     // =========================================================================
@@ -363,18 +372,19 @@ pub const Opcode = enum(u8) {
     pub fn size(self: Opcode) u8 {
         return switch (self) {
             // 1 byte (opcode only)
-            .CHAR, .CHAR_ANY, .MATCH, .LINE_START, .LINE_END, .WORD_BOUNDARY, .NOT_WORD_BOUNDARY,
-            .STRING_START, .STRING_END, .LOOKAHEAD_END, .LOOKBEHIND_END,
-            .PUSH_POS, .CHECK_POS => 1,
+            .CHAR, .CHAR_ANY, .MATCH, .LINE_START, .LINE_END, .WORD_BOUNDARY, .NOT_WORD_BOUNDARY, .STRING_START, .STRING_END, .LOOKAHEAD_END, .LOOKBEHIND_END, .PUSH_POS, .CHECK_POS => 1,
+
+            // 3 bytes (opcode + u16 capture group, D9)
+            .SAVE_START, .SAVE_END, .BACK_REF, .BACK_REF_I, .CLEAR_CAPTURE => 3,
 
             // 2 bytes (opcode + u8)
-            .SAVE_START, .SAVE_END, .BACK_REF, .BACK_REF_I, .CLEAR_CAPTURE, .UNICODE_PROPERTY, .UNICODE_PROPERTY_INV, .UNICODE_SCRIPT, .UNICODE_SCRIPT_INV, .UNICODE_SCRIPT_EXTENSIONS, .UNICODE_SCRIPT_EXTENSIONS_INV => 2,
+            .UNICODE_PROPERTY, .UNICODE_PROPERTY_INV, .UNICODE_SCRIPT, .UNICODE_SCRIPT_INV, .UNICODE_SCRIPT_EXTENSIONS, .UNICODE_SCRIPT_EXTENSIONS_INV => 2,
 
             // 5 bytes (opcode + u32)
             .CHAR32, .LOOKAHEAD, .NEGATIVE_LOOKAHEAD, .LOOKBEHIND, .NEGATIVE_LOOKBEHIND => 5,
 
-            // 6 bytes (opcode + u8 + u32)
-            .SAVE_START_NAMED, .SAVE_END_NAMED => 6,
+            // 7 bytes (opcode + u16 + u32)
+            .SAVE_START_NAMED, .SAVE_END_NAMED => 7,
 
             // 5 bytes (opcode + i32)
             .GOTO => 5,
@@ -533,7 +543,7 @@ test "Opcode: category classification" {
 test "Opcode: size calculations" {
     try std.testing.expectEqual(@as(u8, 1), Opcode.CHAR.size());
     try std.testing.expectEqual(@as(u8, 1), Opcode.MATCH.size());
-    try std.testing.expectEqual(@as(u8, 2), Opcode.SAVE_START.size());
+    try std.testing.expectEqual(@as(u8, 3), Opcode.SAVE_START.size()); // u16 group (D9)
     try std.testing.expectEqual(@as(u8, 5), Opcode.CHAR32.size());
     try std.testing.expectEqual(@as(u8, 9), Opcode.SPLIT.size());
 }

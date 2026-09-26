@@ -54,6 +54,18 @@ Usage:
 import re
 import sys
 
+def zig_ranges_slice(ranges):
+    """An inline `&.{...}` slice literal of CodepointRange values, spelled the
+    way `zig fmt` normalizes it (no padding inside the braces when there is
+    exactly one element), so a regenerated tables.zig passes `zig fmt --check`."""
+    items = [f".{{ .start = 0x{start:X}, .end = 0x{end:X} }}" for start, end in ranges]
+    if not items:
+        return "&.{}"
+    if len(items) == 1:
+        return f"&.{{{items[0]}}}"
+    return f"&.{{ {', '.join(items)} }}"
+
+
 MAJOR_CATEGORIES = ["L", "M", "N", "P", "S", "Z", "C"]
 
 # Binary properties to extract, split by which of the three simple
@@ -407,10 +419,7 @@ def main():
     print("pub const SCRIPT_RANGES: []const []const CodepointRange = &.{")
     for name in script_names:
         ranges = script_merged_ranges[name]
-        range_literals = ", ".join(
-            f".{{ .start = 0x{start:X}, .end = 0x{end:X} }}" for start, end in ranges
-        )
-        print(f"    &.{{ {range_literals} }},")
+        print(f"    {zig_ranges_slice(ranges)},")
     print("};")
     print()
 
@@ -490,10 +499,7 @@ def main():
     print("pub const SCRIPT_EXTENSIONS_RANGES: []const []const CodepointRange = &.{")
     for name in script_names:
         ranges = script_extensions_ranges[name]
-        range_literals = ", ".join(
-            f".{{ .start = 0x{start:X}, .end = 0x{end:X} }}" for start, end in ranges
-        )
-        print(f"    &.{{ {range_literals} }},")
+        print(f"    {zig_ranges_slice(ranges)},")
     print("};")
     print()
 

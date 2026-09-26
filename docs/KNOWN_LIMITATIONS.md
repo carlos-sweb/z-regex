@@ -5,7 +5,8 @@ zregex regex engine. Every claim below was checked by direct execution against t
 current source tree (compiling small probe programs against the `zregex` module and
 observing the actual result), not inferred from design docs or past status reports.
 
-## Version: 402/402 unit/integration tests passing, 168/168 (100%) on a test262-derived
+## Version: 0.2.0 (F1 closed: test262 2846/3017, see "F1 closed" below). The rest of this
+header describes the earlier state: 402/402 unit/integration tests passing, 168/168 (100%) on a test262-derived
 conformance sample (Phases 0, 1, 2 (now including duplicate named groups across
 mutually exclusive alternation branches, e.g. `(?<x>a)|(?<x>b)`, matching JS exactly),
 3 (including `\p{...}` General_Category support, 50 binary properties incl.
@@ -41,7 +42,9 @@ older internal notes had previously (incorrectly) listed as broken:
 - **`\W`, `\S` negation** — correctly inverted (an older internal note claimed these were
   "parsed but not correctly inverted"; that is no longer true).
 - **Counted quantifiers** `{n}`, `{n,}`, `{n,m}` and their lazy forms `{n,m}?`.
-- **Possessive quantifiers** `*+`, `++`, `?+` — verified non-backtracking (`a++a` correctly
+- **Possessive quantifiers** `*+`, `++`, `?+` — an opt-in extension since F1b
+  (`CompileOptions.possessive = true`; by default `a*+` is a SyntaxError, as in JS). With the
+  opt-in, verified non-backtracking (`a++a` correctly
   fails to match `"aaaa"` because the possessive `a++` consumes all four `a`s and refuses
   to give any back).
 - **Character classes** `\d \D \w \W \s \S`, `[abc]`, `[^abc]`, `[a-z]`.
@@ -103,10 +106,12 @@ older internal notes had previously (incorrectly) listed as broken:
 - **Character classes can contain multi-byte members and ranges** *(added in Phase 3)* —
   `[é]`, `[a-\u{2FF}]`, `[\u{1F600}-\u{1F64F}]` (and negated forms, `[^...]`) now work
   correctly, including with quantifiers (`[é]+`). New `CHAR_CLASS_RANGES`/
-  `CHAR_CLASS_RANGES_INV` opcodes hold up to `opcodes.MAX_CLASS_RANGES` (8) code-point
-  ranges and decode UTF-8 at match time; classes with only byte-range (≤ U+007F) members
-  still use the original 256-bit bitmap opcodes, unchanged. A class needing more than 8
-  ranges is a compile-time `error.TooManyRanges` rather than a silent truncation. This
+  `CHAR_CLASS_RANGES_INV` opcodes hold up to `opcodes.MAX_CLASS_RANGES` code-point
+  ranges (30 since F1a; 8 before) and decode UTF-8 at match time; classes with only
+  byte-range (≤ U+007F) members still use the original 256-bit bitmap opcodes,
+  unchanged. Since F1a the codegen sorts and merges overlapping/adjacent ranges first
+  (`[\s\S]` is one range). A class still needing more than 30 ranges after merging is
+  a compile-time `error.TooManyRanges` rather than a silent truncation. This
   closes out the character-class work Phase 1 deliberately deferred (see Phase 1's notes
   in the compatibility plan).
 - **`sticky` option (JS `y` flag)** *(added in Phase 5a)* — `CompileOptions{ .sticky =
@@ -499,6 +504,283 @@ of what this harness currently checks," not "0 known JS RegExp incompatibilities
 unblocked-but-not-yet-implemented items in the summary table below (`\p{...}`, case
 folding, `u`/`v` flags, `$1`/`$&` in `replace`) are real gaps this sample doesn't exercise.
 
+### F1 closed (v0.2.0)
+
+**test262: 2846/3017** (F0b baseline: 2733; F1's target was 2838), with no
+regression at any step. F1 closed deviations D1-D5, D8, D9, D13 and D16 of
+`docs/REGEX_TIERS_PLAN.md` §2.3 (see "Behavior changes in F1" below for what
+changes for callers). No test262 entry is attributed to F1 any more; what is
+left is F3 (10, D6), F5 (122, Unicode tables), F6a (2), F6b (18, lookbehind)
+and 19 host-side entries.
+
+**Known divergences from V8 (`zig build differential-v8`, seed 0xf1c, 4000
+generated patterns):** 11,043 comparisons, 10,401 identical, 642 different,
+15 `StepLimitExceeded`, 0 crashes, 0 rejections. The 642, classified by
+pattern and subject (not bugs introduced by F1):
+- **248: D6** (a subject with an astral character matched without `u`: `.`
+  consumes the whole code point instead of one UTF-16 code unit). Fixed by
+  F3 (abstract Subject, WTF-8/UTF-16).
+- **394: quantifier iteration semantics**, all on patterns with a quantified
+  group: an iteration that matches empty is accepted where ECMA-262 discards
+  it (`(a*?){1,2}` on "a" gives [0,0], V8 [0,1]), and a group's captures are
+  not cleared at the start of each iteration. 326 differ only in captures,
+  68 in the overall match too. Fixed by F4b (spec RepeatMatcher).
+
+**Skipped tests:** `zig build test` skips 3 tests in Debug and 1 in
+ReleaseSafe. Only two tests are skipped in source: D15 (`()\1{1000}`, until
+F6a) and "MAX_NESTING_DEPTH levels fit in a 1 MiB stack", which skips in
+Debug only (until F2) and is counted twice because `src/parser/parser.zig`
+is compiled into two test binaries (the library's and the C API's). So
+Debug = D15 + 2x nesting, ReleaseSafe = D15.
+
+**PatternTooLarge:** compiled bytecode is capped at `MAX_PROGRAM_BYTES` =
+16 MiB (`src/codegen/generator.zig`); a larger program is
+`error.PatternTooLarge`. Counted repeats are unrolled, so nested counts
+multiply (`(?:a{65536}){65536}` would be 2^32 copies). The value is measured:
+`a{65536}`, the largest single-atom repeat, is 320 KiB, so the cap holds 51
+of them (`(?:a{65536}){51}` compiles, `{52}` doesn't, tested), and a program
+at the cap compiles in ~124 ms in ReleaseSafe (~400 ms in Debug); the i32
+jump-offset limit is 128x higher. F5's counted loops (D10) remove the
+unrolling.
+
+### test262 baseline (F0b)
+
+The real test262 measurement that replaces the sample above as the semantic
+verdict (see `docs/REGEX_TIERS_PLAN.md`, phase F0b). Harness:
+`scripts/test262/` (see its README); run with `zig build test262`, which
+fails on any regression against `scripts/test262/baseline.json`.
+
+- **test262 revision** `7ab7fafa0003f73fc85c1b95d88094d33f7eb8bd`
+  (`scripts/test262/TEST262_SHA`), Node v22.22.2, ReleaseSafe build,
+  8 MiB native stack for FFI calls. Measured 2026-09-25.
+- **Scope**: `built-ins/RegExp`, `language/literals/regexp` and their Annex B
+  counterparts. 2189 files, 3996 entries (strict and sloppy run separately).
+  `built-ins/String/prototype/{match,replace,split,...}` is not included yet.
+- **Engine suite** (baseline; the host suite and skipped tests excluded):
+  3017 entries, **2733 pass (90.6 %)**, 117 fail, 152 zregex compile errors,
+  15 unextracted, 0 crashes, 0 timeouts.
+- **Of the 2080 entries that actually exercise zregex, 1811 pass (87.1 %).**
+- **Host suite** (`built-ins/RegExp/prototype/exec`, which tests the harness's
+  own JS `RegExpBuiltinExec`, not zregex): 152/152 pass.
+- **Skipped** (not in the baseline), each with a typed `reason`:
+  513 `skipped_host` -- 497 `host_feature` (features Node 22's V8 lacks:
+  RegExp modifiers, duplicate named groups, `RegExp.escape`, legacy RegExp
+  features), 14 `v8_behind_spec` (tests that also fail in plain V8 without
+  zregex, found by the harness's control run: `flags`/`unicode` handling in
+  `@@match`/`@@replace`), 2 `host_flags` (literal flag validation) -- and
+  314 `skipped_feature` (the `v` flag, until F5; `features.json`).
+- **The baseline assumes an 8 MiB native stack in the caller.** Consumers
+  that call zregex with less stack (FFI layers, threads with small stacks)
+  can crash on patterns with deep recursion (see D14 in
+  `docs/REGEX_TIERS_PLAN.md`); F6a's explicit heap stack removes the
+  dependency.
+- A full run takes ~65 s wall with 4 workers; ~95 % of it is
+  `property-escapes/generated`. The control run re-runs every non-passing
+  entry without zregex, adding ~10 s.
+
+**Read the percentages with care.** 937 of the 3017 engine entries
+(31.1 %) never call into zregex at all (getters, property descriptors,
+species, names): they pass or fail on V8 and on the harness's host code.
+The median number of zregex `exec` calls per entry is 1 (mean 3.5). The
+"Pass (of ran)" column therefore measures the host as much as the engine;
+**"Pass (of exercised)" is the column that describes zregex.** (A 100-file
+sample stratified by directory put the non-exercising share at ~55 % with
+a median of 0; the full suite is dominated by `property-escapes/generated`,
+where every entry exercises zregex.)
+
+| Directory | Ran | Pass (of ran) | Exercise zregex | Pass (of exercised) | Skipped | Time (s) | Non-pass statuses |
+|---|---|---|---|---|---|---|---|
+| annexB/built-ins/RegExp | 20 | 12 (60.0 %) | 12 | 4 (33.3 %) | 0 | 3.4 | fail 6, zregex_compile_error 2 |
+| annexB/built-ins/RegExp/legacy-accessors | 0 | 0 (—) | 0 | 0 (—) | 48 | 0.0 | — |
+| annexB/built-ins/RegExp/named-groups | 4 | 0 (0.0 %) | 4 | 0 (0.0 %) | 0 | 0.0 | zregex_compile_error 4 |
+| annexB/built-ins/RegExp/prototype | 46 | 46 (100.0 %) | 24 | 24 (100.0 %) | 6 | 0.1 | — |
+| annexB/language/literals/regexp | 16 | 8 (50.0 %) | 16 | 8 (50.0 %) | 0 | 0.0 | fail 6, zregex_compile_error 2 |
+| built-ins/RegExp | 820 | 798 (97.3 %) | 520 | 498 (95.8 %) | 156 | 2.3 | fail 12, zregex_compile_error 10 |
+| built-ins/RegExp/Symbol.species | 8 | 8 (100.0 %) | 0 | 0 (—) | 0 | 0.0 | — |
+| built-ins/RegExp/dotall | 8 | 2 (25.0 %) | 8 | 2 (25.0 %) | 0 | 0.0 | fail 6 |
+| built-ins/RegExp/escape | 0 | 0 (—) | 0 | 0 (—) | 40 | 0.0 | — |
+| built-ins/RegExp/lookBehind | 34 | 18 (52.9 %) | 34 | 18 (52.9 %) | 0 | 0.1 | fail 16 |
+| built-ins/RegExp/match-indices | 28 | 24 (85.7 %) | 28 | 24 (85.7 %) | 0 | 0.1 | fail 2, zregex_compile_error 2 |
+| built-ins/RegExp/named-groups | 52 | 38 (73.1 %) | 44 | 30 (68.2 %) | 20 | 0.1 | fail 2, zregex_compile_error 12 |
+| built-ins/RegExp/property-escapes | 146 | 136 (93.2 %) | 144 | 134 (93.1 %) | 0 | 0.0 | zregex_compile_error 2, fail 8 |
+| built-ins/RegExp/prototype | 20 | 20 (100.0 %) | 0 | 0 (—) | 0 | 0.0 | — |
+| built-ins/RegExp/prototype/Symbol.match | 100 | 98 (98.0 %) | 50 | 48 (96.0 %) | 6 | 0.1 | fail 2 |
+| built-ins/RegExp/prototype/Symbol.matchAll | 52 | 52 (100.0 %) | 14 | 14 (100.0 %) | 0 | 0.1 | — |
+| built-ins/RegExp/prototype/Symbol.replace | 130 | 126 (96.9 %) | 58 | 54 (93.1 %) | 8 | 0.2 | fail 2, zregex_compile_error 2 |
+| built-ins/RegExp/prototype/Symbol.search | 46 | 46 (100.0 %) | 10 | 10 (100.0 %) | 0 | 0.0 | — |
+| built-ins/RegExp/prototype/Symbol.split | 88 | 88 (100.0 %) | 36 | 36 (100.0 %) | 0 | 0.1 | — |
+| built-ins/RegExp/prototype/dotAll | 16 | 16 (100.0 %) | 0 | 0 (—) | 0 | 0.0 | — |
+| built-ins/RegExp/prototype/flags | 30 | 30 (100.0 %) | 0 | 0 (—) | 2 | 0.0 | — |
+| built-ins/RegExp/prototype/global | 20 | 20 (100.0 %) | 0 | 0 (—) | 0 | 0.0 | — |
+| built-ins/RegExp/prototype/hasIndices | 16 | 16 (100.0 %) | 0 | 0 (—) | 0 | 0.0 | — |
+| built-ins/RegExp/prototype/ignoreCase | 20 | 20 (100.0 %) | 0 | 0 (—) | 0 | 0.0 | — |
+| built-ins/RegExp/prototype/multiline | 20 | 20 (100.0 %) | 0 | 0 (—) | 0 | 0.0 | — |
+| built-ins/RegExp/prototype/source | 24 | 22 (91.7 %) | 10 | 8 (80.0 %) | 0 | 0.0 | fail 2 |
+| built-ins/RegExp/prototype/sticky | 16 | 16 (100.0 %) | 0 | 0 (—) | 0 | 0.0 | — |
+| built-ins/RegExp/prototype/test | 90 | 90 (100.0 %) | 50 | 50 (100.0 %) | 0 | 0.1 | — |
+| built-ins/RegExp/prototype/toString | 18 | 18 (100.0 %) | 0 | 0 (—) | 0 | 0.0 | — |
+| built-ins/RegExp/prototype/unicode | 16 | 16 (100.0 %) | 0 | 0 (—) | 0 | 0.0 | — |
+| built-ins/RegExp/prototype/unicodeSets | 0 | 0 (—) | 0 | 0 (—) | 47 | 0.0 | — |
+| built-ins/RegExp/regexp-modifiers | 0 | 0 (—) | 0 | 0 (—) | 124 | 0.0 | — |
+| built-ins/RegExp/regexp-modifiers/syntax | 0 | 0 (—) | 0 | 0 (—) | 16 | 0.0 | — |
+| built-ins/RegExp/unicodeSets/generated | 0 | 0 (—) | 0 | 0 (—) | 228 | 0.0 | — |
+| language/literals/regexp | 149 | 99 (66.4 %) | 56 | 21 (37.5 %) | 85 | 6.7 | unextracted 15, fail 35 |
+| language/literals/regexp/named-groups | 58 | 44 (75.9 %) | 56 | 42 (75.0 %) | 0 | 0.0 | zregex_compile_error 2, fail 12 |
+
+Groups with huge subjects (every code point of a property, or loops over
+the code space), which dominate run time:
+
+| Directory | Ran | Pass (of ran) | Exercise zregex | Pass (of exercised) | Skipped | Time (s) | Non-pass statuses |
+|---|---|---|---|---|---|---|---|
+| built-ins/RegExp/CharacterClassEscapes | 24 | 20 (83.3 %) | 24 | 20 (83.3 %) | 0 | 13.5 | fail 4 |
+| built-ins/RegExp/property-escapes/generated | 882 | 766 (86.8 %) | 882 | 766 (86.8 %) | 35 | 225.3 | zregex_compile_error 114, fail 2 |
+
+**Root causes worth knowing before reading the failures:**
+
+- **`UnknownUnicodeProperty`: short aliases of binary properties** (`\p{Alpha}`,
+  `\p{AHex}`, `\p{Bidi_C}`, `\p{CWU}`, `\p{Dia}`, ...) and
+  `Changes_When_NFKC_Casefolded` are not recognized. One root cause, not 114
+  bugs: a fix in F5 unblocks ~114 entries (57 patterns) of
+  `property-escapes/generated`. **When F5 fixes it, those entries will run
+  `testPropertyEscapes`' per-symbol loop (up to ~1.1 M calls) for the first
+  time, so the first run of that group may take longer and hit timeouts;
+  today's ~57 s for the group is not representative of the gate's cost
+  from F5 on.**
+- **`\p{General_Category=Other}` doesn't include unassigned code points
+  (Cn)** (e.g. U+038B): a bug in the generated Unicode tables, not in the
+  `\p{}` logic (tracked in F5 with pinning the Unicode version).
+- Known ECMA-262 deviations of the parser/matcher show up as expected:
+  non-`u` `.` consuming a whole supplementary character and lone surrogate
+  halves (D6) and lookbehind (D7). The rest of what this baseline showed
+  (Annex B forms, escaped surrogate pairs under `u` (D13), the `u`-mode
+  parse-negative tests, group names, deep nesting) was fixed in F1 (see
+  "F1 closed" above and "Behavior changes in F1" below). See
+  `docs/REGEX_TIERS_PLAN.md` §2.3.
+- The recursive matcher bounds recursion depth, not stack bytes (D14): some
+  patterns (e.g. `/<body.*>((.*\n?)*?)<\/body>/i`) crash on a 1 MiB native
+  stack and pass on 8 MiB. Measured in F0d: the adversarial `(a+)+b` and
+  `(a|aa)*c` on 41 bytes segfault with 1 MiB of stack and return
+  `StepLimitExceeded` in 44-48 ms with 8 MiB. **The caller's stack is the
+  line between answering and crashing.** The harness uses 8 MiB; F6a's
+  explicit stack addresses it. **Re-measured after D9 (F1c)**, whose smaller
+  per-frame match result shrank every frame: in ReleaseSafe the `<body...>`
+  pattern needs ~103 KiB, `(a+)+b` ~159 KiB and `(a|aa)*c` ~503 KiB, so all
+  three answer on 1 MiB (the 1 MiB regression test is enabled); in Debug
+  ~615 KiB, ~983 KiB and ~3.1 MiB. The adversarial cases take 28-35 ms.
+- **The recursion limit doesn't fit any default stack (D15).** The
+  recursion counter (limit 1000) protects depth, not stack bytes, and each
+  level of the matcher's `matchFrom` -> `matchBackRef` chain costs ~25.3 KiB
+  of stack in ReleaseSafe (~75.5 KiB in Debug; measured in F0d as the
+  minimum stack for `()\1{N}`, N = 100/200/400, exactly linear). Reaching
+  the limit takes ~25 MiB (~75 MiB in Debug): with 64 MiB, `()\1{1000}`
+  returns `RecursionLimitExceeded` in ReleaseSafe, so the counter does cover
+  the path, but on an 8 MiB stack it crashes first, from ~320 repetitions
+  (~105 in Debug). Found by the F0d parser fuzzer (reduced from
+  `\2{9007199254740991}\[*`); skipped test in `tests/regression_tests.zig`
+  until F6a's explicit heap stack with a byte limit. **Re-measured after D9
+  (F1c):** ~1.8 KiB per level in ReleaseSafe (~11.2 KiB in Debug); on 8 MiB,
+  ReleaseSafe now reaches the limit (`RecursionLimitExceeded`) instead of
+  crashing, Debug still crashes, and neither gives the spec's empty match.
+- **256 capturing groups overflow the group counter (D16).** The parser's
+  capture counter is a `u8`: a pattern with 256 *sequential* capturing
+  groups (`(a)(a)...`) panics with an integer overflow in ReleaseSafe and
+  Debug, and in ReleaseFast silently wraps to 0, so group 256 overwrites
+  capture 0 (the whole match). 255 groups work. The nesting limit doesn't
+  stop it (the groups aren't nested) and the fuzzer's patterns are too
+  short to reach it. **Fixed in F1c** (D9: u16 indices, an explicit
+  `TooManyCaptures` error past 65535 groups, one capture slot per group).
+- **Nested capturing groups: stack per level (T15).** Before F1c the
+  recursive matcher spent ~49 KiB per nested capturing group in ReleaseSafe
+  (~147 KiB in Debug), so `S15.10.2.8_A3_T15` (200 nested `(`) needed
+  ~9.8 MiB and crashed on 8 MiB. **After D9 (F1c): ~3.4 KiB per level in
+  ReleaseSafe and ~21.7 KiB in Debug** (200 levels ~0.7 MiB / ~4.3 MiB), and
+  T15 passes on 8 MiB. That per-level cost is what F6a's explicit stack has
+  to beat. Sequential groups cost three matcher levels each, so through the
+  public API a pattern with ~330+ groups reaches the recursion limit (1000)
+  and returns `RecursionLimitExceeded` (a defined error) until F6a.
+- **Parser fuzzing coverage (F0d).** Parser and `analyze`: full coverage,
+  no crash or leak (20,000 patterns x 3 flag modes, plus 1.5 M in an
+  uncommitted ReleaseSafe run). Matcher: **partial until F6a**: patterns in
+  the expert tier (T2), and those `analyze` can't classify, are compiled but
+  not executed (1,757 of the 6,537 pattern x mode pairs that compile: 1,159
+  T2, 598 unclassifiable). So T0/T1 patterns have no fuzz crashes; T2 is not
+  covered by the fuzzer until F6a. The corpus part runs in `zig build test`;
+  the stress in `zig build test-fuzz-stress` (by hand or weekly CI).
+- Per-phase breakdown of the non-passing entries:
+  `node scripts/test262/categorize.mjs` (explicit rules, no unclassified
+  entries at this baseline): F1 113 (111 in its target plus the 2 D5
+  entries of `dotall/without-dotall-unicode`), F3 10, F5 122, F6a 2, F6b 18,
+  and 19 host-side: 15 lexer-level tests whose literal can't be extracted and
+  4 (`S7.8.5_A1.5/A2.5`) where `\` + LineTerminator is a JS *literal* error
+  but a valid pattern, on which zregex agrees with V8.
+
+**Blind spots**: a pattern V8 rejects but zregex would accept via
+`new RegExp(...)` isn't measured (V8 throws first); parse-negative tests
+whose literal can't be extracted are `unextracted`; a non-`u` `lastIndex`
+between the halves of a surrogate pair can't be expressed in WTF-8. Details
+in `scripts/test262/README.md`.
+
+### Behavior changes in F1 (for consumers such as z-string)
+
+F1 (`docs/REGEX_TIERS_PLAN.md`) makes the parser and matcher follow ECMA-262 where
+they didn't, so some patterns now compile or match differently. z-string pins zregex
+to a commit (`85afd1f`), so none of this reaches it until the pin is bumped; when it
+is, run z-string's `zig build test`. Changes so far (F1a):
+
+- **`u`-mode strictness.** Under `unicode = true`, malformed `\p`/`\P`, `\c`, `\x`,
+  `\u` (and `\u{...}` above U+10FFFF), a `\N` past the last capturing group, a
+  quantified lookahead, and a class escape as a range endpoint (`[\d-a]`) are
+  SyntaxErrors instead of Annex B literals.
+- **In every mode:** a quantified lookbehind (`(?<=a)?`) is a SyntaxError; with any named
+  group in the pattern, `\k` must be a complete `\k<name>`.
+- **`\xHH` above 0x7F** is the code point U+00HH (`/\xFF/` matches "ÿ"), not the raw byte.
+- **Escaped surrogates:** `\uD800` is the WTF-8 lone surrogate (it was a literal "u");
+  under `u`, `\uD834\uDF06` is one code point (D13).
+- **`\s`/`\S`** are ECMA-262 WhiteSpace + LineTerminator (NBSP, Zs, U+2028/9, U+FEFF…),
+  with or without `u` (D4).
+- **Line terminators** are LF, CR, U+2028 and U+2029 for `.` without `s` and for `^`/`$`
+  with `m` (D5); CR alone ends a line now.
+- **Search start positions:** `find`/`findAll` (and the C API search) no longer start a
+  match inside a UTF-8 sequence (part of D12).
+- **A hyphen where a class atom is expected starts a range:** `[--0]` is `-`..`0`.
+
+F1b:
+
+- **Braces and brackets (D1, D2):** `{,5}`, `{}`, a `{` that doesn't start a quantifier,
+  and a lone `}` or `]` are literal text (Annex B); `{,5}` used to mean `{0,5}`. With `u`
+  they are SyntaxErrors.
+- **`[]` (D3)** is valid and never matches (it was `error.EmptyCharClass`).
+- **Annex B escapes:** an invalid `\c` is a literal backslash (`/\c0/` matches "\c0", it
+  used to drop the backslash); `\0<digit>` and a `\N` past the group count are legacy
+  octal (`\1` with no groups is U+0001; it used to be a backreference that matched
+  empty), `\8`/`\9` past it are "8"/"9"; `\10` with ten groups is a backreference; in a
+  class `\1`-`\7` are octal; `\k<a>` with no named group in the pattern is the text
+  "k<a>" (it was `error.UnknownGroupName`).
+- **Possessive quantifiers (D8)** are opt-in (`CompileOptions.possessive`); by default
+  `a*+` is a SyntaxError. **Callers that relied on them must set the option.**
+
+F1c:
+
+- **Capture groups have no fixed cap (D9):** more than 16 groups are
+  captured (they were silently dropped), `\10`+ refer to them, and past
+  65535 groups the pattern is `error.TooManyCaptures`. `MatchResult.captures`
+  has one slot per group of the pattern (it always had 16). 256+ groups no
+  longer panic or overwrite the whole match (D16).
+- **C API:** the C API's group index parameters are `size_t`
+  (they were `uint8_t`), and `zregex_match_group` no longer rejects groups
+  past 9.
+- **A backreference to a group re-entered but not closed yet** matches
+  empty (it overflowed: a panic in safe builds).
+
+Two bugs fixed in F1a were **pre-existing, not covered by the F0d baseline, and found
+by F1a's tests**:
+- **Double free in `parseCharClass` on an allocation failure** (`[a-]`: the `a` node was
+  freed by its own `errdefer` and again by the class that already owned it). Found by
+  `checkAllAllocationFailures` in `tests/syntax_tests.zig`.
+- **`[\D]`/`[\W]`/`[\S]` inside a class missed every code point above U+00FF** (the
+  negated shorthand was complemented within 0-255; the standalone forms were right).
+  Found by the D4 tests.
+
 ### `test_()` vs `find()` — a common source of confusion
 
 `test_()` requires the **entire** input string to match (it's an anchored full match), not
@@ -566,10 +848,10 @@ standalone escapes at all — falling through to literal `'v'`/`'f'` even *witho
 new flag, unlike `\n`/`\r`/`\t` right next to them in the same `switch`. Fixed
 unconditionally (not gated behind `unicode`), since it was simply wrong before, and
 needed anyway so `\v`/`\f` wouldn't become spuriously ungrammatical under the new
-strict check. **Not yet modeled** under `unicode = true`: malformed `\x`/`\u`/`\c`/`\k`/
-`\p` still fall back to Annex-B leniency rather than erroring (real `u` mode requires
-each to be well-formed); a backreference to a group number that doesn't exist in the
-pattern isn't rejected.
+strict check. **Since F1a** `unicode = true` also rejects malformed `\x`/`\u`/`\c`/`\k`/
+`\p`, `\u{...}` above U+10FFFF, a `\N` past the pattern's last capturing group, a
+quantified lookahead, and a class escape used as a range endpoint (`[\d-a]`); see
+"Behavior changes in F1" below.
 
 `CompileOptions.v` *(added later in the session)* exists too, covering exactly one
 piece of real `v`-mode syntax: character-class set operations, difference (`[A--B]`,
@@ -729,13 +1011,17 @@ strictness is itself only the unrecognized-escape slice — see above).
   or more than 4 `\p{...}`/`\P{...}` tests (`error.TooManyClassProperties`)
 - Alternations nested more than 32 levels deep (`error.AlternationTooDeep`, needed for
   duplicate-named-group mutual-exclusion tracking) — far beyond any realistic pattern
+- Nesting of groups, lookarounds and classes deeper than 256 levels is
+  `error.NestingTooDeep` in every build mode (today groups hit the 31-level
+  `AlternationTooDeep` cap first, until F1). The stack that nesting needs does
+  depend on the build: ~1.2 KB per level in ReleaseSafe (256 levels ≈ 318 KB),
+  but ~15.5 KB per level in Debug, where deep nesting on a small stack crashes
+  before the limit is reached (see `docs/REGEX_TIERS_PLAN.md`, F0d/F2)
 
 ### ❌ Not Suitable For:
 - `case_insensitive` matching of non-ASCII character *ranges* (`[À-Ö]`) or
   `\p{...}`-in-a-class members — only literal non-ASCII characters (standalone or as a
   single class member) are case-folded, see above
-- Full `u`-mode strictness (malformed `\x`/`\u`/`\c`/`\k`/`\p` still fall back
-  leniently; a backreference to a nonexistent group isn't rejected)
 - Chained (`[A--B--C]`) or deeply nested `v`-mode class set operations, `\q{...}`
   multi-string literals, or `v`'s own additional reserved-punctuator restrictions
 - Calling zregex directly from C or C++: no headers, wrapper library, or examples are

@@ -178,11 +178,11 @@ pub const BytecodeWriter = struct {
     /// negated:u8 followed by the same range-table + property-table layout
     /// `emitCharClassUnicode` writes.
     fn emitClassSetOperand(self: *Self, operand: ClassSetOperand) !void {
-        std.debug.assert(operand.ranges.len <= opcodes.MAX_CLASS_RANGES);
+        std.debug.assert(operand.ranges.len <= opcodes.MAX_SET_OP_RANGES);
         std.debug.assert(operand.properties.len <= opcodes.MAX_CLASS_PROPERTIES);
         try self.code.append(if (operand.negated) 1 else 0);
         try self.code.append(@intCast(operand.ranges.len));
-        for (0..opcodes.MAX_CLASS_RANGES) |i| {
+        for (0..opcodes.MAX_SET_OP_RANGES) |i| {
             const range = if (i < operand.ranges.len) operand.ranges[i] else [2]u32{ 0, 0 };
             var buf: [4]u8 = undefined;
             std.mem.writeInt(u32, &buf, range[0], .little);
@@ -345,9 +345,10 @@ test "BytecodeWriter: emit instruction with operand" {
     try writer.emit1(.SAVE_START, 5);
 
     const code = writer.bytecode();
-    try std.testing.expectEqual(@as(usize, 2), code.len);
+    try std.testing.expectEqual(@as(usize, 3), code.len); // opcode + u16 group
     try std.testing.expectEqual(@as(u8, 0x20), code[0]);
     try std.testing.expectEqual(@as(u8, 5), code[1]);
+    try std.testing.expectEqual(@as(u8, 0), code[2]);
 }
 
 test "BytecodeWriter: emit instruction with 2 operands" {
@@ -449,11 +450,11 @@ test "BytecodeWriter: offset tracking" {
     try writer.emitSimple(.MATCH); // 1 byte
     try std.testing.expectEqual(@as(usize, 1), writer.offset());
 
-    try writer.emit1(.SAVE_START, 0); // 2 bytes
-    try std.testing.expectEqual(@as(usize, 3), writer.offset());
+    try writer.emit1(.SAVE_START, 0); // 3 bytes (u16 group)
+    try std.testing.expectEqual(@as(usize, 4), writer.offset());
 
     try writer.emit2(.CHAR_RANGE, 0, 0); // 9 bytes
-    try std.testing.expectEqual(@as(usize, 12), writer.offset());
+    try std.testing.expectEqual(@as(usize, 13), writer.offset());
 }
 
 test "BytecodeWriter: complex program" {
