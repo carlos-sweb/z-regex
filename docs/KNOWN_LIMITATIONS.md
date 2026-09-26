@@ -687,13 +687,21 @@ is, run z-string's `zig build test`. Changes so far (F1a):
 - **Escaped surrogates:** `\uD800` is the WTF-8 lone surrogate (it was a literal "u");
   under `u`, `\uD834\uDF06` is one code point (D13).
 - **`\s`/`\S`** are ECMA-262 WhiteSpace + LineTerminator (NBSP, Zs, U+2028/9, U+FEFF…),
-  with or without `u` (D4). `[\D]`/`[\W]`/`[\S]` inside a class now cover code points
-  above U+00FF (they didn't).
+  with or without `u` (D4).
 - **Line terminators** are LF, CR, U+2028 and U+2029 for `.` without `s` and for `^`/`$`
   with `m` (D5); CR alone ends a line now.
 - **Search start positions:** `find`/`findAll` (and the C API search) no longer start a
   match inside a UTF-8 sequence (part of D12).
 - **A hyphen where a class atom is expected starts a range:** `[--0]` is `-`..`0`.
+
+Two bugs fixed in F1a were **pre-existing, not covered by the F0d baseline, and found
+by F1a's tests**:
+- **Double free in `parseCharClass` on an allocation failure** (`[a-]`: the `a` node was
+  freed by its own `errdefer` and again by the class that already owned it). Found by
+  `checkAllAllocationFailures` in `tests/syntax_tests.zig`.
+- **`[\D]`/`[\W]`/`[\S]` inside a class missed every code point above U+00FF** (the
+  negated shorthand was complemented within 0-255; the standalone forms were right).
+  Found by the D4 tests.
 
 ### `test_()` vs `find()` — a common source of confusion
 
