@@ -156,3 +156,18 @@ test "regression: a chain of empty backreferences doesn't overflow the stack (fu
     defer m.deinit();
     try testing.expectEqual(@as(usize, 0), m.end);
 }
+
+// Found by the F1c long fuzz run (reduced from
+// `(?<n>A\u{1F600}{9007199254740991}){9007199254740991}`): nested
+// counted repeats are unrolled, so the counts multiply (here 2^32 copies);
+// the codegen built bytecode past 2 GiB and panicked on an i32 jump offset.
+// It is now error.PatternTooLarge past MAX_PROGRAM_BYTES. Reachable only
+// since F1b, when `\10{` stopped rejecting the pattern that contained it.
+test "regression: nested counted repeats past the program cap are PatternTooLarge, not a panic (F1c fuzz)" {
+    for ([_][]const u8{ "(?:a{65536}){65536}", "(?:(?:a{1000}){1000}){1000}", "(\\u{1F600}{70000}){70000}" }) |p| {
+        try testing.expectError(error.PatternTooLarge, zregex.Regex.compile(testing.allocator, p));
+    }
+    // Large but reasonable unrolling still compiles.
+    var re = try zregex.Regex.compile(testing.allocator, "(?:a{100}){100}");
+    re.deinit();
+}

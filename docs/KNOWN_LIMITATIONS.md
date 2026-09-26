@@ -726,7 +726,7 @@ F1c:
   65535 groups the pattern is `error.TooManyCaptures`. `MatchResult.captures`
   has one slot per group of the pattern (it always had 16). 256+ groups no
   longer panic or overwrite the whole match (D16).
-- **Possessive / C API:** the C API's group index parameters are `size_t`
+- **C API:** the C API's group index parameters are `size_t`
   (they were `uint8_t`), and `zregex_match_group` no longer rejects groups
   past 9.
 - **A backreference to a group re-entered but not closed yet** matches

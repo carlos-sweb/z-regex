@@ -56,8 +56,11 @@ pub fn checkPattern(gpa: std.mem.Allocator, pattern: []const u8) !void {
             .u => .{ .unicode = true },
             .v => .{ .v = true },
         };
+        const analyzed_syntax_error = if (analysis.unclassifiable) |u| u == .parse_error else false;
         if (zregex.Regex.compileWithOptions(gpa, pattern, options)) |re| {
             defer re.deinit();
+            // F1 gate: analyze and compile agree on what is a SyntaxError.
+            if (analyzed_syntax_error) return reportDisagreement(pattern, mode, "analyze: parse error, compile: ok");
             if (!execute) {
                 if (analysis.min_tier == null) {
                     stats.skipped_unclassifiable += 1;
@@ -77,7 +80,24 @@ pub fn checkPattern(gpa: std.mem.Allocator, pattern: []const u8) !void {
             }
         } else |err| switch (err) {
             error.OutOfMemory => return err,
-            else => {}, // any defined compile error is fine
+            else => {
+                // Any defined compile error is fine, but a parse error must be
+                // one for analyze too (codegen-only errors, e.g.
+                // TooManyRanges, are not parse errors).
+                if (isParseError(err) and !analyzed_syntax_error) return reportDisagreement(pattern, mode, "compile: parse error, analyze: classified");
+            },
         }
     }
+}
+
+fn isParseError(err: anyerror) bool {
+    inline for (@typeInfo(zregex.ParseError).error_set.?) |e| {
+        if (err == @field(anyerror, e.name)) return true;
+    }
+    return false;
+}
+
+fn reportDisagreement(pattern: []const u8, mode: Mode, what: []const u8) error{AnalyzeCompileDisagree} {
+    std.debug.print("\n/{s}/ ({s}): {s}\n", .{ pattern, @tagName(mode), what });
+    return error.AnalyzeCompileDisagree;
 }
