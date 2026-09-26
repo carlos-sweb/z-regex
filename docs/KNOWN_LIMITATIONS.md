@@ -732,6 +732,37 @@ starts inside a character. That also fixes captures that were silently wrong:
 `(?<=(.))x` on `"éx"` captured the byte `A9` (half a character) and now captures `é`, and
 `(?<=([^a]))x` on `"😀x"` captured `80` and now captures `😀`.
 
+### F3c: `execAt`, `Scratch` and UTF-16 subjects
+
+- **Execution primitive:** `Regex.execAt(subject, index, *Scratch, *MatchSlots,
+  ExecLimits)` over `.{ .wtf8 = bytes }` or `.{ .utf16 = units }`, with indices in the
+  subject's units. With the `sticky` option it matches only at `index`; otherwise it
+  searches forward with `advanceIndex`. An index past the end is no match; an index inside
+  a character is `error.InvalidIndex`. With a warm `Scratch` it doesn't allocate.
+  `Scratch` is not thread-safe or reentrant (one per thread, a second one inside a
+  callback); in safe builds using one twice at once panics.
+- **Still code points everywhere:** until F3d a pattern without `u` also decodes code
+  points, in both encodings. `CompileResult.mode` already records what F3d will use.
+- **`ExecLimits`** is the old `ExecOptions`: the step budget is still per start position
+  (F6a, D11).
+- **Byte-offset facade:** `findAt` at an offset inside a character returns `null` (it used
+  to start there). New `Regex.findFrom(input, start)` searches from `start`.
+- **C API:** `zregex_exec_wtf8`, `zregex_exec_utf16`, `zregex_advance_index_wtf8` and
+  `zregex_advance_index_utf16` (the 36 older exports are unchanged). The exec functions
+  reuse a thread-local `Scratch`, whose buffers live until the thread ends.
+  `zregex_search_n` from an offset inside a character starts at the next position.
+- **Pattern bytes:** a lone surrogate written in WTF-8 in the pattern (`ED A0 80`) and `\`
+  before a non-ASCII character are one character, not raw bytes. Raw bytes of an
+  ill-formed pattern still exist (`BYTE`) and only match WTF-8 subjects.
+- **test262 harness** (`scripts/test262/`, `--encoding wtf8|utf16`): until F3d the default
+  and the baseline are WTF-8. From F3d the default is UTF-16 (what a JS host sees),
+  `baseline.json` is regenerated with it, and WTF-8 runs as a cross-check with its own
+  `baseline-wtf8.json`; a test whose status differs between the encodings is reported case
+  by case. Today both give 2848, with identical statuses.
+- **Consumers:** z-string and z-interprete stay on their pinned versions (z-interprete on
+  F1c); F3's changes reach them only when they move the pin. After F3d a consumer that
+  doesn't set `CompileOptions.unicode` for a `u` pattern gets code-unit semantics.
+
 ### test262 baseline (F0b)
 
 The real test262 measurement that replaces the sample above as the semantic
