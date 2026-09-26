@@ -622,7 +622,11 @@ the code space), which dominate run time:
   `(a|aa)*c` on 41 bytes segfault with 1 MiB of stack and return
   `StepLimitExceeded` in 44-48 ms with 8 MiB. **The caller's stack is the
   line between answering and crashing.** The harness uses 8 MiB; F6a's
-  explicit stack addresses it.
+  explicit stack addresses it. **Re-measured after D9 (F1c)**, whose smaller
+  per-frame match result shrank every frame: in ReleaseSafe the `<body...>`
+  pattern needs ~103 KiB, `(a+)+b` ~159 KiB and `(a|aa)*c` ~503 KiB, so all
+  three answer on 1 MiB (the 1 MiB regression test is enabled); in Debug
+  ~615 KiB, ~983 KiB and ~3.1 MiB. The adversarial cases take 28-35 ms.
 - **The recursion limit doesn't fit any default stack (D15).** The
   recursion counter (limit 1000) protects depth, not stack bytes, and each
   level of the matcher's `matchFrom` -> `matchBackRef` chain costs ~25.3 KiB
@@ -633,23 +637,27 @@ the code space), which dominate run time:
   the path, but on an 8 MiB stack it crashes first, from ~320 repetitions
   (~105 in Debug). Found by the F0d parser fuzzer (reduced from
   `\2{9007199254740991}\[*`); skipped test in `tests/regression_tests.zig`
-  until F6a's explicit heap stack with a byte limit.
+  until F6a's explicit heap stack with a byte limit. **Re-measured after D9
+  (F1c):** ~1.8 KiB per level in ReleaseSafe (~11.2 KiB in Debug); on 8 MiB,
+  ReleaseSafe now reaches the limit (`RecursionLimitExceeded`) instead of
+  crashing, Debug still crashes, and neither gives the spec's empty match.
 - **256 capturing groups overflow the group counter (D16).** The parser's
   capture counter is a `u8`: a pattern with 256 *sequential* capturing
   groups (`(a)(a)...`) panics with an integer overflow in ReleaseSafe and
   Debug, and in ReleaseFast silently wraps to 0, so group 256 overwrites
   capture 0 (the whole match). 255 groups work. The nesting limit doesn't
   stop it (the groups aren't nested) and the fuzzer's patterns are too
-  short to reach it. Fixed by F1c(a) (u16 indices and an explicit
-  `TooManyCaptures` error).
-- **200 nested capturing groups need ~9.8 MiB of stack (T15, pending F6a).**
-  `S15.10.2.8_A3_T15` (200 nested `(`) parses, compiles and frees within
-  8 MiB, but the recursive matcher spends ~49 KiB per nested capturing group
-  in ReleaseSafe (~147 KiB in Debug), so the match needs ~9.8 MiB (~29 MiB
-  in Debug): it crashes on 8 MiB and matches on 16 MiB. It also needs more
-  than 16 captures (D9). F1 doesn't count it (target 2838, not 2840); F6a's
-  explicit heap stack makes it reachable. The non-capturing version
-  (`S15.10.2.8_A3_T16`) has no per-level matcher cost and is reachable in F1.
+  short to reach it. **Fixed in F1c** (D9: u16 indices, an explicit
+  `TooManyCaptures` error past 65535 groups, one capture slot per group).
+- **Nested capturing groups: stack per level (T15).** Before F1c the
+  recursive matcher spent ~49 KiB per nested capturing group in ReleaseSafe
+  (~147 KiB in Debug), so `S15.10.2.8_A3_T15` (200 nested `(`) needed
+  ~9.8 MiB and crashed on 8 MiB. **After D9 (F1c): ~3.4 KiB per level in
+  ReleaseSafe and ~21.7 KiB in Debug** (200 levels ~0.7 MiB / ~4.3 MiB), and
+  T15 passes on 8 MiB. That per-level cost is what F6a's explicit stack has
+  to beat. Sequential groups cost three matcher levels each, so through the
+  public API a pattern with ~330+ groups reaches the recursion limit (1000)
+  and returns `RecursionLimitExceeded` (a defined error) until F6a.
 - **Parser fuzzing coverage (F0d).** Parser and `analyze`: full coverage,
   no crash or leak (20,000 patterns x 3 flag modes, plus 1.5 M in an
   uncommitted ReleaseSafe run). Matcher: **partial until F6a**: patterns in
@@ -710,6 +718,19 @@ F1b:
   "k<a>" (it was `error.UnknownGroupName`).
 - **Possessive quantifiers (D8)** are opt-in (`CompileOptions.possessive`); by default
   `a*+` is a SyntaxError. **Callers that relied on them must set the option.**
+
+F1c:
+
+- **Capture groups have no fixed cap (D9):** more than 16 groups are
+  captured (they were silently dropped), `\10`+ refer to them, and past
+  65535 groups the pattern is `error.TooManyCaptures`. `MatchResult.captures`
+  has one slot per group of the pattern (it always had 16). 256+ groups no
+  longer panic or overwrite the whole match (D16).
+- **Possessive / C API:** the C API's group index parameters are `size_t`
+  (they were `uint8_t`), and `zregex_match_group` no longer rejects groups
+  past 9.
+- **A backreference to a group re-entered but not closed yet** matches
+  empty (it overflowed: a panic in safe builds).
 
 Two bugs fixed in F1a were **pre-existing, not covered by the F0d baseline, and found
 by F1a's tests**:
