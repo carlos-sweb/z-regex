@@ -103,10 +103,12 @@ older internal notes had previously (incorrectly) listed as broken:
 - **Character classes can contain multi-byte members and ranges** *(added in Phase 3)* —
   `[é]`, `[a-\u{2FF}]`, `[\u{1F600}-\u{1F64F}]` (and negated forms, `[^...]`) now work
   correctly, including with quantifiers (`[é]+`). New `CHAR_CLASS_RANGES`/
-  `CHAR_CLASS_RANGES_INV` opcodes hold up to `opcodes.MAX_CLASS_RANGES` (8) code-point
-  ranges and decode UTF-8 at match time; classes with only byte-range (≤ U+007F) members
-  still use the original 256-bit bitmap opcodes, unchanged. A class needing more than 8
-  ranges is a compile-time `error.TooManyRanges` rather than a silent truncation. This
+  `CHAR_CLASS_RANGES_INV` opcodes hold up to `opcodes.MAX_CLASS_RANGES` code-point
+  ranges (30 since F1a; 8 before) and decode UTF-8 at match time; classes with only
+  byte-range (≤ U+007F) members still use the original 256-bit bitmap opcodes,
+  unchanged. Since F1a the codegen sorts and merges overlapping/adjacent ranges first
+  (`[\s\S]` is one range). A class still needing more than 30 ranges after merging is
+  a compile-time `error.TooManyRanges` rather than a silent truncation. This
   closes out the character-class work Phase 1 deliberately deferred (see Phase 1's notes
   in the compatibility plan).
 - **`sticky` option (JS `y` flag)** *(added in Phase 5a)* — `CompileOptions{ .sticky =
@@ -607,11 +609,11 @@ the code space), which dominate run time:
   `\p{}` logic (tracked in F5 with pinning the Unicode version).
 - Known ECMA-262 deviations of the parser/matcher show up as expected:
   non-`u` `.` consuming a whole supplementary character and lone surrogate
-  halves (D6), lookbehind (D7), escaped surrogate pairs under `u` (D13),
-  Annex B forms (`\8`, `\1` without groups, lone `]`, `\k<a>` without named
-  groups, `[\12-\14]`) and incomplete `u`-mode strictness (most of the
-  `language/literals/regexp` failures are parse-negative tests zregex
-  accepts). See `docs/REGEX_TIERS_PLAN.md` §2.3.
+  halves (D6), lookbehind (D7), and Annex B forms (`\8`, `\1` without groups,
+  lone `]`, `\k<a>` without named groups, `[\12-\14]`, until F1b). Escaped
+  surrogate pairs under `u` (D13) and the `u`-mode parse-negative tests were
+  fixed in F1a (see "Behavior changes in F1" below). See
+  `docs/REGEX_TIERS_PLAN.md` §2.3.
 - The recursive matcher bounds recursion depth, not stack bytes (D14): some
   patterns (e.g. `/<body.*>((.*\n?)*?)<\/body>/i`) crash on a 1 MiB native
   stack and pass on 8 MiB. Measured in F0d: the adversarial `(a+)+b` and
@@ -667,6 +669,31 @@ the code space), which dominate run time:
 whose literal can't be extracted are `unextracted`; a non-`u` `lastIndex`
 between the halves of a surrogate pair can't be expressed in WTF-8. Details
 in `scripts/test262/README.md`.
+
+### Behavior changes in F1 (for consumers such as z-string)
+
+F1 (`docs/REGEX_TIERS_PLAN.md`) makes the parser and matcher follow ECMA-262 where
+they didn't, so some patterns now compile or match differently. z-string pins zregex
+to a commit (`85afd1f`), so none of this reaches it until the pin is bumped; when it
+is, run z-string's `zig build test`. Changes so far (F1a):
+
+- **`u`-mode strictness.** Under `unicode = true`, malformed `\p`/`\P`, `\c`, `\x`,
+  `\u` (and `\u{...}` above U+10FFFF), a `\N` past the last capturing group, a
+  quantified lookahead, and a class escape as a range endpoint (`[\d-a]`) are
+  SyntaxErrors instead of Annex B literals.
+- **In every mode:** a quantified lookbehind (`(?<=a)?`) is a SyntaxError; with any named
+  group in the pattern, `\k` must be a complete `\k<name>`.
+- **`\xHH` above 0x7F** is the code point U+00HH (`/\xFF/` matches "ÿ"), not the raw byte.
+- **Escaped surrogates:** `\uD800` is the WTF-8 lone surrogate (it was a literal "u");
+  under `u`, `\uD834\uDF06` is one code point (D13).
+- **`\s`/`\S`** are ECMA-262 WhiteSpace + LineTerminator (NBSP, Zs, U+2028/9, U+FEFF…),
+  with or without `u` (D4). `[\D]`/`[\W]`/`[\S]` inside a class now cover code points
+  above U+00FF (they didn't).
+- **Line terminators** are LF, CR, U+2028 and U+2029 for `.` without `s` and for `^`/`$`
+  with `m` (D5); CR alone ends a line now.
+- **Search start positions:** `find`/`findAll` (and the C API search) no longer start a
+  match inside a UTF-8 sequence (part of D12).
+- **A hyphen where a class atom is expected starts a range:** `[--0]` is `-`..`0`.
 
 ### `test_()` vs `find()` — a common source of confusion
 
@@ -735,10 +762,10 @@ standalone escapes at all — falling through to literal `'v'`/`'f'` even *witho
 new flag, unlike `\n`/`\r`/`\t` right next to them in the same `switch`. Fixed
 unconditionally (not gated behind `unicode`), since it was simply wrong before, and
 needed anyway so `\v`/`\f` wouldn't become spuriously ungrammatical under the new
-strict check. **Not yet modeled** under `unicode = true`: malformed `\x`/`\u`/`\c`/`\k`/
-`\p` still fall back to Annex-B leniency rather than erroring (real `u` mode requires
-each to be well-formed); a backreference to a group number that doesn't exist in the
-pattern isn't rejected.
+strict check. **Since F1a** `unicode = true` also rejects malformed `\x`/`\u`/`\c`/`\k`/
+`\p`, `\u{...}` above U+10FFFF, a `\N` past the pattern's last capturing group, a
+quantified lookahead, and a class escape used as a range endpoint (`[\d-a]`); see
+"Behavior changes in F1" below.
 
 `CompileOptions.v` *(added later in the session)* exists too, covering exactly one
 piece of real `v`-mode syntax: character-class set operations, difference (`[A--B]`,
@@ -909,8 +936,6 @@ strictness is itself only the unrecognized-escape slice — see above).
 - `case_insensitive` matching of non-ASCII character *ranges* (`[À-Ö]`) or
   `\p{...}`-in-a-class members — only literal non-ASCII characters (standalone or as a
   single class member) are case-folded, see above
-- Full `u`-mode strictness (malformed `\x`/`\u`/`\c`/`\k`/`\p` still fall back
-  leniently; a backreference to a nonexistent group isn't rejected)
 - Chained (`[A--B--C]`) or deeply nested `v`-mode class set operations, `\q{...}`
   multi-string literals, or `v`'s own additional reserved-punctuator restrictions
 - Calling zregex directly from C or C++: no headers, wrapper library, or examples are
