@@ -15,11 +15,12 @@ pub const layers = [_]Layer{
     .{ .name = "ir", .root = "src/ir/root.zig", .deps = &.{} },
     .{ .name = "unicode", .root = "src/unicode/root.zig", .deps = &.{} },
     .{ .name = "utils", .root = "src/utils/root.zig", .deps = &.{} },
+    .{ .name = "subject", .root = "src/subject/root.zig", .deps = &.{} },
     .{ .name = "frontend", .root = "src/frontend/root.zig", .deps = &.{ "ir", "unicode" } },
-    .{ .name = "tier0", .root = "src/tier0/root.zig", .deps = &.{ "ir", "utils" } },
-    .{ .name = "tier1", .root = "src/tier1/root.zig", .deps = &.{ "ir", "unicode", "utils", "tier0" } },
-    .{ .name = "tier2", .root = "src/tier2/root.zig", .deps = &.{ "ir", "unicode", "utils" } },
-    .{ .name = "zregex", .root = "src/main.zig", .deps = &.{ "ir", "unicode", "utils", "frontend", "tier0", "tier1", "tier2" } },
+    .{ .name = "tier0", .root = "src/tier0/root.zig", .deps = &.{ "ir", "utils", "subject" } },
+    .{ .name = "tier1", .root = "src/tier1/root.zig", .deps = &.{ "ir", "unicode", "utils", "subject", "tier0" } },
+    .{ .name = "tier2", .root = "src/tier2/root.zig", .deps = &.{ "ir", "unicode", "utils", "subject" } },
+    .{ .name = "zregex", .root = "src/main.zig", .deps = &.{ "ir", "unicode", "utils", "subject", "frontend", "tier0", "tier1", "tier2" } },
 };
 
 /// One build of the whole module graph (per target/optimize mode).

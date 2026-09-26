@@ -70,6 +70,9 @@ pub const compileSimple = @import("compile.zig").compileSimple;
 pub const CompileOptions = @import("compile.zig").CompileOptions;
 pub const CompileResult = @import("compile.zig").CompileResult;
 pub const CharSet = @import("ir").charset.CharSet;
+/// The input a regex runs over: WTF-8 or UTF-16, indices in its own units (F3).
+pub const subject = @import("subject");
+pub const Subject = subject.Subject;
 pub const hir = @import("ir").hir;
 pub const lower = @import("frontend").lower;
 /// The backtracker (Tier 2): bytecode, code generator, matcher.

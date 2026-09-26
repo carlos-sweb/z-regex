@@ -648,10 +648,11 @@ lowering too (+57 % on the fuzz stress patterns).
 | `ir` | `src/ir/` (CharSet, HIR) | — |
 | `unicode` | `src/unicode/` (tables, properties, case folding) | — |
 | `utils` | `src/utils/` (bitsets, pool, config, debug) | — |
+| `subject` | `src/subject/` (the input: WTF-8 or UTF-16, added in F3a) | — |
 | `frontend` | `src/frontend/` (lexer, parser, AST, lowering) | `ir`, `unicode` |
-| `tier0` | `src/tier0/` (skeleton; the linear VM arrives in F4a) | `ir`, `utils` |
-| `tier1` | `src/tier1/` (skeleton) | `ir`, `unicode`, `utils`, `tier0` |
-| `tier2` | `src/tier2/` (bytecode, code generator, optimizer, backtracker) | `ir`, `unicode`, `utils` |
+| `tier0` | `src/tier0/` (skeleton; the linear VM arrives in F4a) | `ir`, `utils`, `subject` |
+| `tier1` | `src/tier1/` (skeleton) | `ir`, `unicode`, `utils`, `subject`, `tier0` |
+| `tier2` | `src/tier2/` (bytecode, code generator, optimizer, backtracker) | `ir`, `unicode`, `utils`, `subject` |
 | `zregex` | `src/` (`main.zig`, `regex.zig`, `compile.zig`, `analysis/`) | all of the above |
 | `c_api` | `src/c_api.zig` | `zregex` only |
 
