@@ -235,6 +235,15 @@ pub fn RecursiveMatcherFor(comptime Unit: type) type {
             return self;
         }
 
+        /// Ready the matcher for another start position: captures unset and
+        /// the counters at zero (the lists are already empty between runs).
+        pub fn reset(self: *Self) void {
+            @memset(self.caps(), .{});
+            self.step_count = 0;
+            self.recursion_depth = 0;
+            std.debug.assert(self.snapshots.items.len == 0 and self.loop_guard.items.len == 0 and self.positions.items.len == 0);
+        }
+
         /// Give the buffers of an `initScratch` matcher back to `scratch`,
         /// keeping their capacity.
         pub fn releaseScratch(self: *Self, scratch: *Scratch) void {

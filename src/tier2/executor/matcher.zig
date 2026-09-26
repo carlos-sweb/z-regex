@@ -174,11 +174,12 @@ pub const Matcher = struct {
         scratch.acquire();
         defer scratch.release();
 
+        var m = try RecursiveMatcherFor(Unit).initScratch(self.bytecode, input, limits, self.capture_slots, scratch);
+        m.charsets = self.charsets;
+        defer m.releaseScratch(scratch);
         var pos = index;
         while (pos <= input.len) : (pos = subject.advanceIndex(.code_point, pos)) {
-            var m = try RecursiveMatcherFor(Unit).initScratch(self.bytecode, input, limits, self.capture_slots, scratch);
-            m.charsets = self.charsets;
-            defer m.releaseScratch(scratch);
+            if (pos != index) m.reset();
             const r = try m.matchFrom(0, pos);
             if (r.matched) {
                 slots[0] = pos;

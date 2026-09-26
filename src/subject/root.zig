@@ -157,6 +157,8 @@ fn trailOf(cp: u32) u32 {
 fn wtf8IsPosition(s: []const u8, i: usize) bool {
     if (i > s.len) return false;
     if (i == s.len) return true;
+    // Only a continuation byte can be inside a sequence.
+    if (s[i] & 0xC0 != 0x80) return true;
     // The byte at `i` is inside the sequence that starts at `i - k`, if any.
     var k: usize = 1;
     while (k <= 3 and k <= i) : (k += 1) {
