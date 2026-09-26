@@ -2041,8 +2041,11 @@ test "Regex: [^] (negated empty class) matches any character" {
     try std.testing.expect(try re.test_("\n"));
     try std.testing.expect(try re.test_("\x00"));
 
-    // Non-inverted empty class remains a compile error.
-    try std.testing.expectError(error.EmptyCharClass, Regex.compile(allocator, "[]"));
+    // `[]` is valid too (D3, F1b) and never matches.
+    var empty = try Regex.compile(allocator, "[]");
+    defer empty.deinit();
+    try std.testing.expect(!try empty.test_("x"));
+    try std.testing.expect(!try empty.test_(""));
 }
 
 test "Regex: \\s and \\S include form feed and vertical tab" {

@@ -433,7 +433,7 @@ test "D8: possessive quantifiers are unclassifiable" {
 test "parser rejections are reported, not raised" {
     try expectTier("a{", "", .regular); // Annex B literal since F1b (D2)
     try expectParseError("a{", "u");
-    try expectParseError("[]", ""); // D3 today
+    try expectTier("[]", "", .regular); // valid, never matches (D3, F1b)
     try expectParseError("(", "");
     try expectParseError("\\q", "u");
 }

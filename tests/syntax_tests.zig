@@ -332,3 +332,18 @@ test "a braced quantifier with nothing to repeat is still a SyntaxError (Annex B
     }
     try expectRejected("a{2,1}", annex_b); // out of order
 }
+
+// --- D3 (F1b): [] is valid and never matches ---
+
+test "D3: [] compiles and never matches; [^] matches any character" {
+    for ([_]zregex.CompileOptions{ annex_b, u, .{ .v = true } }) |opts| {
+        try expectMatch("[]", opts, "abc", null);
+        try expectMatch("a[]", opts, "a", null);
+        try expectMatch("[]a", opts, "a", null);
+        try expectMatch("a|[]", opts, "a", "a");
+        try expectMatch("[]*b", opts, "b", "b");
+        try expectMatch("[]?b", opts, "b", "b");
+        try expectMatch("^[^]$", opts, "\n", "\n");
+    }
+    try expectMatch("[]", .{ .case_insensitive = true }, "A", null);
+}

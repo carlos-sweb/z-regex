@@ -70,7 +70,6 @@ pub const ParseError = error{
     UnmatchedParen,
     UnmatchedBracket,
     InvalidCharRange,
-    EmptyCharClass,
     InvalidQuantifier,
     EmptyGroup,
     EmptyAlternation,
@@ -927,14 +926,8 @@ pub const Parser = struct {
         self.lexer.in_char_class = false;
         _ = try self.consume(.rbracket);
 
-        // `[^]` (an inverted class with no members) is JS's idiom for
-        // "match anything" -- valid and meaningful. A non-inverted empty
-        // class `[]` can never match anything; keep rejecting that case
-        // (it's almost certainly a mistake), but let `[^]` through.
-        if (class.children.items.len == 0 and !inverted) {
-            return error.EmptyCharClass;
-        }
-
+        // An empty class is valid ECMA-262 (D3): `[]` never matches and
+        // `[^]` matches any character. The codegen handles both.
         return class;
     }
 

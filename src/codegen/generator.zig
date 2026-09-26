@@ -244,8 +244,10 @@ pub const CodeGenerator = struct {
     }
 
     fn generateCharClass(self: *Self, node: *Node) !void {
+        // `[]` (D3): a class with no members never matches. An empty range
+        // table does exactly that (and fails at end of input like any class).
         if (node.children.items.len == 0 and !node.inverted) {
-            return error.InvalidPattern;
+            return self.writer.emitCharClassRanges(.CHAR_CLASS_RANGES, &.{});
         }
 
         // A `\p{...}`/`\P{...}` member (General_Category, binary property,
