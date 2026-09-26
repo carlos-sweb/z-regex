@@ -32,6 +32,7 @@ const Decoded = subject_mod.Decoded;
 const Budget = @import("utils").budget.Budget;
 const program = @import("program.zig");
 const Program = program.Program;
+const prefilter = @import("prefilter.zig");
 
 pub const ExecError = Allocator.Error || error{ InvalidIndex, SlotsTooSmall };
 
@@ -125,11 +126,56 @@ pub fn exec(prog: *const Program, comptime Unit: type, input: []const Unit, mode
     if (index > input.len) return false;
     const vm: Vm(Unit) = .{ .prog = prog, .input = input, .mode = mode };
     if (!vm.subject().isPosition(index)) return error.InvalidIndex;
-    try scratch.ensure(prog.insts.len);
-    const found = vm.search(index, sticky, scratch) orelse return false;
-    slots[0] = found[0];
-    slots[1] = found[1];
+    const pf = &prog.prefilter;
+    // The prefilters hold in code-unit mode only (all of T0 in F4a).
+    const use_pf = mode == .code_unit;
+    // `^` without `m` leads every path: only position 0 can match.
+    const anchored = use_pf and pf.anchored;
+    if (anchored and index > 0) return false;
+    // The fast paths never touch `scratch` (prefilter.zig's invariant).
+    const found = if (use_pf) switch (pf.kind) {
+        .literal => |l| literalSearch(Unit, input, if (Unit == u8) l.utf8 else l.utf16, index, sticky),
+        .class_run => |c| classRun(Unit, input, c, index, sticky),
+        .first, .none => null,
+    } else null;
+    const result = found orelse blk: {
+        if (use_pf and (pf.kind == .literal or pf.kind == .class_run)) break :blk null;
+        try scratch.ensure(prog.insts.len);
+        break :blk vm.search(index, sticky or anchored, if (use_pf and pf.kind == .first) &pf.kind.first else null, scratch);
+    };
+    const m = result orelse return false;
+    slots[0] = m[0];
+    slots[1] = m[1];
     return true;
+}
+
+/// The literal fast path: the first occurrence at `index` or after (only
+/// at `index` when sticky).
+fn literalSearch(comptime Unit: type, input: []const Unit, needle: []const Unit, index: usize, sticky: bool) ?[2]usize {
+    if (sticky) {
+        if (!std.mem.startsWith(Unit, input[index..], needle)) return null;
+        return .{ index, index + needle.len };
+    }
+    const at = std.mem.indexOfPos(Unit, input, index, needle) orelse return null;
+    return .{ at, at + needle.len };
+}
+
+/// The class-run fast path: `C+` from the first member at `index` or after
+/// (only at `index` when sticky), `C*` at `index` itself, then the longest
+/// run.
+fn classRun(comptime Unit: type, input: []const Unit, c: prefilter.ClassRun, index: usize, sticky: bool) ?[2]usize {
+    var start = index;
+    if (c.min == 1) {
+        if (sticky) {
+            if (start >= input.len or !c.has(input[start])) return null;
+        } else {
+            while (start < input.len and !c.has(input[start])) start += 1;
+            if (start == input.len) return null;
+        }
+    }
+    var end = start;
+    while (end < input.len and c.has(input[end])) end += 1;
+    return .{ start, end };
 }
 
 pub const Direction = enum { forward, backward };
@@ -179,13 +225,18 @@ fn Vm(comptime Unit: type) type {
             return self.subject().decodeBefore(self.mode, pos);
         }
 
-        fn search(self: Self, index: usize, sticky: bool, scratch: *VmScratch) ?[2]usize {
+        fn search(self: Self, index: usize, sticky: bool, first: ?*const prefilter.First, scratch: *VmScratch) ?[2]usize {
             var clist = &scratch.lists[0];
             var nlist = &scratch.lists[1];
             clist.len = 0;
             var found: ?[2]usize = null;
             var pos = index;
             while (true) {
+                // Nothing alive and no match yet: skip to the next position
+                // a match can start at (`First`: it always is a position).
+                if (first != null and found == null and clist.len == 0 and !sticky) {
+                    pos = skip(self.input, first.?, pos) orelse break;
+                }
                 if (found == null and (!sticky or pos == index)) self.addThread(clist, scratch.stack, 0, pos, pos);
                 if (clist.len == 0 and (found != null or sticky)) break;
                 const d = self.decodeAt(pos);
@@ -213,6 +264,24 @@ fn Vm(comptime Unit: type) type {
                 std.mem.swap(*List, &clist, &nlist);
             }
             return found;
+        }
+
+        /// The first index at `pos` or after whose unit can start a match.
+        fn skip(input: []const Unit, f: *const prefilter.First, pos: usize) ?usize {
+            if (Unit == u8) {
+                if (f.single8) |b| return std.mem.indexOfScalarPos(u8, input, pos, b);
+                var i = pos;
+                while (i < input.len) : (i += 1) if (f.utf8[input[i]]) return i;
+                return null;
+            } else {
+                if (f.single16) |u| return std.mem.indexOfScalarPos(u16, input, pos, u);
+                var i = pos;
+                while (i < input.len) : (i += 1) {
+                    const u = input[i];
+                    if (if (u < 256) f.utf16[u] else f.high) return i;
+                }
+                return null;
+            }
         }
 
         fn exists(self: Self, pos0: usize, scratch: *VmScratch, budget: *Budget) error{StepLimitExceeded}!bool {

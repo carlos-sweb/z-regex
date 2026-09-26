@@ -45,12 +45,26 @@ const cases = [_]struct { []const u8, Flags }{
     .{ "..", .{} },
     .{ "\\ud83d", .{} },
     .{ "[\\ud800-\\udbff][\\udc00-\\udfff]", .{} },
+    // F4a(4): each prefilter, and where one must not apply.
+    .{ "\u{E9}\u{20AC}", .{} }, // literal, non-ASCII
+    .{ "\u{1F600}", .{} }, // surrogates without `u`: not a literal
+    .{ "x\u{1F600}", .{} },
+    .{ "[a-z]+", .{} }, // class_run
+    .{ "\\d*", .{} },
+    .{ "[0-9]+", .{ .i = true } },
+    .{ "\\bfoo", .{} }, // first
+    .{ "foo|bar", .{} },
+    .{ "[^a]x", .{} },
+    .{ "a|\u{E9}", .{} },
+    .{ "12-", .{ .i = true } }, // literal under `i`, no letters
+    .{ "^ab", .{ .m = true } }, // not anchored under `m`
 };
 
 const subjects = [_][]const u8{
-    "",           "a",             "ab",         "abcd",         "aaab",          "abab ab",
-    "bab\nab",    "xAbAB",         "123-4567 1", "joe@site.com", "\u{E9}\u{E9}x", "\u{1F600}x\u{1F600}",
-    "a\u{2028}b", "\xED\xA0\x80a", "_\xff\xc3",  "ccbca",
+    "",             "a",                            "ab",         "abcd",         "aaab",          "abab ab",
+    "bab\nab",      "xAbAB",                        "123-4567 1", "joe@site.com", "\u{E9}\u{E9}x", "\u{1F600}x\u{1F600}",
+    "a\u{2028}b",   "\xED\xA0\x80a",                "_\xff\xc3",  "ccbca",        "foo bar,foo",   "x\u{E9}\u{20AC}\u{E9}\u{20AC}",
+    "ab\nab xyz09", "\u{1F600}\u{1F600}x\u{1F600}",
 };
 
 const Out = struct { found: bool, start: usize = 0, end: usize = 0 };
@@ -105,6 +119,8 @@ test "T0 VM matches the backtracker on eligible patterns" {
         };
         const prog = try tier0.compile(gpa, fe.root);
         defer prog.deinit(gpa);
+        const plain = try tier0.compileWith(gpa, fe.root, .{ .prefilters = false });
+        defer plain.deinit(gpa);
         // The backtracker, forced: the dispatcher would route this pattern to
         // the VM.
         var re = try zregex.Regex.compileWithOptions(gpa, pattern, .{ .case_insensitive = f.i, .multiline = f.m, .dot_all = f.s, .force_tier = .expert });
@@ -115,6 +131,8 @@ test "T0 VM matches the backtracker on eligible patterns" {
             defer gpa.free(s16);
             try compareAll(&re, &prog, .{ .wtf8 = s }, &bt, &vs);
             try compareAll(&re, &prog, .{ .utf16 = s16 }, &bt, &vs);
+            try compareAll(&re, &plain, .{ .wtf8 = s }, &bt, &vs);
+            try compareAll(&re, &plain, .{ .utf16 = s16 }, &bt, &vs);
         }
     }
 }
@@ -329,4 +347,55 @@ test "existsAnchoredMatch at a position agrees with a sticky exec there" {
             }
         }
     }
+}
+
+// --------------------------------------------------------- F4a(4): prefilters
+
+fn prefilterKind(pattern: []const u8) !std.meta.Tag(tier0.prefilter.Prefilter.Kind) {
+    const re = try zregex.Regex.compile(testing.allocator, pattern);
+    defer re.deinit();
+    return std.meta.activeTag(re.t0.?.prefilter.kind);
+}
+
+test "prefilters: which one each pattern gets" {
+    try testing.expectEqual(.literal, try prefilterKind("hello"));
+    try testing.expectEqual(.class_run, try prefilterKind("[a-z]+"));
+    try testing.expectEqual(.first, try prefilterKind("\\d{3}-\\d{4}"));
+    try testing.expectEqual(.first, try prefilterKind("[\\w.+-]+@[\\w-]+\\.[\\w.]+"));
+    try testing.expectEqual(.none, try prefilterKind("a?"));
+    const off = try zregex.Regex.compileWithOptions(testing.allocator, "hello", .{ .t0_prefilters = false });
+    defer off.deinit();
+    try testing.expectEqual(.none, std.meta.activeTag(off.t0.?.prefilter.kind));
+}
+
+test "class_run sticky: only at the index" {
+    var re = try zregex.Regex.compileWithOptions(testing.allocator, "[a-z]+", .{ .sticky = true });
+    defer re.deinit();
+    var scratch = zregex.Scratch.init(testing.allocator);
+    defer scratch.deinit();
+    var buf: [2]?usize = undefined;
+    var out: zregex.MatchSlots = .{ .slots = &buf };
+    // The first member is further on: no match.
+    try testing.expect(!try re.execAt(.{ .wtf8 = "12ab" }, 0, &scratch, &out, .{}));
+    try testing.expect(try re.execAt(.{ .wtf8 = "12ab" }, 2, &scratch, &out, .{}));
+    try testing.expectEqual(@as(?usize, 4), buf[1]);
+}
+
+test "fast paths never touch the VM scratch" {
+    var failing: std.testing.FailingAllocator = .init(testing.allocator, .{});
+    var scratch = zregex.Scratch.init(failing.allocator());
+    defer scratch.deinit();
+    var buf: [2]?usize = undefined;
+    var out: zregex.MatchSlots = .{ .slots = &buf };
+    for ([_][]const u8{ "hello", "[a-z]+", "\\d*" }) |p| {
+        var re = try zregex.Regex.compile(testing.allocator, p);
+        defer re.deinit();
+        const kind = std.meta.activeTag(re.t0.?.prefilter.kind);
+        try testing.expect(kind == .literal or kind == .class_run);
+        _ = try re.execAt(.{ .wtf8 = "say hello 123" }, 0, &scratch, &out, .{});
+        const s16 = [_]u16{ 'h', 'e', 'l', 'l', 'o' };
+        _ = try re.execAt(.{ .utf16 = &s16 }, 0, &scratch, &out, .{});
+    }
+    try testing.expectEqual(@as(usize, 0), failing.allocations);
+    try testing.expectEqual(@as(usize, 0), scratch.vm.capacity);
 }

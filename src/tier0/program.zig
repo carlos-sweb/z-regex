@@ -5,6 +5,7 @@
 const std = @import("std");
 const Allocator = std.mem.Allocator;
 const CharSet = @import("ir").charset.CharSet;
+const Prefilter = @import("prefilter.zig").Prefilter;
 
 pub const Assert = enum {
     /// `^` without `m`: position 0.
@@ -55,8 +56,12 @@ pub const Set = struct {
 pub const Program = struct {
     insts: []const Inst,
     sets: []const Set,
+    /// Fast paths and the start-position skip (`prefilter.zig`); empty when
+    /// compiled without them.
+    prefilter: Prefilter = .{},
 
     pub fn deinit(self: Program, gpa: Allocator) void {
+        self.prefilter.deinit(gpa);
         for (self.sets) |s| s.set.deinit(gpa);
         gpa.free(self.sets);
         gpa.free(self.insts);

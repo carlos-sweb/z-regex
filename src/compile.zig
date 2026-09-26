@@ -93,6 +93,11 @@ pub const CompileOptions = struct {
 
     /// Where `compile` writes why it failed with `error.TierUnavailable`.
     tier_diagnostic: ?*TierUnavailable = null,
+
+    /// Only for tests and the bench: T0's prefilters and fast paths
+    /// (`tier0/prefilter.zig`). Off, the VM runs plain, to measure it and to
+    /// compare the two.
+    t0_prefilters: bool = true,
 };
 
 /// Why `force_tier` can't be honored.
@@ -136,7 +141,7 @@ pub fn compileTiers(allocator: Allocator, pattern: []const u8, options: CompileO
     const use_vm = try route(fe, options);
     const bt = try generate(allocator, fe, options);
     errdefer bt.deinit();
-    const t0: ?tier0.Program = if (use_vm) tier0.compile(allocator, fe.root) catch |err| switch (err) {
+    const t0: ?tier0.Program = if (use_vm) tier0.compileWith(allocator, fe.root, .{ .prefilters = options.t0_prefilters }) catch |err| switch (err) {
         error.Ineligible => unreachable, // `route` checked
         else => |e| return e,
     } else null;

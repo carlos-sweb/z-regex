@@ -26,6 +26,7 @@ const program = @import("program.zig");
 const Program = program.Program;
 const Inst = program.Inst;
 const Set = program.Set;
+const prefilter = @import("prefilter.zig");
 
 /// Why a pattern stays on the backtracker in F4a.
 pub const Ineligible = enum {
@@ -107,16 +108,32 @@ fn size(node: *const hir.Node) usize {
 
 pub const Error = Allocator.Error || error{Ineligible};
 
+pub const Options = struct {
+    /// The prefilters and fast paths (`prefilter.zig`). Off only for tests
+    /// and the bench, to measure and compare the plain VM.
+    prefilters: bool = true,
+};
+
 /// The T0 program for `root`, which `check` must have accepted.
 pub fn compile(gpa: Allocator, root: *const hir.Node) Error!Program {
+    return compileWith(gpa, root, .{});
+}
+
+pub fn compileWith(gpa: Allocator, root: *const hir.Node, options: Options) Error!Program {
     if (check(root) != null) return error.Ineligible;
     var b: Builder = .{ .gpa = gpa };
     errdefer b.deinit();
     try b.emit(root, .{});
     try b.insts.append(gpa, .match);
     const insts = try b.insts.toOwnedSlice(gpa);
-    errdefer gpa.free(insts);
-    return .{ .insts = insts, .sets = try b.sets.toOwnedSlice(gpa) };
+    const sets = b.sets.toOwnedSlice(gpa) catch |err| {
+        gpa.free(insts);
+        return err;
+    };
+    var prog: Program = .{ .insts = insts, .sets = sets };
+    errdefer prog.deinit(gpa);
+    if (options.prefilters) prog.prefilter = try prefilter.analyze(gpa, root, &prog);
+    return prog;
 }
 
 const Builder = struct {
