@@ -19,13 +19,14 @@ This is tooling only: the library itself has no Node dependency.
   - `wtf8`: WTF-8 bytes; UTF-16 indices map to byte offsets, with `b+2`
     for the point between the two halves of a 4-byte character (the
     `subject` module's convention), so any `lastIndex` is expressible.
-- **Default and baseline:** until F3d the default is `wtf8` and
-  `baseline.json` is measured with it; `utf16` is run by hand with the same
-  baseline. From F3d the default is `utf16` (what JS uses inside, so what a
-  real host sees), `baseline.json` is regenerated with it, and `wtf8` runs
-  as a cross-check against its own `baseline-wtf8.json`: two numbers, and
-  any test whose status differs between the encodings is reported case by
-  case.
+- **Default and baselines (since F3d):** the default is `utf16` (what JS
+  uses inside, so what a real host sees) and `baseline.json` is measured
+  with it (`zig build test262`). `wtf8` is a cross-check against its own
+  `baseline-wtf8.json` (`zig build test262-wtf8`), run at each phase's
+  closing gate rather than on every commit. The two must hold the same
+  status for every test: a test that passes with WTF-8 and fails with
+  UTF-16 is an engine bug, the other way round a harness bug. (Until F3d
+  the default was `wtf8`.)
 - Parse-phase negative tests (`negative: phase: parse`) never run: the
   regex literal is extracted and zregex must reject it.
 - A pool of child processes runs one test per IPC message, so a crash
@@ -40,9 +41,10 @@ zig build -Doptimize=ReleaseSafe               # safety checks on: bugs surface 
 node scripts/test262/run.mjs                   # full run -> zig-out/test262/results.json
 node scripts/test262/run.mjs --sample 100      # stratified, reproducible sample
 node scripts/test262/run.mjs --filter lookBehind
-node scripts/test262/run.mjs --encoding utf16  # the subject as UTF-16 (F3c)
+node scripts/test262/run.mjs --encoding wtf8   # the subject as WTF-8 (default: utf16)
 
-zig build test262                              # the gate: ReleaseSafe build + --check-baseline
+zig build test262                              # the gate: ReleaseSafe build + --check-baseline (UTF-16)
+zig build test262-wtf8                         # phase gate: WTF-8 against baseline-wtf8.json
 node scripts/test262/run.mjs --update-baseline-improvements scripts/test262/baseline.json  # record improvements only
 node scripts/test262/run.mjs --update-baseline scripts/test262/baseline.json   # new test262 revision only
 ```

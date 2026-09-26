@@ -322,6 +322,15 @@ pub fn build(b: *std.Build) void {
     const test262_step = b.step("test262", "Run test262 against the committed baseline (needs Node + scripts/test262/fetch.sh)");
     test262_step.dependOn(&run_test262.step);
 
+    // The same run with the subject as WTF-8 (F3d): a cross-check against
+    // its own baseline, part of each phase's closing gate, not of every
+    // commit (docs/REGEX_TIERS_PLAN.md). The default run above is UTF-16.
+    const run_test262_wtf8 = b.addSystemCommand(&.{ "node", "scripts/test262/run.mjs", "--encoding", "wtf8", "--check-baseline", "scripts/test262/baseline-wtf8.json", "--out", "zig-out/test262/results-wtf8.json", "--lib" });
+    run_test262_wtf8.addArtifactArg(test262_lib);
+    run_test262_wtf8.has_side_effects = true;
+    const test262_wtf8_step = b.step("test262-wtf8", "Run test262 with WTF-8 subjects against scripts/test262/baseline-wtf8.json (phase gate)");
+    test262_wtf8_step.dependOn(&run_test262_wtf8.step);
+
     // Differential test against V8 (scripts/test262/differential.mjs,
     // docs/REGEX_TIERS_PLAN.md F1c): generated patterns with captures and
     // backreferences, compared with Node's own RegExp. A manual tool for

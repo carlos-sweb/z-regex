@@ -1,6 +1,6 @@
 {"test262Sha":"7ab7fafa0003f73fc85c1b95d88094d33f7eb8bd",
 "node":"v22.22.2",
-"generated":"2026-09-26T17:54:31.846Z",
+"generated":"2026-09-26T17:55:54.513Z",
 "note":"Engine suite only (host suite and skipped tests excluded). Update with --update-baseline.",
 "entries":{"annexB/built-ins/RegExp/RegExp-control-escape-russian-letter.js|sloppy":"pass",
 "annexB/built-ins/RegExp/RegExp-control-escape-russian-letter.js|strict":"pass",

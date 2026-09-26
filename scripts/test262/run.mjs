@@ -21,7 +21,7 @@
 // update used while a phase is in progress (docs/REGEX_TIERS_PLAN.md, F1).
 //
 // --encoding picks the subject encoding zregex runs on (F3c, zregex.mjs):
-// wtf8 (default until F3d) or utf16.
+// utf16 (the default since F3d) or wtf8.
 //
 // Environment:
 //   ZREGEX_LIB               path to libzregex.so (default zig-out/lib/libzregex.so)
@@ -65,7 +65,7 @@ if ((UPDATE || IMPROVE) && (FILTER || SAMPLE !== null)) {
 
 const TEST262 = path.resolve(process.env.ZREGEX_TEST262_DIR || path.join(repo, '.test262'));
 const LIB = path.resolve(opt('--lib', null) || process.env.ZREGEX_LIB || path.join(repo, 'zig-out/lib/libzregex.so'));
-const ENCODING = opt('--encoding', null) || process.env.ZREGEX_ENCODING || 'wtf8';
+const ENCODING = opt('--encoding', null) || process.env.ZREGEX_ENCODING || 'utf16';
 const TIMEOUT_MS = Number(process.env.ZREGEX_TEST_TIMEOUT_MS || 20000);
 const RECYCLE = Number(process.env.ZREGEX_TEST_RECYCLE || 1000);
 const WORKERS = Number(process.env.ZREGEX_TEST_WORKERS || Math.min(os.availableParallelism(), 8));

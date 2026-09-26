@@ -101,7 +101,7 @@ function encodeUtf16(str) {
 
 const NO_CAPTURE = 0xffffffffffffffffn;
 
-export function loadZRegex(libPath, { encoding = process.env.ZREGEX_ENCODING || 'wtf8' } = {}) {
+export function loadZRegex(libPath, { encoding = process.env.ZREGEX_ENCODING || 'utf16' } = {}) {
   if (encoding !== 'wtf8' && encoding !== 'utf16') throw new Error(`unknown encoding ${encoding} (wtf8 or utf16)`);
   koffi.config({ ...koffi.config(), sync_stack_size: NATIVE_STACK_MIB * 1024 * 1024 });
   const lib = koffi.load(libPath);

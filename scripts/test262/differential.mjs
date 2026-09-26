@@ -30,8 +30,8 @@ const LIB = path.resolve(opt('--lib', path.join(repo, 'zig-out/lib/libzregex.so'
 const SEED = Number(opt('--seed', 0xf1c));
 const COUNT = Number(opt('--count', 4000));
 const OUT = path.resolve(opt('--out', path.join(repo, 'zig-out/differential/results.json')));
-// Subject encoding for zregex (F3c, zregex.mjs): wtf8 (default until F3d) or utf16.
-const ENCODING = opt('--encoding', null) || process.env.ZREGEX_ENCODING || 'wtf8';
+// Subject encoding for zregex (F3c, zregex.mjs): utf16 (the default since F3d) or wtf8.
+const ENCODING = opt('--encoding', null) || process.env.ZREGEX_ENCODING || 'utf16';
 
 // mulberry32
 function prng(seed) {

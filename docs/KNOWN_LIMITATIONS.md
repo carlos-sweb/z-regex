@@ -765,6 +765,11 @@ starts inside a character. That also fixes captures that were silently wrong:
   are `c_api.zig` (not part of the bench) and the lexer for bytes >= 0x80 (the pattern
   has none), nothing the match loop runs. Revisit in F3e if it persists (compare the
   assembly of the inner loop, inlining hints); otherwise in F4a with the Pike VM.
+- **Partial `v` grammar, pinned by tests:** `[[a]😀]` and `[[😀]a]` under `v` are
+  `InvalidClassSetOperand` (a nested class is only taken as an operand of `--`/`&&`;
+  the same before F3d). `tests/code_unit_tests.zig` asserts that error. When F5 completes
+  `v` they will compile and those assertions must change: that is expected, not a
+  regression.
 - **Consumers:** z-string and z-interprete stay on their pinned versions (z-interprete on
   F1c); F3's changes reach them only when they move the pin. After F3d a consumer that
   doesn't set `CompileOptions.unicode` for a `u` pattern gets code-unit semantics.
