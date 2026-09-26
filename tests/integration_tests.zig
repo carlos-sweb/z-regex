@@ -326,3 +326,6 @@ test "Integration: nullable plus and empty-only bodies terminate" {
 test {
     _ = @import("regression_tests.zig");
 }
+test {
+    _ = @import("fuzz_parser.zig");
+}
