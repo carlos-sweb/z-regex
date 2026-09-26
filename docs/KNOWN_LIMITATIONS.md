@@ -692,6 +692,14 @@ dominates, not module size. **Review trigger:** if cold ReleaseSafe `zig build t
 goes past 150 s wall during F3–F4, the per-module test binaries get revisited; not
 before.
 
+**F4a step 0, `test-leaves`:** the four leaf layers (`ir`, `unicode`, `utils`, `subject`)
+share one test binary. A module's tests only run in a binary whose root module is that
+module, so `src/leaves_tests.zig` includes their root files directly (possible because a
+leaf imports no other module); `check-layers` allows exactly those imports from it and
+requires all the leaves. Cold ReleaseSafe `zig build test`, median of 3, interleaved:
+125.0 → 98.0 s wall (−21.6 %), 328.1 → 254.2 s CPU (−73.9 s). The same 107 leaf tests
+run.
+
 ### F3b: encoding-independent bytecode
 
 Every character opcode now decodes one character of the subject through the `subject`
