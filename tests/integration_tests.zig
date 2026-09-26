@@ -321,3 +321,8 @@ test "Integration: nullable plus and empty-only bodies terminate" {
         try std.testing.expectEqualStrings(case[2], case[1][result.?.start..result.?.end]);
     }
 }
+
+// Historical bugs as permanent regression tests (F0d).
+test {
+    _ = @import("regression_tests.zig");
+}
