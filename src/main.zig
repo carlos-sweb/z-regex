@@ -77,6 +77,8 @@ pub const hir = @import("ir").hir;
 pub const lower = @import("frontend").lower;
 /// The backtracker (Tier 2): bytecode, code generator, matcher.
 pub const tier2 = @import("tier2");
+/// The linear-time VM (Tier 0, F4a).
+pub const tier0 = @import("tier0");
 pub const NamedGroup = @import("compile.zig").NamedGroup;
 
 // Executor module exports

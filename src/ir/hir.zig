@@ -176,6 +176,26 @@ pub const Node = union(enum) {
     modifier_scope: ModifierScope,
 };
 
+/// Whether `node` can match the empty string (F4a). A pure function of the
+/// tree: the HIR stores no per-node attributes. Assertions, lookarounds and
+/// backreferences consume nothing, so they count as nullable.
+pub fn nullable(node: *const Node) bool {
+    return switch (node.*) {
+        .empty, .assert, .look, .backref => true,
+        .literal => |l| l.units.len == 0,
+        .char_set => false,
+        .seq => |items| for (items) |item| {
+            if (!nullable(item)) break false;
+        } else true,
+        .alt => |items| for (items) |item| {
+            if (nullable(item)) break true;
+        } else false,
+        .repeat => |r| r.min == 0 or nullable(r.body),
+        .capture => |c| nullable(c.body),
+        .modifier_scope => |m| nullable(m.body),
+    };
+}
+
 /// Append the capture indices in `node`'s subtree (the node included), in
 /// pre-order: the groups a skipped optional atom must clear.
 pub fn collectCaptures(node: *const Node, list: *std.ArrayListUnmanaged(u16), allocator: std.mem.Allocator) !void {
@@ -295,4 +315,23 @@ test "hir: dump" {
         \\      char_set byte_range ranges=1 30-39
         \\
     , out.written());
+}
+
+test "nullable" {
+    const a: Node = .{ .literal = .{ .units = &.{.{ .value = 'a' }} } };
+    const e: Node = .empty;
+    const star: Node = .{ .repeat = .{ .min = 0, .max = null, .policy = .greedy, .syntax_form = .star, .body = &a } };
+    const plus: Node = .{ .repeat = .{ .min = 1, .max = null, .policy = .greedy, .syntax_form = .plus, .body = &a } };
+    const plus_of_star: Node = .{ .repeat = .{ .min = 1, .max = null, .policy = .greedy, .syntax_form = .plus, .body = &star } };
+    const seq: Node = .{ .seq = &.{ &a, &star } };
+    const alt: Node = .{ .alt = &.{ &a, &e } };
+    const caret: Node = .{ .assert = .caret };
+    try std.testing.expect(!nullable(&a));
+    try std.testing.expect(nullable(&e));
+    try std.testing.expect(nullable(&star));
+    try std.testing.expect(!nullable(&plus));
+    try std.testing.expect(nullable(&plus_of_star));
+    try std.testing.expect(!nullable(&seq));
+    try std.testing.expect(nullable(&alt));
+    try std.testing.expect(nullable(&caret));
 }
