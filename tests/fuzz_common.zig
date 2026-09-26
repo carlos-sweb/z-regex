@@ -34,8 +34,8 @@ pub var stats: Stats = .{};
 
 /// Execute only patterns classified below the expert tier. Unclassifiable
 /// ones (a parse error, or a known deviation such as D10) are compiled but
-/// not run: `analyze` stops at the deviation, so its feature set may miss a
-/// backreference (the fuzzer's `\2{9007199254740991}` did exactly that).
+/// not run: a known deviation has no tier (its feature set is complete since
+/// F2d, but the semantics it would run under deviates until F5).
 fn executable(a: zregex.analysis.Analysis) bool {
     const t = a.min_tier orelse return false;
     return t != .expert;
