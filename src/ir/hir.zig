@@ -87,7 +87,8 @@ pub const PropertyKind = enum(u8) { general_category = 0, script = 1, script_ext
 pub const CharSetNode = struct {
     /// What this node matches (one code point, decoded as the matcher does):
     /// members, then the fold `i` implies on this node's path, then negation.
-    /// The only field T0/T1 read.
+    /// The only field T0/T1 read. Arena-owned, or a view of a static
+    /// Unicode table (`CharSet.borrowed`): never freed on its own.
     set: CharSet,
     /// The opcode's `_INV` form, for the bytecode encoding: the code
     /// generator encodes `complement(set)` then (the double complement is

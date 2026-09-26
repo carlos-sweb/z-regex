@@ -57,24 +57,24 @@ const Lowerer = struct {
         return n.children.items[0];
     }
 
+    /// Only dispatches (F2a's rule for recursive descent): the kinds that
+    /// nest go to small helpers on the recursive path, every leaf to the
+    /// `noinline` `lowerLeaf`, so a nesting level's frame stays small.
     fn lowerNode(self: *Lowerer, n: *const AstNode) LowerError!*const Node {
         return switch (n.type) {
-            .char => self.literalUnit(.{ .value = n.char_value, .raw_byte = n.char_value > 0x7F }),
             .sequence => self.lowerSequence(n),
             .alternation => self.lowerAlternation(n),
-            .group => self.make(.{ .capture = .{ .index = n.group_index, .name = self.nameOf(n.group_index), .body = try self.lowerNode(try only(n)) } }),
+            .group => self.lowerGroup(n),
             .non_capturing_group => self.lowerNode(try only(n)),
-            .star => self.repeat(n, 0, null, .greedy, .star),
-            .plus => self.repeat(n, 1, null, .greedy, .plus),
-            .question => self.repeat(n, 0, 1, .greedy, .question),
-            .repeat => self.repeat(n, n.repeat_min, maxOf(n), .greedy, .counted),
-            .lazy_star => self.repeat(n, 0, null, .lazy, .star),
-            .lazy_plus => self.repeat(n, 1, null, .lazy, .plus),
-            .lazy_question => self.repeat(n, 0, 1, .lazy, .question),
-            .lazy_repeat => self.repeat(n, n.repeat_min, maxOf(n), .lazy, .counted),
-            .possessive_star => self.repeat(n, 0, null, .possessive, .star),
-            .possessive_plus => self.repeat(n, 1, null, .possessive, .plus),
-            .possessive_question => self.repeat(n, 0, 1, .possessive, .question),
+            .star, .plus, .question, .repeat, .lazy_star, .lazy_plus, .lazy_question, .lazy_repeat, .possessive_star, .possessive_plus, .possessive_question => self.repeat(n),
+            .lookahead, .negative_lookahead, .lookbehind, .negative_lookbehind => self.look(n),
+            else => self.lowerLeaf(n),
+        };
+    }
+
+    noinline fn lowerLeaf(self: *Lowerer, n: *const AstNode) LowerError!*const Node {
+        return switch (n.type) {
+            .char => self.literalUnit(.{ .value = n.char_value, .raw_byte = n.char_value > 0x7F }),
             .back_ref => blk: {
                 const indices = try self.arena.alloc(u16, 1);
                 indices[0] = n.group_index;
@@ -84,43 +84,69 @@ const Lowerer = struct {
             .anchor_end => self.make(.{ .assert = .dollar }),
             .word_boundary => self.make(.{ .assert = .word_boundary }),
             .not_word_boundary => self.make(.{ .assert = .not_word_boundary }),
-            .lookahead => self.look(n, false, false),
-            .negative_lookahead => self.look(n, false, true),
-            .lookbehind => self.look(n, true, false),
-            .negative_lookbehind => self.look(n, true, true),
             .dot => self.lowerDot(),
             .char_range => self.lowerByteRange(n),
             .unicode_property, .unicode_script, .unicode_script_extensions => self.lowerProperty(n),
             .char_class => self.lowerClass(n),
-            .class_set_op => blk: {
-                const members = try self.classSetOpMembers(n);
-                break :blk self.charSetNode(members, n.inverted, .set);
-            },
+            .class_set_op => self.lowerClassSetOp(n),
+            else => error.InvalidPattern,
         };
+    }
+
+    fn lowerGroup(self: *Lowerer, n: *const AstNode) LowerError!*const Node {
+        const body = try self.lowerNode(try only(n));
+        return self.make(.{ .capture = .{ .index = n.group_index, .name = self.nameOf(n.group_index), .body = body } });
     }
 
     fn maxOf(n: *const AstNode) ?u32 {
         return if (n.repeat_max == std.math.maxInt(u32)) null else n.repeat_max;
     }
 
+    /// `names` is in source order, which is increasing index order (the
+    /// parser registers a name when it assigns the group's index).
     fn nameOf(self: *Lowerer, index: u16) ?[]const u8 {
-        for (self.names) |g| if (g.index == index) return g.name;
+        var lo: usize = 0;
+        var hi: usize = self.names.len;
+        while (lo < hi) {
+            const mid = lo + (hi - lo) / 2;
+            const g = self.names[mid];
+            if (g.index == index) return g.name;
+            if (g.index < index) lo = mid + 1 else hi = mid;
+        }
         return null;
     }
 
-    fn literalUnit(self: *Lowerer, unit: hir.LitUnit) LowerError!*const Node {
+    noinline fn literalUnit(self: *Lowerer, unit: hir.LitUnit) LowerError!*const Node {
         const units = try self.arena.alloc(hir.LitUnit, 1);
         units[0] = unit;
         return self.make(.{ .literal = .{ .units = units } });
     }
 
-    fn repeat(self: *Lowerer, n: *const AstNode, min: u32, max: ?u32, policy: hir.Policy, form: hir.SyntaxForm) LowerError!*const Node {
+    /// Every quantifier, keeping the syntax that produced it
+    /// (`hir.SyntaxForm`, semantic) and its policy.
+    fn repeat(self: *Lowerer, n: *const AstNode) LowerError!*const Node {
         const body = try self.lowerNode(try only(n));
-        return self.make(.{ .repeat = .{ .min = min, .max = max, .policy = policy, .syntax_form = form, .body = body } });
+        const shape: struct { min: u32, max: ?u32, policy: hir.Policy, form: hir.SyntaxForm } = switch (n.type) {
+            .star => .{ .min = 0, .max = null, .policy = .greedy, .form = .star },
+            .plus => .{ .min = 1, .max = null, .policy = .greedy, .form = .plus },
+            .question => .{ .min = 0, .max = 1, .policy = .greedy, .form = .question },
+            .repeat => .{ .min = n.repeat_min, .max = maxOf(n), .policy = .greedy, .form = .counted },
+            .lazy_star => .{ .min = 0, .max = null, .policy = .lazy, .form = .star },
+            .lazy_plus => .{ .min = 1, .max = null, .policy = .lazy, .form = .plus },
+            .lazy_question => .{ .min = 0, .max = 1, .policy = .lazy, .form = .question },
+            .lazy_repeat => .{ .min = n.repeat_min, .max = maxOf(n), .policy = .lazy, .form = .counted },
+            .possessive_star => .{ .min = 0, .max = null, .policy = .possessive, .form = .star },
+            .possessive_plus => .{ .min = 1, .max = null, .policy = .possessive, .form = .plus },
+            .possessive_question => .{ .min = 0, .max = 1, .policy = .possessive, .form = .question },
+            else => unreachable,
+        };
+        return self.make(.{ .repeat = .{ .min = shape.min, .max = shape.max, .policy = shape.policy, .syntax_form = shape.form, .body = body } });
     }
 
-    fn look(self: *Lowerer, n: *const AstNode, behind: bool, negated: bool) LowerError!*const Node {
+    fn look(self: *Lowerer, n: *const AstNode) LowerError!*const Node {
         const body = try self.lowerNode(try only(n));
+        const behind = n.type == .lookbehind or n.type == .negative_lookbehind;
+        const negated = n.type == .negative_lookahead or n.type == .negative_lookbehind;
         return self.make(.{ .look = .{ .behind = behind, .negated = negated, .body = body } });
     }
 
@@ -128,7 +154,7 @@ const Lowerer = struct {
     /// `char_value` set to the code point, its children the bytes) or an
     /// ordinary concatenation. Adjacent literals merge; empty items (an
     /// empty `(?:)`) generate nothing, so they are dropped.
-    fn lowerSequence(self: *Lowerer, n: *const AstNode) LowerError!*const Node {
+    noinline fn lowerSequence(self: *Lowerer, n: *const AstNode) LowerError!*const Node {
         if (n.char_value != 0) return self.literalUnit(.{ .value = n.char_value });
 
         var items: std.ArrayListUnmanaged(*const Node) = .empty;
@@ -165,7 +191,7 @@ const Lowerer = struct {
     /// The parser's alternation is binary and nested to the left
     /// (`a|b|c` = `((a|b)|c)`); flatten that chain into one n-ary Alt, which
     /// the code generator emits nested to the left again.
-    fn lowerAlternation(self: *Lowerer, n: *const AstNode) LowerError!*const Node {
+    noinline fn lowerAlternation(self: *Lowerer, n: *const AstNode) LowerError!*const Node {
         var branches: std.ArrayListUnmanaged(*const AstNode) = .empty;
         var cur = n;
         while (true) {
@@ -195,7 +221,7 @@ const Lowerer = struct {
         return self.make(.{ .char_set = .{ .set = set, .inverted = inverted, .encoding_hint = hint } });
     }
 
-    fn lowerDot(self: *Lowerer) LowerError!*const Node {
+    noinline fn lowerDot(self: *Lowerer) LowerError!*const Node {
         const dot_all = self.flags.dot_all;
         // `.` without `s` excludes the LineTerminators \n, \r, U+2028, U+2029.
         const set = if (dot_all)
@@ -208,7 +234,7 @@ const Lowerer = struct {
     /// A standalone range: `\d`/`\D`, or a class whose only member is an
     /// ASCII range (`[a-z]`). CHAR_RANGE(_INV) over bytes, or under `i` a
     /// bitmap with both cases of its ASCII letters.
-    fn lowerByteRange(self: *Lowerer, n: *const AstNode) LowerError!*const Node {
+    noinline fn lowerByteRange(self: *Lowerer, n: *const AstNode) LowerError!*const Node {
         if (n.range_start > 0xFF or n.range_end > 0xFF) return error.InvalidPattern;
         var ranges = [_]Range{.{ .lo = n.range_start, .hi = n.range_end }};
         const fold = self.flags.ignore_case and n.range_end <= 0x7F;
@@ -216,8 +242,11 @@ const Lowerer = struct {
         return self.charSetNode(members, n.inverted, .{ .byte_range = .{ .lo = @intCast(n.range_start), .hi = @intCast(n.range_end) } });
     }
 
-    fn lowerProperty(self: *Lowerer, n: *const AstNode) LowerError!*const Node {
-        const members = try self.propertyMembers(n);
+    noinline fn lowerProperty(self: *Lowerer, n: *const AstNode) LowerError!*const Node {
+        // The property's own code points; a standalone `\P{...}` is the
+        // node's `inverted`, applied once by `charSetNode` (the opcode's
+        // `_INV` form), not by `propertyMembers`.
+        const members = try self.propertyTable(n);
         const kind: hir.PropertyKind = switch (n.type) {
             .unicode_property => .general_category,
             .unicode_script => .script,
@@ -228,8 +257,12 @@ const Lowerer = struct {
         return self.charSetNode(members, n.inverted, .{ .property = .{ .kind = kind, .value = @intCast(n.char_value) } });
     }
 
+    noinline fn lowerClassSetOp(self: *Lowerer, n: *const AstNode) LowerError!*const Node {
+        return self.charSetNode(try self.classSetOpMembers(n), n.inverted, .set);
+    }
+
     /// A `[...]` class, routed exactly as the code generator did before F2c.
-    fn lowerClass(self: *Lowerer, n: *const AstNode) LowerError!*const Node {
+    noinline fn lowerClass(self: *Lowerer, n: *const AstNode) LowerError!*const Node {
         const children = n.children.items;
         // `[]` (D3): an empty table, never matches.
         if (children.len == 0 and !n.inverted) return self.charSetNode(try CharSet.fromRanges(self.arena, &.{}), false, .set);
@@ -306,16 +339,28 @@ const Lowerer = struct {
     /// A `\p{...}` node's code points; `\P{...}` (its `inverted`) is the
     /// complement.
     fn propertyMembers(self: *Lowerer, n: *const AstNode) LowerError!CharSet {
+        const set = try self.propertyTable(n);
+        return if (n.inverted) set.complement(self.arena) else set;
+    }
+
+    /// A `\p{...}`/`\P{...}` node's property table as a CharSet, ignoring
+    /// its negation.
+    fn propertyTable(self: *Lowerer, n: *const AstNode) LowerError!CharSet {
         const table = switch (n.type) {
             .unicode_property => properties.propertyRanges(@enumFromInt(n.char_value)),
             .unicode_script => properties.scriptRanges(@intCast(n.char_value)),
             .unicode_script_extensions => properties.scriptExtensionsRanges(@intCast(n.char_value)),
             else => return error.InvalidPattern,
         };
-        const ranges = try self.arena.alloc(Range, table.len);
-        for (table, ranges) |t, *r| r.* = .{ .lo = t.start, .hi = t.end };
-        const set = try CharSet.fromRanges(self.arena, ranges);
-        return if (n.inverted) set.complement(self.arena) else set;
+        // The generated tables are sorted and merged, and share `Range`'s
+        // layout: view them in place instead of copying (a copy of `\p{L}` is
+        // ~5.5 KiB per compile).
+        comptime {
+            const T = std.meta.Child(@TypeOf(table));
+            std.debug.assert(@sizeOf(T) == @sizeOf(Range) and @offsetOf(T, "start") == @offsetOf(Range, "lo") and @offsetOf(T, "end") == @offsetOf(Range, "hi"));
+        }
+        _ = self;
+        return CharSet.borrowed(@ptrCast(table));
     }
 
     /// One operand of a `v` set operation: a class (its members, then its
@@ -504,6 +549,18 @@ test "lower: classes keep their pre-F2c encoding and folding path" {
     try expectLowered("\\p{Lu}", .{ .unicode = true },
         \\scope
         \\  char_set property ranges=655 41-5A C0-D6 D8-DE 100-100 ...
+        \\
+    );
+    // A standalone \P: its set is the complement (applied once).
+    try expectLowered("\\P{ASCII}", .{ .unicode = true },
+        \\scope
+        \\  char_set property inv ranges=1 80-10FFFF
+        \\
+    );
+    // A \P member inside a class, under the class's own [^...].
+    try expectLowered("[^\\P{ASCII}]", .{ .unicode = true },
+        \\scope
+        \\  char_set set inv ranges=1 0-7F
         \\
     );
     try expectLowered("[\\p{L}--[a-z]]", .{ .v = true },

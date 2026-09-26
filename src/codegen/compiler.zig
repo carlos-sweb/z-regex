@@ -14,6 +14,7 @@ const optimizer_mod = @import("optimizer.zig");
 const bytecode_writer = @import("../bytecode/writer.zig");
 const format_mod = @import("../bytecode/format.zig");
 const charset_mod = @import("../ir/charset.zig");
+const lower_mod = @import("../lower/lower.zig");
 
 const Lexer = lexer_mod.Lexer;
 const Parser = parser_mod.Parser;
@@ -125,18 +126,30 @@ pub fn compile(allocator: Allocator, pattern: []const u8, options: CompileOption
     const ast = try parser.parse();
     defer ast.deinit();
 
-    // Phase 3: Code generation
+    // Phase 3: Lowering to the HIR (F2c). The HIR lives in this arena and
+    // holds no pointer into the AST; both die when this function returns.
+    var hir_arena = std.heap.ArenaAllocator.init(allocator);
+    defer hir_arena.deinit();
+    const names = try hir_arena.allocator().alloc(lower_mod.GroupName, parser.group_names.items.len);
+    for (parser.group_names.items, names) |entry, *n| n.* = .{ .name = entry.name, .index = entry.index };
+    const hir_root = try lower_mod.lower(hir_arena.allocator(), ast, .{
+        .ignore_case = options.case_insensitive,
+        .multiline = options.multiline,
+        .dot_all = options.dot_all,
+    }, names);
+
+    // Phase 4: Code generation, from the HIR only
     var writer = BytecodeWriter.init(allocator);
     defer writer.deinit();
 
-    var generator = CodeGenerator.init(allocator, &writer, options);
+    var generator = CodeGenerator.init(allocator, &writer);
     defer generator.deinit();
-    try generator.generate(ast);
+    try generator.generate(hir_root);
 
     const unoptimized = try writer.finalize();
     // Note: unoptimized is owned by writer, will be freed by writer.deinit()
 
-    // Phase 4: Optimization
+    // Phase 5: Optimization
     var optimizer = Optimizer.init(allocator, options.opt_level);
     const optimized = try optimizer.optimize(unoptimized);
     errdefer allocator.free(optimized);

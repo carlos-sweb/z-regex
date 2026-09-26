@@ -71,6 +71,7 @@ pub const CompileOptions = @import("codegen/compiler.zig").CompileOptions;
 pub const CompileResult = @import("codegen/compiler.zig").CompileResult;
 pub const CharSet = @import("ir/charset.zig").CharSet;
 pub const hir = @import("ir/hir.zig");
+pub const lower = @import("lower/lower.zig");
 pub const NamedGroup = @import("codegen/compiler.zig").NamedGroup;
 
 // Executor module exports

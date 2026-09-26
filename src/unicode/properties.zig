@@ -520,6 +520,22 @@ test "properties: propertyRanges agrees with isInCategory at every range edge" {
     }
 }
 
+test "properties: every range table is sorted with no overlapping or adjacent ranges" {
+    // The lowering views these tables as CharSets in place (F2c), which
+    // requires the CharSet invariant.
+    const Check = struct {
+        fn run(ranges: []const CodepointRange) !void {
+            for (ranges, 0..) |r, i| {
+                try std.testing.expect(r.start <= r.end and r.end <= 0x10FFFF);
+                if (i > 0) try std.testing.expect(r.start > ranges[i - 1].end + 1);
+            }
+        }
+    };
+    inline for (@typeInfo(UnicodeProperty).@"enum".fields) |f| try Check.run(propertyRanges(@enumFromInt(f.value)));
+    for (tables.SCRIPT_RANGES) |t| try Check.run(t);
+    for (tables.SCRIPT_EXTENSIONS_RANGES) |t| try Check.run(t);
+}
+
 test "properties: isInCategory trivial ASCII/Any properties" {
     try std.testing.expect(isInCategory('a', .ASCII));
     try std.testing.expect(isInCategory(0x7F, .ASCII));

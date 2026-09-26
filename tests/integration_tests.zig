@@ -338,3 +338,6 @@ test {
 test {
     _ = @import("bytecode_snapshot.zig");
 }
+test {
+    _ = @import("hir_contract_tests.zig");
+}

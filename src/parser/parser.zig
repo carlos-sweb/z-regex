@@ -851,7 +851,7 @@ pub const Parser = struct {
                 // negation is its own -- it contributes the property's
                 // complement to the union, not a second negation of the
                 // whole enclosing class (that's `class.inverted`, applied
-                // once at codegen time -- see `generateCharClass`).
+                // once, by the lowering -- see `lower.zig`'s `lowerClass`).
                 const name = self.lexer.pattern[self.current_token.name_start..self.current_token.name_end];
                 const negated = self.current_token.type == .not_unicode_prop;
                 try self.advance();
@@ -926,7 +926,7 @@ pub const Parser = struct {
             // never itself negated -- that outer negation belongs solely to
             // the set-op result (`outer_negated`, passed separately below).
             // Leaving it set here would double-count it: once via
-            // `CodeGenerator.classSetOperandSet` reading this flag as operand1's own
+            // `lower.zig`'s `classSetOperand` reading this flag as operand1's own
             // negation, and again via `outer_negated`.
             class.inverted = false;
             class_owned = false;

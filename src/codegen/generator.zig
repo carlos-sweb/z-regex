@@ -1,40 +1,27 @@
-//! Code generator - Translates AST to bytecode
+//! Code generator - Translates the HIR to bytecode
 //!
-//! This module implements the code generation phase of the compiler,
-//! converting the Abstract Syntax Tree into executable bytecode.
+//! This module implements the code generation phase of the compiler: it
+//! walks the HIR (`src/ir/hir.zig`, lowered from the parser's AST by
+//! `src/lower/lower.zig`) and emits the backtracker's bytecode. Since F2c it
+//! reads only the HIR; the bytecode is the same as the AST-based generator
+//! produced (tests/snapshots/bytecode.txt).
 
 const std = @import("std");
 const Allocator = std.mem.Allocator;
-const ast = @import("../parser/ast.zig");
+const hir = @import("../ir/hir.zig");
 const bytecode = @import("../bytecode/writer.zig");
 const opcodes = @import("../bytecode/opcodes.zig");
-const compiler = @import("compiler.zig");
 const bittable_mod = @import("../utils/bittable.zig");
 const BitTable = bittable_mod.BitTable;
 const casefold = @import("../unicode/casefold.zig");
-const properties = @import("../unicode/properties.zig");
 const charset_mod = @import("../ir/charset.zig");
 const CharSet = charset_mod.CharSet;
 const Range = charset_mod.Range;
 
-const Node = ast.Node;
-const NodeType = ast.NodeType;
+const Node = hir.Node;
 const BytecodeWriter = bytecode.BytecodeWriter;
 const Label = bytecode.Label;
 const Opcode = opcodes.Opcode;
-const CompileOptions = compiler.CompileOptions;
-
-/// Recursively collect the group indices of every `.group` node in `node`'s
-/// subtree (including `node` itself), used to know which captures a
-/// skipped optional atom would have set had it run.
-fn collectGroupIndices(node: *Node, list: *std.ArrayListUnmanaged(u16), allocator: Allocator) !void {
-    if (node.type == .group) {
-        try list.append(allocator, node.group_index);
-    }
-    for (node.children.items) |child| {
-        try collectGroupIndices(child, list, allocator);
-    }
-}
 
 /// Code generation error
 pub const CodegenError = error{
@@ -63,25 +50,48 @@ pub const CodegenError = error{
 /// remove the unrolling are F5's (D10).
 pub const MAX_PROGRAM_BYTES: usize = 16 << 20;
 
-/// Code generator for translating AST to bytecode
+/// Content-interning key of the CharSet table: the encoding hint's tag and
+/// the table's ranges (borrowed from the table entry itself). Two classes
+/// share an entry only when both agree.
+const CharSetKey = struct {
+    hint: std.meta.Tag(hir.EncodingHint),
+    ranges: []const Range,
+};
+
+const CharSetKeyContext = struct {
+    pub fn hash(_: CharSetKeyContext, key: CharSetKey) u64 {
+        var h = std.hash.Wyhash.init(@intFromEnum(key.hint));
+        h.update(std.mem.sliceAsBytes(key.ranges));
+        return h.final();
+    }
+    pub fn eql(_: CharSetKeyContext, a: CharSetKey, b: CharSetKey) bool {
+        return a.hint == b.hint and std.mem.eql(u8, std.mem.sliceAsBytes(a.ranges), std.mem.sliceAsBytes(b.ranges));
+    }
+};
+
+/// Code generator for translating the HIR to bytecode
 pub const CodeGenerator = struct {
     allocator: Allocator,
     writer: *BytecodeWriter,
-    group_count: u16,
-    options: CompileOptions,
+    /// The flags of the enclosing ModifierScope (F2c: only the root one,
+    /// so a single value saved and restored around the scope is enough;
+    /// F5's modifiers nest scopes the same way).
+    flags: hir.Flags = .{},
     /// The program's CharSet table (F2b), referenced by CHAR_SET idx.
-    /// Indices are assigned in order of first appearance in the AST walk,
+    /// Indices are assigned in order of first appearance in the HIR walk,
     /// so the same pattern always yields the same bytecode and table.
     charsets: std.ArrayListUnmanaged(CharSet) = .empty,
     /// Bytes of `charsets` (8 per range), counted with the bytecode against
     /// MAX_PROGRAM_BYTES.
     charset_bytes: usize = 0,
-    /// Content interning: a set's range bytes -> its index. Only a lookup;
-    /// it never decides an index. Keys borrow the sets' own range memory.
-    charset_index: std.StringHashMapUnmanaged(u32) = .empty,
-    /// Class node -> index, so an unrolled counted repeat (which generates
-    /// the same node once per copy) materializes its class only once.
+    /// Content interning by (encoding hint, table ranges). Only a lookup;
+    /// it never decides an index. Keys borrow the table entries' memory.
+    charset_index: std.HashMapUnmanaged(CharSetKey, u32, CharSetKeyContext, std.hash_map.default_max_load_percentage) = .empty,
+    /// CharSet node -> index, so an unrolled counted repeat (which generates
+    /// the same node once per copy) builds its table entry only once.
     node_charset: std.AutoHashMapUnmanaged(*const Node, u32) = .empty,
+    /// CharSet node -> its CHAR_CLASS bits, for the same reason.
+    node_bitmap: std.AutoHashMapUnmanaged(*const Node, [32]u8) = .empty,
 
     const Self = @This();
 
@@ -91,34 +101,9 @@ pub const CodeGenerator = struct {
     /// Difference between uppercase and lowercase ASCII letters
     const CASE_DIFF = 32;
 
-    /// Set `c`'s opposite-case bit too, if `c` is an ASCII letter (a no-op
-    /// otherwise). Used to make character-class/-range bit tables
-    /// case-insensitive.
-    fn addOppositeCaseToTable(table: *BitTable, c: u8) void {
-        if (c >= 'a' and c <= 'z') table.set(c - CASE_DIFF);
-        if (c >= 'A' and c <= 'Z') table.set(c + CASE_DIFF);
-    }
-
-    /// Add a byte range to a bit table, optionally also setting each byte's
-    /// opposite-case bit (for `case_insensitive` character classes/ranges).
-    fn addRangeToTable(table: *BitTable, start: u8, end: u8, case_insensitive: bool) void {
-        table.addRange(start, end);
-        if (case_insensitive) {
-            var c: u16 = start;
-            while (c <= end) : (c += 1) {
-                addOppositeCaseToTable(table, @intCast(c));
-            }
-        }
-    }
-
     /// Initialize a new code generator
-    pub fn init(allocator: Allocator, writer: *BytecodeWriter, options: CompileOptions) Self {
-        return .{
-            .allocator = allocator,
-            .writer = writer,
-            .group_count = 0,
-            .options = options,
-        };
+    pub fn init(allocator: Allocator, writer: *BytecodeWriter) Self {
+        return .{ .allocator = allocator, .writer = writer };
     }
 
     /// Free the CharSet table unless `takeCharSets` already took it.
@@ -127,6 +112,7 @@ pub const CodeGenerator = struct {
         self.charsets.deinit(self.allocator);
         self.charset_index.deinit(self.allocator);
         self.node_charset.deinit(self.allocator);
+        self.node_bitmap.deinit(self.allocator);
     }
 
     /// Hand the CharSet table over to the caller (`CompileResult.charsets`);
@@ -134,6 +120,7 @@ pub const CodeGenerator = struct {
     pub fn takeCharSets(self: *Self) Allocator.Error![]const CharSet {
         self.charset_index.clearAndFree(self.allocator);
         self.node_charset.clearAndFree(self.allocator);
+        self.node_bitmap.clearAndFree(self.allocator);
         self.charset_bytes = 0;
         return self.charsets.toOwnedSlice(self.allocator);
     }
@@ -143,8 +130,8 @@ pub const CodeGenerator = struct {
         return self.writer.offset() + self.charset_bytes;
     }
 
-    /// Generate bytecode from an AST
-    pub fn generate(self: *Self, root: *Node) CodegenError!void {
+    /// Generate bytecode from a HIR tree (its root is a ModifierScope).
+    pub fn generate(self: *Self, root: *const Node) CodegenError!void {
         try self.generateNode(root);
         // Emit MATCH at the end to signal successful match
         try self.writer.emitSimple(.MATCH);
@@ -153,42 +140,35 @@ pub const CodeGenerator = struct {
         if (self.programBytes() > MAX_PROGRAM_BYTES) return error.PatternTooLarge;
     }
 
-    /// Generate code for a node
-    fn generateNode(self: *Self, node: *Node) CodegenError!void {
+    /// Generate code for a node. Only dispatches: the kinds that nest stay
+    /// on the recursive path, the leaves go to the `noinline`
+    /// `generateLeaf` so a nesting level's frame stays small (F2a's rule).
+    fn generateNode(self: *Self, node: *const Node) CodegenError!void {
         if (self.programBytes() > MAX_PROGRAM_BYTES) return error.PatternTooLarge;
-        switch (node.type) {
-            .char => try self.generateChar(node),
-            .char_range => try self.generateCharRange(node),
-            .char_class => try self.generateCharClass(node),
-            .dot => try self.generateDot(),
-            .unicode_property => try self.generateUnicodeProperty(node),
-            .unicode_script => try self.generateUnicodeScript(node),
-            .unicode_script_extensions => try self.generateUnicodeScriptExtensions(node),
-            .class_set_op => try self.generateClassSetOp(node),
-            .star => try self.generateStar(node),
-            .plus => try self.generatePlus(node),
-            .question => try self.generateQuestion(node),
-            .repeat => try self.generateRepeat(node),
-            .lazy_star => try self.generateLazyStar(node),
-            .lazy_plus => try self.generateLazyPlus(node),
-            .lazy_question => try self.generateLazyQuestion(node),
-            .lazy_repeat => try self.generateLazyRepeat(node),
-            .possessive_star => try self.generatePossessiveStar(node),
-            .possessive_plus => try self.generatePossessivePlus(node),
-            .possessive_question => try self.generatePossessiveQuestion(node),
-            .sequence => try self.generateSequence(node),
-            .alternation => try self.generateAlternation(node),
-            .group => try self.generateGroup(node),
-            .non_capturing_group => try self.generateNonCapturingGroup(node),
-            .back_ref => try self.generateBackRef(node),
-            .lookahead => try self.generateLookahead(node, false),
-            .negative_lookahead => try self.generateLookahead(node, true),
-            .lookbehind => try self.generateLookbehind(node, false),
-            .negative_lookbehind => try self.generateLookbehind(node, true),
-            .anchor_start => try self.generateAnchorStart(),
-            .anchor_end => try self.generateAnchorEnd(),
-            .word_boundary => try self.generateWordBoundary(),
-            .not_word_boundary => try self.generateNotWordBoundary(),
+        switch (node.*) {
+            .seq => |items| for (items) |item| try self.generateNode(item),
+            .alt => |items| try self.generateAlternation(items),
+            .repeat => |r| try self.generateRepeat(r),
+            .capture => |c| try self.generateGroup(c),
+            .look => |l| try self.generateLook(l),
+            .modifier_scope => |m| {
+                const saved = self.flags;
+                self.flags = m.flags;
+                defer self.flags = saved;
+                try self.generateNode(m.body);
+            },
+            .empty, .literal, .char_set, .backref, .assert => try self.generateLeaf(node),
+        }
+    }
+
+    noinline fn generateLeaf(self: *Self, node: *const Node) CodegenError!void {
+        switch (node.*) {
+            .empty => {},
+            .literal => |lit| for (lit.units) |unit| try self.generateUnit(unit),
+            .char_set => |cs| try self.generateCharSet(node, cs),
+            .backref => |b| try self.generateBackRef(b),
+            .assert => |a| try self.generateAssert(a),
+            else => unreachable,
         }
     }
 
@@ -196,12 +176,48 @@ pub const CodeGenerator = struct {
     // Character Matching
     // =========================================================================
 
-    /// Generate code for a character literal
-    fn generateChar(self: *Self, node: *Node) !void {
-        const char = node.char_value;
+    /// Generate one literal unit, exactly as the AST generator did (see
+    /// `hir.Literal`: one CHAR32 per byte-level unit, never merged). A code
+    /// point <= U+007F or a raw byte is one CHAR32 (both ASCII cases under
+    /// `i`); a code point above U+007F is its WTF-8 bytes, with its simple
+    /// case-fold pair as an alternative under `i`.
+    noinline fn generateUnit(self: *Self, unit: hir.LitUnit) !void {
+        if (unit.raw_byte or unit.value <= MAX_ASCII) return self.generateChar(unit.value);
 
+        var bytes_buf: [4]u8 = undefined;
+        const len = std.unicode.wtf8Encode(@intCast(unit.value), &bytes_buf) catch return error.InvalidPattern;
+        const bytes = bytes_buf[0..len];
+
+        if (self.flags.ignore_case) {
+            const opposite = casefold.toUpper(unit.value) orelse casefold.toLower(unit.value);
+            if (opposite) |opp| {
+                var buf: [4]u8 = undefined;
+                const opp_len = std.unicode.utf8Encode(@intCast(opp), &buf) catch unreachable;
+
+                var orig_label = try self.writer.createLabel();
+                var opp_label = try self.writer.createLabel();
+                var after_label = try self.writer.createLabel();
+
+                try self.writer.emitSplit(.SPLIT, orig_label, opp_label);
+                try self.writer.defineLabel(&orig_label);
+                for (bytes) |b| try self.generateChar(b);
+                try self.writer.emitJump(.GOTO, after_label);
+                try self.writer.defineLabel(&opp_label);
+                for (buf[0..opp_len]) |b| {
+                    try self.writer.emit1(.CHAR32, b);
+                }
+                try self.writer.defineLabel(&after_label);
+                return;
+            }
+        }
+
+        for (bytes) |b| try self.generateChar(b);
+    }
+
+    /// Generate code for one CHAR32 unit (a code point <= U+007F, or a byte)
+    fn generateChar(self: *Self, char: u32) !void {
         // If case-insensitive mode and this is an ASCII letter, generate alternation
-        if (self.options.case_insensitive and char <= MAX_ASCII) {
+        if (self.flags.ignore_case and char <= MAX_ASCII) {
             const c = @as(u8, @intCast(char));
 
             // Check if it's a letter
@@ -235,128 +251,73 @@ pub const CodeGenerator = struct {
         try self.writer.emit1(.CHAR32, char);
     }
 
-    /// Generate code for a character range [a-z]
-    fn generateCharRange(self: *Self, node: *Node) !void {
-        // Under case_insensitive, a byte-range's opposite-case letters (if
-        // any) must also match (e.g. `\d` used inside `[a-z]` as a standalone
-        // range is fine either way, but `[a-z]` itself must also match
-        // 'A'-'Z'). CHAR_RANGE/CHAR_RANGE_INV have no case-insensitive
-        // variant, so fall back to a bit table, same representation
-        // CHAR_CLASS already uses for exactly this reason.
-        if (self.options.case_insensitive and node.range_end <= MAX_ASCII) {
-            var table = BitTable.init();
-            addRangeToTable(&table, @intCast(node.range_start), @intCast(node.range_end), true);
-            const opcode: opcodes.Opcode = if (node.inverted) .CHAR_CLASS_INV else .CHAR_CLASS;
-            try self.writer.emitCharClass(opcode, &table.bits);
-            return;
+    /// Generate a CharSet node in the encoding its `encoding_hint` names.
+    /// What matches is `cs.set` whatever the encoding; the `_INV` opcodes
+    /// take the members, `complement(set)` (exact, so tables and bitmaps
+    /// are the same as before F2c).
+    noinline fn generateCharSet(self: *Self, node: *const Node, cs: hir.CharSetNode) !void {
+        switch (cs.encoding_hint) {
+            .dot => |d| try self.writer.emitSimple(if (d.dot_all) .CHAR_ANY else .CHAR),
+            .property => |p| {
+                const opcode: Opcode = switch (p.kind) {
+                    .general_category => if (cs.inverted) .UNICODE_PROPERTY_INV else .UNICODE_PROPERTY,
+                    .script => if (cs.inverted) .UNICODE_SCRIPT_INV else .UNICODE_SCRIPT,
+                    .script_extensions => if (cs.inverted) .UNICODE_SCRIPT_EXTENSIONS_INV else .UNICODE_SCRIPT_EXTENSIONS,
+                };
+                try self.writer.emit1(opcode, p.value);
+            },
+            // Under `i` an ASCII byte range needs both cases of its letters,
+            // which CHAR_RANGE can't express: a bitmap instead.
+            .byte_range => |r| if (self.flags.ignore_case and r.hi <= MAX_ASCII)
+                try self.emitBitmap(node, cs)
+            else
+                try self.writer.emit2(if (cs.inverted) .CHAR_RANGE_INV else .CHAR_RANGE, r.lo, r.hi),
+            .bitmap => try self.emitBitmap(node, cs),
+            .set => {
+                const idx = try self.charSetIndex(node, cs);
+                try self.writer.emit1(if (cs.inverted) .CHAR_SET_INV else .CHAR_SET, idx);
+            },
         }
-
-        const opcode: opcodes.Opcode = if (node.inverted) .CHAR_RANGE_INV else .CHAR_RANGE;
-        try self.writer.emit2(opcode, node.range_start, node.range_end);
     }
 
-    /// Generate code for a character class [abc] or [a-z0-9]
-    fn generateCharClass(self: *Self, node: *Node) !void {
-        // `[]` (D3): a class with no members never matches. An empty range
-        // table does exactly that (and fails at end of input like any class).
-        if (node.children.items.len == 0 and !node.inverted) {
-            return self.emitCharSet(node, false);
-        }
-
-        // A `\p{...}`/`\P{...}` member (General_Category, binary property,
-        // Script, or Script_Extensions) can't fit the byte bitmap below, so
-        // the class becomes a CharSet with the property's ranges folded in.
-        for (node.children.items) |child| {
-            switch (child.type) {
-                .unicode_property, .unicode_script, .unicode_script_extensions => return self.emitCharSet(node, node.inverted),
-                else => {},
-            }
-        }
-
-        // A class member above U+007F needs more than one UTF-8 byte to
-        // encode, so it can't fit the fixed 256-entry byte bitmap below —
-        // it needs a CharSet instead.
-        var needs_ranges = false;
-        for (node.children.items) |child| {
-            switch (child.type) {
-                .char => if (child.char_value > 0x7F) {
-                    needs_ranges = true;
-                },
-                .char_range => if (child.range_start > 0x7F or child.range_end > 0x7F) {
-                    needs_ranges = true;
-                },
-                else => return error.InvalidPattern,
-            }
-        }
-
-        if (needs_ranges) {
-            return self.emitCharSet(node, node.inverted);
-        }
-
-        if (node.children.items.len == 1 and !node.inverted) {
-            // Single item, not inverted: just generate the child directly
-            const child = node.children.items[0];
-            try self.generateNode(child);
-            return;
-        }
-
-        // For inverted single items or multiple items: use bit table
+    /// CHAR_CLASS(_INV) with the members' bits. The members (`set`, or its
+    /// complement for `_INV`) are all ASCII on this path, so bit `c` is just
+    /// membership of `c` for c in 0..255 -- no allocation, which matters
+    /// because an unrolled repeat (`[^a]{65536}`) emits the same class once
+    /// per copy.
+    fn emitBitmap(self: *Self, node: *const Node, cs: hir.CharSetNode) !void {
+        const opcode: Opcode = if (cs.inverted) .CHAR_CLASS_INV else .CHAR_CLASS;
+        if (self.node_bitmap.getPtr(node)) |bits| return self.writer.emitCharClass(opcode, bits);
         var table = BitTable.init();
-
-        // Build bit table from children
-        for (node.children.items) |child| {
-            switch (child.type) {
-                .char => {
-                    const c = @as(u8, @intCast(child.char_value));
-                    table.set(c);
-                    if (self.options.case_insensitive) addOppositeCaseToTable(&table, c);
-                },
-                .char_range => {
-                    const start = @as(u8, @intCast(child.range_start));
-                    const end = @as(u8, @intCast(child.range_end));
-                    addRangeToTable(&table, start, end, self.options.case_insensitive);
-                },
-                else => {
-                    // Unsupported child type in character class
-                    return error.InvalidPattern;
-                },
-            }
+        for (0..256) |c| {
+            const in_set = cs.set.contains(@intCast(c));
+            if (in_set != cs.inverted) table.set(@intCast(c));
         }
-
-        // Emit CHAR_CLASS or CHAR_CLASS_INV with inline bit table
-        const opcode: opcodes.Opcode = if (node.inverted) .CHAR_CLASS_INV else .CHAR_CLASS;
+        try self.node_bitmap.put(self.allocator, node, table.bits);
         try self.writer.emitCharClass(opcode, &table.bits);
     }
 
-    /// Emit CHAR_SET (or CHAR_SET_INV, for the class's own `[^...]`) for a
-    /// `char_class` or `class_set_op` node. The negation stays in the
-    /// opcode, as the table-based class instructions had it; only negations
-    /// *inside* the class (a `\P{...}` member, a nested `[^...]` operand)
-    /// are applied to the set.
-    noinline fn emitCharSet(self: *Self, node: *Node, inverted: bool) !void {
-        const idx = try self.charSetIndex(node);
-        try self.writer.emit1(if (inverted) .CHAR_SET_INV else .CHAR_SET, idx);
+    /// What the opcode's table holds: the set, or for `_INV` its complement.
+    /// Owned by the caller (the generator's allocator).
+    fn membersOf(self: *Self, cs: hir.CharSetNode) !CharSet {
+        return if (cs.inverted) cs.set.complement(self.allocator) else cs.set.clone(self.allocator);
     }
 
-    /// The table index of `node`'s CharSet, materializing and interning it
-    /// on first use.
-    fn charSetIndex(self: *Self, node: *Node) !u32 {
+    /// The table index of a `set`-encoded CharSet node, building and
+    /// interning its entry on first use.
+    fn charSetIndex(self: *Self, node: *const Node, cs: hir.CharSetNode) !u32 {
         if (self.node_charset.get(node)) |idx| return idx;
-        const set = switch (node.type) {
-            .char_class => try self.classMembersSet(node, self.options.case_insensitive),
-            .class_set_op => try self.classSetOpSet(node),
-            else => return error.InvalidPattern,
-        };
-        const idx = try self.internCharSet(set);
+        const idx = try self.internCharSet(cs.encoding_hint, try self.membersOf(cs));
         try self.node_charset.put(self.allocator, node, idx);
         return idx;
     }
 
-    /// Add `set` to the table (taking ownership) or, if an equal set is
-    /// already there, free it and return that one's index. A new index is
-    /// always the table's length: order of first appearance.
-    fn internCharSet(self: *Self, set: CharSet) !u32 {
-        const key = std.mem.sliceAsBytes(set.ranges);
+    /// Add `set` to the table (taking ownership) or, if an entry with the
+    /// same hint and ranges is already there, free it and return that one's
+    /// index. A new index is always the table's length: order of first
+    /// appearance.
+    fn internCharSet(self: *Self, hint: hir.EncodingHint, set: CharSet) !u32 {
+        const key: CharSetKey = .{ .hint = hint, .ranges = set.ranges };
         if (self.charset_index.get(key)) |idx| {
             set.deinit(self.allocator);
             return idx;
@@ -377,149 +338,40 @@ pub const CodeGenerator = struct {
         return idx;
     }
 
-    /// The union of a class's members, without the class's own `[^...]`:
-    /// literals, ranges and `\p{...}`/`\P{...}` tests. With `fold`, a
-    /// literal also adds its simple case-fold pair -- exactly what the
-    /// table-based class instructions did before F2b: literals only, not
-    /// ranges (`[À-Ö]`) or properties, and not inside a `v` set operation's
-    /// operands (docs/KNOWN_LIMITATIONS.md).
-    fn classMembersSet(self: *Self, node: *Node, fold: bool) !CharSet {
-        var literal: std.ArrayListUnmanaged(Range) = .empty;
-        defer literal.deinit(self.allocator);
-        var props: std.ArrayListUnmanaged(*Node) = .empty;
-        defer props.deinit(self.allocator);
-
-        for (node.children.items) |child| {
-            switch (child.type) {
-                .char => {
-                    try literal.append(self.allocator, .{ .lo = child.char_value, .hi = child.char_value });
-                    if (fold) {
-                        if (casefold.toUpper(child.char_value) orelse casefold.toLower(child.char_value)) |opposite| {
-                            try literal.append(self.allocator, .{ .lo = opposite, .hi = opposite });
-                        }
-                    }
-                },
-                .char_range => try literal.append(self.allocator, .{ .lo = child.range_start, .hi = child.range_end }),
-                .unicode_property, .unicode_script, .unicode_script_extensions => try props.append(self.allocator, child),
-                else => return error.InvalidPattern,
-            }
-        }
-
-        var acc = try CharSet.fromRanges(self.allocator, literal.items);
-        errdefer acc.deinit(self.allocator);
-        for (props.items) |p| {
-            const ps = try self.propertySet(p);
-            defer ps.deinit(self.allocator);
-            const merged = try acc.unionWith(ps, self.allocator);
-            acc.deinit(self.allocator);
-            acc = merged;
-        }
-        return acc;
-    }
-
-    /// A `\p{...}` node's code points; `\P{...}` (the node's `inverted`)
-    /// is the complement.
-    fn propertySet(self: *Self, node: *Node) !CharSet {
-        const table = switch (node.type) {
-            .unicode_property => properties.propertyRanges(@enumFromInt(node.char_value)),
-            .unicode_script => properties.scriptRanges(@intCast(node.char_value)),
-            .unicode_script_extensions => properties.scriptExtensionsRanges(@intCast(node.char_value)),
-            else => return error.InvalidPattern,
-        };
-        const ranges = try self.allocator.alloc(Range, table.len);
-        defer self.allocator.free(ranges);
-        for (table, ranges) |t, *r| r.* = .{ .lo = t.start, .hi = t.end };
-        const set = try CharSet.fromRanges(self.allocator, ranges);
-        if (!node.inverted) return set;
-        defer set.deinit(self.allocator);
-        return set.complement(self.allocator);
-    }
-
-    /// One `v`-mode set operation operand: a class (its members, then its
-    /// own `[^...]` as a complement) or a bare `\p{...}`.
-    fn classSetOperandSet(self: *Self, node: *Node) !CharSet {
-        switch (node.type) {
-            .char_class => {
-                const members = try self.classMembersSet(node, false);
-                if (!node.inverted) return members;
-                defer members.deinit(self.allocator);
-                return members.complement(self.allocator);
-            },
-            .unicode_property, .unicode_script, .unicode_script_extensions => return self.propertySet(node),
-            else => return error.InvalidPattern,
-        }
-    }
-
-    /// A `v`-mode class set operation (`[A--B]`/`[A&&B]`), computed at
-    /// compile time. `node.char_value` is the `ast.ClassSetOp`;
-    /// `node.inverted` (the outermost `[^...]`) is left to CHAR_SET_INV.
-    /// See `docs/KNOWN_LIMITATIONS.md` for this feature's scope.
-    fn classSetOpSet(self: *Self, node: *Node) !CharSet {
-        if (node.children.items.len != 2) return error.InvalidPattern;
-        const left = try self.classSetOperandSet(node.children.items[0]);
-        defer left.deinit(self.allocator);
-        const right = try self.classSetOperandSet(node.children.items[1]);
-        defer right.deinit(self.allocator);
-        const set_op: ast.ClassSetOp = @enumFromInt(node.char_value);
-        return switch (set_op) {
-            .intersection => left.intersect(right, self.allocator),
-            .difference => left.difference(right, self.allocator),
-        };
-    }
-
-    /// Generate code for a `v`-mode class set operation (`[A--B]`/`[A&&B]`).
-    fn generateClassSetOp(self: *Self, node: *Node) !void {
-        return self.emitCharSet(node, node.inverted);
-    }
-
-    /// Generate code for dot (any character)
-    /// By default (dot_all = false), '.' excludes '\n', matching JS behavior
-    /// without the 's' flag. With dot_all = true, '.' matches everything.
-    fn generateDot(self: *Self) !void {
-        if (self.options.dot_all) {
-            try self.writer.emitSimple(.CHAR_ANY);
-        } else {
-            try self.writer.emitSimple(.CHAR);
-        }
-    }
-
-    /// Generate code for a Unicode property atom (`\p{Name}` / `\P{Name}`).
-    /// `node.char_value` holds the `UnicodeProperty` enum value the parser
-    /// already resolved from the property name.
-    fn generateUnicodeProperty(self: *Self, node: *Node) !void {
-        const category: u32 = node.char_value;
-        const opcode: opcodes.Opcode = if (node.inverted) .UNICODE_PROPERTY_INV else .UNICODE_PROPERTY;
-        try self.writer.emit1(opcode, category);
-    }
-
-    /// Generate code for a Unicode Script atom (`\p{Script=Name}` /
-    /// `\p{sc=Name}`). `node.char_value` holds the index into
-    /// `properties.zig`'s generated `SCRIPT_NAMES`/`SCRIPT_RANGES` the
-    /// parser already resolved from the script name.
-    fn generateUnicodeScript(self: *Self, node: *Node) !void {
-        const script_index: u32 = node.char_value;
-        const opcode: opcodes.Opcode = if (node.inverted) .UNICODE_SCRIPT_INV else .UNICODE_SCRIPT;
-        try self.writer.emit1(opcode, script_index);
-    }
-
-    /// Generate code for a Unicode Script_Extensions atom
-    /// (`\p{Script_Extensions=Name}` / `\p{scx=Name}`). Same `script_index`
-    /// space as `generateUnicodeScript` -- only the opcode (and therefore
-    /// which table the matcher checks) differs.
-    fn generateUnicodeScriptExtensions(self: *Self, node: *Node) !void {
-        const script_index: u32 = node.char_value;
-        const opcode: opcodes.Opcode = if (node.inverted) .UNICODE_SCRIPT_EXTENSIONS_INV else .UNICODE_SCRIPT_EXTENSIONS;
-        try self.writer.emit1(opcode, script_index);
-    }
-
     // =========================================================================
     // Quantifiers
     // =========================================================================
 
+    /// A Repeat, in the shape of the syntax that produced it
+    /// (`hir.SyntaxForm`, semantic: only `question` clears its captures on
+    /// skip).
+    fn generateRepeat(self: *Self, r: hir.Repeat) !void {
+        switch (r.policy) {
+            .greedy => switch (r.syntax_form) {
+                .star => try self.generateStar(r.body),
+                .plus => try self.generatePlus(r.body),
+                .question => try self.generateQuestion(r.body),
+                .counted => try self.generateCounted(r, .SPLIT_GREEDY),
+            },
+            .lazy => switch (r.syntax_form) {
+                .star => try self.generateLazyStar(r.body),
+                .plus => try self.generateLazyPlus(r.body),
+                .question => try self.generateLazyQuestion(r.body),
+                .counted => try self.generateCounted(r, .SPLIT_LAZY),
+            },
+            .possessive => switch (r.syntax_form) {
+                .star => try self.generatePossessiveStar(r.body),
+                .plus => try self.generatePossessivePlus(r.body),
+                .question => try self.generatePossessiveQuestion(r.body),
+                .counted => return error.InvalidPattern,
+            },
+        }
+    }
+
     /// Generate code for star quantifier: e*
     /// Pattern: L1: SPLIT_GREEDY L1_body, L2; L1_body: e; GOTO L1; L2: ...
     /// Greedy: try consuming (looping) before giving up, matching how
-    /// `generatePlus`/`generateRepeat`'s unbounded case already do it. The
+    /// `generatePlus`/`generateCounted`'s unbounded case already do it. The
     /// `isStarQuantifier`/`matchStarGreedy` fast path in
     /// `recursive_matcher.zig` is an optimization on top of this correct
     /// order (it works regardless of operand order, trying both), but any
@@ -527,18 +379,14 @@ pub const CodeGenerator = struct {
     /// group or nested alternation) falls back to this bytecode's own
     /// SPLIT priority for correctness -- which is why this must be
     /// genuinely greedy-first, not just an optimization hint.
-    fn generateStar(self: *Self, node: *Node) !void {
-        if (node.children.items.len != 1) {
-            return error.InvalidPattern;
-        }
-
+    fn generateStar(self: *Self, body: *const Node) !void {
         var loop_label = try self.writer.createLabel();
         var end_label = try self.writer.createLabel();
 
         try self.writer.defineLabel(&loop_label);
         try self.writer.emitSplit(.SPLIT_GREEDY, loop_label, end_label);
 
-        try self.generateNode(node.children.items[0]);
+        try self.generateNode(body);
         try self.writer.emitJump(.GOTO, loop_label);
 
         try self.writer.defineLabel(&end_label);
@@ -546,16 +394,12 @@ pub const CodeGenerator = struct {
 
     /// Generate code for plus quantifier: e+
     /// Pattern: L1: e; SPLIT L1, L2; L2: ...
-    fn generatePlus(self: *Self, node: *Node) !void {
-        if (node.children.items.len != 1) {
-            return error.InvalidPattern;
-        }
-
+    fn generatePlus(self: *Self, body: *const Node) !void {
         var loop_label = try self.writer.createLabel();
         var end_label = try self.writer.createLabel();
 
         try self.writer.defineLabel(&loop_label);
-        try self.generateNode(node.children.items[0]);
+        try self.generateNode(body);
         try self.writer.emitSplit(.SPLIT_GREEDY, loop_label, end_label); // Greedy
 
         try self.writer.defineLabel(&end_label);
@@ -563,18 +407,14 @@ pub const CodeGenerator = struct {
 
     /// Generate code for question quantifier: e?
     /// Pattern: SPLIT_GREEDY consume, skip; consume: e; skip: ...
-    /// Greedy: try consuming first (matching how `generateLazyQuestion`
-    /// already tries skip first for `e??`) so a plain try-first-then-
-    /// backtrack-on-failure interpretation is correct regardless of whether
-    /// `e` is simple enough for the `isQuestionQuantifier` fast-path
-    /// heuristic to recognize -- see `generateStar`'s doc comment for why
-    /// this matters for compound atoms like a capturing group.
-    fn generateQuestion(self: *Self, node: *Node) !void {
-        if (node.children.items.len != 1) {
-            return error.InvalidPattern;
-        }
-        const atom = node.children.items[0];
-
+    /// Greedy: try consuming first (matching how
+    /// `generateLazyQuestion` already tries skip first for `e??`) so a plain
+    /// try-first-then-backtrack-on-failure interpretation is correct
+    /// regardless of whether `e` is simple enough for the
+    /// `isQuestionQuantifier` fast-path heuristic to recognize -- see
+    /// `generateStar`'s doc comment for why this matters for compound atoms
+    /// like a capturing group.
+    fn generateQuestion(self: *Self, body: *const Node) !void {
         var skip_label = try self.writer.createLabel();
         var consume_label = try self.writer.createLabel();
 
@@ -583,11 +423,11 @@ pub const CodeGenerator = struct {
 
         // Define consume label immediately (fall-through)
         try self.writer.defineLabel(&consume_label);
-        try self.generateNode(atom);
+        try self.generateNode(body);
 
         // Define skip label (after the character), clearing any capture
         // groups nested inside the atom first -- see emitClearCapturesOnSkip.
-        try self.emitClearCapturesOnSkip(atom, &skip_label);
+        try self.emitClearCapturesOnSkip(body, &skip_label);
     }
 
     /// After generating an optional atom's "consume" bytecode, wire up the
@@ -600,11 +440,12 @@ pub const CodeGenerator = struct {
     /// capture should stand). So the consume path needs an explicit GOTO
     /// past a small CLEAR_CAPTURE block that only the skip branch flows
     /// into; when there's nothing to clear, this degenerates to the
-    /// original plain fall-through/jump-target shape.
-    fn emitClearCapturesOnSkip(self: *Self, atom: *Node, skip_label: *Label) !void {
+    /// original plain fall-through/jump-target shape. Only the `?`/`??`
+    /// forms do this (`hir.SyntaxForm`); `{0,1}` doesn't.
+    fn emitClearCapturesOnSkip(self: *Self, atom: *const Node, skip_label: *Label) !void {
         var group_indices: std.ArrayListUnmanaged(u16) = .empty;
         defer group_indices.deinit(self.allocator);
-        try collectGroupIndices(atom, &group_indices, self.allocator);
+        try hir.collectCaptures(atom, &group_indices, self.allocator);
 
         if (group_indices.items.len == 0) {
             try self.writer.defineLabel(skip_label);
@@ -620,66 +461,64 @@ pub const CodeGenerator = struct {
         try self.writer.defineLabel(&merge_label);
     }
 
-    /// Generate code for repeat quantifier: e{n,m}
-    fn generateRepeat(self: *Self, node: *Node) !void {
-        if (node.children.items.len != 1) {
-            return error.InvalidPattern;
-        }
-
-        const min = node.repeat_min;
-        const max = node.repeat_max;
-
+    /// Generate code for a counted quantifier: e{n,m} (SPLIT_GREEDY) or
+    /// e{n,m}? (SPLIT_LAZY). `min` copies of the body, then either a loop
+    /// (`{n,}`) or `max - min` optional copies. The greedy form tries to
+    /// consume first, the lazy one to skip first.
+    fn generateCounted(self: *Self, r: hir.Repeat, split: Opcode) !void {
         // Generate min required repetitions
-        for (0..min) |_| {
-            try self.generateNode(node.children.items[0]);
+        for (0..r.min) |_| {
+            try self.generateNode(r.body);
         }
 
-        // Check if unbounded {n,}
-        const is_unbounded = max == std.math.maxInt(u32);
+        if (r.max) |max| {
+            if (max <= r.min) return;
+            // Generate optional repetitions up to max
+            // Pattern for each optional: SPLIT consume|skip; consume: e; skip: ...
+            for (0..max - r.min) |_| {
+                var skip_label = try self.writer.createLabel();
+                var consume_label = try self.writer.createLabel();
 
-        if (is_unbounded) {
-            // Pattern: {n,} = n required + e* (zero or more)
-            // Generate e*: L1: SPLIT L2, L1; e; GOTO L1; L2: ...
+                if (split == .SPLIT_GREEDY) {
+                    // Greedy: try to consume first (longer match preferred)
+                    try self.writer.emitSplit(.SPLIT_GREEDY, consume_label, skip_label);
+                } else {
+                    // Lazy: try to skip first (minimal match preferred)
+                    try self.writer.emitSplit(.SPLIT_LAZY, skip_label, consume_label);
+                }
+                try self.writer.defineLabel(&consume_label);
+                try self.generateNode(r.body);
+                try self.writer.defineLabel(&skip_label);
+            }
+        } else {
+            // Pattern: {n,} = n required + e* (greedy) or e*? (lazy)
+            // L1: SPLIT ...; e; GOTO L1; L2: ...
             var loop_label = try self.writer.createLabel();
             var end_label = try self.writer.createLabel();
 
             try self.writer.defineLabel(&loop_label);
-            try self.writer.emitSplit(.SPLIT_GREEDY, loop_label, end_label);
-            try self.generateNode(node.children.items[0]);
+            if (split == .SPLIT_GREEDY) {
+                try self.writer.emitSplit(.SPLIT_GREEDY, loop_label, end_label);
+            } else {
+                try self.writer.emitSplit(.SPLIT_LAZY, end_label, loop_label);
+            }
+            try self.generateNode(r.body);
             try self.writer.emitJump(.GOTO, loop_label);
             try self.writer.defineLabel(&end_label);
-        } else if (max > min) {
-            // Generate optional repetitions up to max
-            // Pattern for each optional: SPLIT skip, consume; consume: e; skip: ...
-            const optional_count = max - min;
-            for (0..optional_count) |_| {
-                var skip_label = try self.writer.createLabel();
-                var consume_label = try self.writer.createLabel();
-
-                // Greedy: try to consume first (longer match preferred)
-                try self.writer.emitSplit(.SPLIT_GREEDY, consume_label, skip_label);
-                try self.writer.defineLabel(&consume_label);
-                try self.generateNode(node.children.items[0]);
-                try self.writer.defineLabel(&skip_label);
-            }
         }
     }
 
     /// Generate code for lazy star quantifier: e*?
     /// Pattern: L1: SPLIT_LAZY L2, L3; e; GOTO L1; L2: ...
     /// Lazy = try empty first, then try consuming
-    fn generateLazyStar(self: *Self, node: *Node) !void {
-        if (node.children.items.len != 1) {
-            return error.InvalidPattern;
-        }
-
+    fn generateLazyStar(self: *Self, body: *const Node) !void {
         var loop_label = try self.writer.createLabel();
         var end_label = try self.writer.createLabel();
 
         try self.writer.defineLabel(&loop_label);
         try self.writer.emitSplit(.SPLIT_LAZY, end_label, loop_label);
 
-        try self.generateNode(node.children.items[0]);
+        try self.generateNode(body);
         try self.writer.emitJump(.GOTO, loop_label);
 
         try self.writer.defineLabel(&end_label);
@@ -688,16 +527,12 @@ pub const CodeGenerator = struct {
     /// Generate code for lazy plus quantifier: e+?
     /// Pattern: L1: e; SPLIT_LAZY L2, L1; L2: ...
     /// Lazy = match once, then try exit before consuming more
-    fn generateLazyPlus(self: *Self, node: *Node) !void {
-        if (node.children.items.len != 1) {
-            return error.InvalidPattern;
-        }
-
+    fn generateLazyPlus(self: *Self, body: *const Node) !void {
         var loop_label = try self.writer.createLabel();
         var end_label = try self.writer.createLabel();
 
         try self.writer.defineLabel(&loop_label);
-        try self.generateNode(node.children.items[0]);
+        try self.generateNode(body);
         try self.writer.emitSplit(.SPLIT_LAZY, end_label, loop_label);
 
         try self.writer.defineLabel(&end_label);
@@ -706,12 +541,7 @@ pub const CodeGenerator = struct {
     /// Generate code for lazy question quantifier: e??
     /// Pattern: SPLIT_LAZY skip, consume; consume: e; skip: ...
     /// Lazy = try skip first, then try consuming
-    fn generateLazyQuestion(self: *Self, node: *Node) !void {
-        if (node.children.items.len != 1) {
-            return error.InvalidPattern;
-        }
-        const atom = node.children.items[0];
-
+    fn generateLazyQuestion(self: *Self, body: *const Node) !void {
         var skip_label = try self.writer.createLabel();
         var consume_label = try self.writer.createLabel();
 
@@ -721,74 +551,24 @@ pub const CodeGenerator = struct {
 
         // Define consume label immediately (fall-through)
         try self.writer.defineLabel(&consume_label);
-        try self.generateNode(atom);
+        try self.generateNode(body);
 
         // Define skip label (after the character), clearing any capture
         // groups nested inside the atom first -- see emitClearCapturesOnSkip.
-        try self.emitClearCapturesOnSkip(atom, &skip_label);
-    }
-
-    /// Generate code for lazy repeat quantifier: e{n,m}?
-    /// Same as repeat but uses SPLIT_LAZY for minimal matching
-    fn generateLazyRepeat(self: *Self, node: *Node) !void {
-        if (node.children.items.len != 1) {
-            return error.InvalidPattern;
-        }
-
-        const min = node.repeat_min;
-        const max = node.repeat_max;
-
-        // Generate min required repetitions
-        for (0..min) |_| {
-            try self.generateNode(node.children.items[0]);
-        }
-
-        // Check if unbounded {n,}?
-        const is_unbounded = max == std.math.maxInt(u32);
-
-        if (is_unbounded) {
-            // Pattern: {n,}? = n required + e*? (lazy zero or more)
-            // Generate e*?: L1: SPLIT_LAZY L2, L1; e; GOTO L1; L2: ...
-            var loop_label = try self.writer.createLabel();
-            var end_label = try self.writer.createLabel();
-
-            try self.writer.defineLabel(&loop_label);
-            try self.writer.emitSplit(.SPLIT_LAZY, end_label, loop_label);
-            try self.generateNode(node.children.items[0]);
-            try self.writer.emitJump(.GOTO, loop_label);
-            try self.writer.defineLabel(&end_label);
-        } else if (max > min) {
-            // Generate optional repetitions up to max
-            // Pattern for each optional: SPLIT_LAZY skip, consume; consume: e; skip: ...
-            const optional_count = max - min;
-            for (0..optional_count) |_| {
-                var skip_label = try self.writer.createLabel();
-                var consume_label = try self.writer.createLabel();
-
-                // Lazy: try to skip first (minimal match preferred)
-                try self.writer.emitSplit(.SPLIT_LAZY, skip_label, consume_label);
-                try self.writer.defineLabel(&consume_label);
-                try self.generateNode(node.children.items[0]);
-                try self.writer.defineLabel(&skip_label);
-            }
-        }
+        try self.emitClearCapturesOnSkip(body, &skip_label);
     }
 
     /// Generate code for possessive star quantifier: e*+
     /// Pattern: L1: SPLIT_POSSESSIVE L2, L3; e; GOTO L1; L2: ...
     /// Possessive = consume all without backtracking
-    fn generatePossessiveStar(self: *Self, node: *Node) !void {
-        if (node.children.items.len != 1) {
-            return error.InvalidPattern;
-        }
-
+    fn generatePossessiveStar(self: *Self, body: *const Node) !void {
         var loop_label = try self.writer.createLabel();
         var end_label = try self.writer.createLabel();
 
         try self.writer.defineLabel(&loop_label);
         try self.writer.emitSplit(.SPLIT_POSSESSIVE, end_label, loop_label);
 
-        try self.generateNode(node.children.items[0]);
+        try self.generateNode(body);
         try self.writer.emitJump(.GOTO, loop_label);
 
         try self.writer.defineLabel(&end_label);
@@ -797,21 +577,17 @@ pub const CodeGenerator = struct {
     /// Generate code for possessive plus quantifier: e++
     /// Pattern: e; L1: SPLIT_POSSESSIVE L2, L1; e; GOTO L1; L2: ...
     /// Possessive = match at least once, then consume all without backtracking
-    fn generatePossessivePlus(self: *Self, node: *Node) !void {
-        if (node.children.items.len != 1) {
-            return error.InvalidPattern;
-        }
-
+    fn generatePossessivePlus(self: *Self, body: *const Node) !void {
         var loop_label = try self.writer.createLabel();
         var end_label = try self.writer.createLabel();
 
         // Match at least once
-        try self.generateNode(node.children.items[0]);
+        try self.generateNode(body);
 
         // Loop for more (possessive)
         try self.writer.defineLabel(&loop_label);
         try self.writer.emitSplit(.SPLIT_POSSESSIVE, end_label, loop_label);
-        try self.generateNode(node.children.items[0]);
+        try self.generateNode(body);
         try self.writer.emitJump(.GOTO, loop_label);
 
         try self.writer.defineLabel(&end_label);
@@ -820,11 +596,7 @@ pub const CodeGenerator = struct {
     /// Generate code for possessive question quantifier: e?+
     /// Pattern: SPLIT_POSSESSIVE consume, skip; consume: e; skip: ...
     /// Possessive = try consuming once without backtracking (greedy first)
-    fn generatePossessiveQuestion(self: *Self, node: *Node) !void {
-        if (node.children.items.len != 1) {
-            return error.InvalidPattern;
-        }
-
+    fn generatePossessiveQuestion(self: *Self, body: *const Node) !void {
         var skip_label = try self.writer.createLabel();
         var consume_label = try self.writer.createLabel();
 
@@ -833,7 +605,7 @@ pub const CodeGenerator = struct {
 
         // Define consume label immediately (fall-through)
         try self.writer.defineLabel(&consume_label);
-        try self.generateNode(node.children.items[0]);
+        try self.generateNode(body);
 
         // Define skip label (after the character)
         try self.writer.defineLabel(&skip_label);
@@ -843,52 +615,11 @@ pub const CodeGenerator = struct {
     // Structural
     // =========================================================================
 
-    /// Generate code for sequence: abc
-    ///
-    /// `node.char_value != 0` marks the special case of a `.sequence` built
-    /// by the parser for a single atomic multi-byte literal character (e.g.
-    /// `é`, `\u{1F600}`) rather than an ordinary multi-atom sequence like
-    /// `"ab"` (which never sets `char_value`, see `parser.zig`) -- under
-    /// `case_insensitive`, that single character's simple case-fold pair (if
-    /// it has one) must also match, the non-ASCII counterpart to
-    /// `generateChar`'s ASCII SPLIT/GOTO alternation below.
-    fn generateSequence(self: *Self, node: *Node) !void {
-        if (self.options.case_insensitive and node.char_value != 0) {
-            const opposite = casefold.toUpper(node.char_value) orelse casefold.toLower(node.char_value);
-            if (opposite) |opp| {
-                var buf: [4]u8 = undefined;
-                const len = std.unicode.utf8Encode(@intCast(opp), &buf) catch unreachable;
-
-                var orig_label = try self.writer.createLabel();
-                var opp_label = try self.writer.createLabel();
-                var after_label = try self.writer.createLabel();
-
-                try self.writer.emitSplit(.SPLIT, orig_label, opp_label);
-                try self.writer.defineLabel(&orig_label);
-                for (node.children.items) |child| {
-                    try self.generateNode(child);
-                }
-                try self.writer.emitJump(.GOTO, after_label);
-                try self.writer.defineLabel(&opp_label);
-                for (buf[0..len]) |b| {
-                    try self.writer.emit1(.CHAR32, b);
-                }
-                try self.writer.defineLabel(&after_label);
-                return;
-            }
-        }
-
-        for (node.children.items) |child| {
-            try self.generateNode(child);
-        }
-    }
-
-    /// Generate code for alternation: a|b
-    /// Pattern: SPLIT L_left, L_right; L_left: a; GOTO end; L_right: b; end:
-    fn generateAlternation(self: *Self, node: *Node) !void {
-        if (node.children.items.len != 2) {
-            return error.InvalidPattern;
-        }
+    /// Generate code for an n-ary alternation, nested to the left as the
+    /// parser's binary alternation always was: `a|b|c` is `((a|b)|c)`.
+    /// Pattern: SPLIT L_left, L_right; L_left: left; GOTO end; L_right: right; end:
+    fn generateAlternation(self: *Self, items: []const *const Node) CodegenError!void {
+        if (items.len < 2) return error.InvalidPattern;
 
         var left_label = try self.writer.createLabel();
         var right_label = try self.writer.createLabel();
@@ -897,123 +628,75 @@ pub const CodeGenerator = struct {
         // Split to both branches
         try self.writer.emitSplit(.SPLIT, left_label, right_label);
 
-        // Left branch
+        // Left branch: everything but the last alternative
         try self.writer.defineLabel(&left_label);
-        try self.generateNode(node.children.items[0]);
+        if (items.len == 2) {
+            try self.generateNode(items[0]);
+        } else {
+            try self.generateAlternation(items[0 .. items.len - 1]);
+        }
         try self.writer.emitJump(.GOTO, end_label);
 
         // Right branch
         try self.writer.defineLabel(&right_label);
-        try self.generateNode(node.children.items[1]);
+        try self.generateNode(items[items.len - 1]);
 
         try self.writer.defineLabel(&end_label);
     }
 
     /// Generate code for capture group: (...)
-    fn generateGroup(self: *Self, node: *Node) !void {
-        if (node.children.items.len != 1) {
-            return error.InvalidPattern;
-        }
-
-        const group_index = node.group_index;
-
+    fn generateGroup(self: *Self, c: hir.Capture) !void {
         // SAVE_START
-        try self.writer.emit1(.SAVE_START, group_index);
+        try self.writer.emit1(.SAVE_START, c.index);
 
         // Generate group content
-        try self.generateNode(node.children.items[0]);
+        try self.generateNode(c.body);
 
         // SAVE_END
-        try self.writer.emit1(.SAVE_END, group_index);
-    }
-
-    /// Generate code for a non-capturing group (?:...)
-    /// Non-capturing groups only provide grouping without capturing
-    fn generateNonCapturingGroup(self: *Self, node: *Node) !void {
-        if (node.children.items.len != 1) {
-            return error.InvalidPattern;
-        }
-
-        // Just generate the content without SAVE_START/SAVE_END
-        // This is purely for grouping (e.g., for quantifiers or alternation)
-        try self.generateNode(node.children.items[0]);
+        try self.writer.emit1(.SAVE_END, c.index);
     }
 
     // =========================================================================
-    // Anchors
+    // Assertions and backreferences
     // =========================================================================
 
-    /// `^`: STRING_START (absolute) by default, LINE_START (line-boundary-aware)
-    /// when the multiline option is set.
-    fn generateAnchorStart(self: *Self) !void {
-        const opcode: opcodes.Opcode = if (self.options.multiline) .LINE_START else .STRING_START;
+    /// `^`/`$`: STRING_START/STRING_END (absolute) by default,
+    /// LINE_START/LINE_END (line-boundary-aware) under `m`.
+    fn generateAssert(self: *Self, kind: hir.AssertKind) !void {
+        const opcode: Opcode = switch (kind) {
+            .caret => if (self.flags.multiline) .LINE_START else .STRING_START,
+            .dollar => if (self.flags.multiline) .LINE_END else .STRING_END,
+            .word_boundary => .WORD_BOUNDARY,
+            .not_word_boundary => .NOT_WORD_BOUNDARY,
+        };
         try self.writer.emitSimple(opcode);
-    }
-
-    /// `$`: STRING_END (absolute) by default, LINE_END (line-boundary-aware)
-    /// when the multiline option is set.
-    fn generateAnchorEnd(self: *Self) !void {
-        const opcode: opcodes.Opcode = if (self.options.multiline) .LINE_END else .STRING_END;
-        try self.writer.emitSimple(opcode);
-    }
-
-    fn generateWordBoundary(self: *Self) !void {
-        try self.writer.emitSimple(.WORD_BOUNDARY);
-    }
-
-    fn generateNotWordBoundary(self: *Self) !void {
-        try self.writer.emitSimple(.NOT_WORD_BOUNDARY);
     }
 
     /// Generate code for backreference
-    fn generateBackRef(self: *Self, node: *Node) !void {
-        const group = node.group_index;
+    fn generateBackRef(self: *Self, b: hir.Backref) !void {
+        if (b.indices.len != 1) return error.InvalidPattern;
+        // Choose case-sensitive or case-insensitive based on the scope
+        const opcode: Opcode = if (self.flags.ignore_case) .BACK_REF_I else .BACK_REF;
+        try self.writer.emit1(opcode, b.indices[0]);
+    }
 
-        // Choose case-sensitive or case-insensitive based on options
-        const opcode: opcodes.Opcode = if (self.options.case_insensitive)
-            .BACK_REF_I
+    /// Generate code for a lookaround assertion: (?=...), (?!...), (?<=...)
+    /// or (?<!...)
+    fn generateLook(self: *Self, l: hir.Look) !void {
+        const opcode: Opcode = if (l.behind)
+            (if (l.negated) .NEGATIVE_LOOKBEHIND else .LOOKBEHIND)
         else
-            .BACK_REF;
-
-        try self.writer.emit1(opcode, group);
-    }
-
-    /// Generate code for lookahead assertion
-    fn generateLookahead(self: *Self, node: *Node, negative: bool) !void {
-        if (node.children.items.len != 1) {
-            return error.InvalidPattern;
-        }
-
-        const opcode: opcodes.Opcode = if (negative) .NEGATIVE_LOOKAHEAD else .LOOKAHEAD;
+            (if (l.negated) .NEGATIVE_LOOKAHEAD else .LOOKAHEAD);
 
         // For simplicity, we don't use the length field for now
-        // The executor will find LOOKAHEAD_END by scanning forward
+        // The executor will find the END marker by scanning forward
         try self.writer.emit1(opcode, 0);
 
-        // Generate the lookahead pattern
-        try self.generateNode(node.children.items[0]);
+        // Generate the lookaround pattern
+        try self.generateNode(l.body);
 
-        // Emit lookahead end marker
-        try self.writer.emitSimple(.LOOKAHEAD_END);
-    }
-
-    /// Generate code for lookbehind assertion: (?<=...) or (?<!...)
-    fn generateLookbehind(self: *Self, node: *Node, negative: bool) !void {
-        if (node.children.items.len != 1) {
-            return error.InvalidPattern;
-        }
-
-        const opcode: opcodes.Opcode = if (negative) .NEGATIVE_LOOKBEHIND else .LOOKBEHIND;
-
-        // For simplicity, we don't use the length field for now
-        // The executor will find LOOKBEHIND_END by scanning forward
-        try self.writer.emit1(opcode, 0);
-
-        // Generate the lookbehind pattern
-        try self.generateNode(node.children.items[0]);
-
-        // Emit lookbehind end marker
-        try self.writer.emitSimple(.LOOKBEHIND_END);
+        // Emit end marker
+        try self.writer.emitSimple(if (l.behind) .LOOKBEHIND_END else .LOOKAHEAD_END);
     }
 };
 
@@ -1021,262 +704,115 @@ pub const CodeGenerator = struct {
 // Tests
 // =============================================================================
 
+const TestProgram = struct {
+    writer: BytecodeWriter,
+    code: []const u8,
+
+    fn deinit(self: *TestProgram) void {
+        self.writer.deinit();
+    }
+};
+
+/// Parse, lower and generate `pattern` (`flags` as the root scope).
+fn testProgram(pattern: []const u8, flags: hir.Flags) !TestProgram {
+    const a = std.testing.allocator;
+    const Lexer = @import("../parser/lexer.zig").Lexer;
+    const Parser = @import("../parser/parser.zig").Parser;
+    const lower = @import("../lower/lower.zig");
+
+    var lexer = Lexer.init(pattern);
+    var parser = try Parser.init(a, &lexer);
+    defer parser.deinit();
+    const ast_root = try parser.parse();
+    defer ast_root.deinit();
+    var arena = std.heap.ArenaAllocator.init(a);
+    defer arena.deinit();
+    const root = try lower.lower(arena.allocator(), ast_root, flags, &.{});
+
+    var program: TestProgram = .{ .writer = BytecodeWriter.init(a), .code = &.{} };
+    errdefer program.writer.deinit();
+    var gen = CodeGenerator.init(a, &program.writer);
+    defer gen.deinit();
+    try gen.generate(root);
+    program.code = try program.writer.finalize();
+    return program;
+}
+
 test "CodeGenerator: simple character" {
-    const parser_mod = @import("../parser/parser.zig");
-    const lexer_mod = @import("../parser/lexer.zig");
-
-    const pattern = "a";
-    var lexer = lexer_mod.Lexer.init(pattern);
-    var parser = try parser_mod.Parser.init(std.testing.allocator, &lexer);
-    defer parser.deinit();
-
-    const ast_root = try parser.parse();
-    defer ast_root.deinit();
-
-    var writer = BytecodeWriter.init(std.testing.allocator);
-    defer writer.deinit();
-
-    var gen = CodeGenerator.init(std.testing.allocator, &writer, .{});
-
-    defer gen.deinit();
-    try gen.generate(ast_root);
-
-    const code = try writer.finalize();
-    // Note: code is owned by writer, will be freed by writer.deinit()
-
-    // Should contain CHAR32 and MATCH
-    try std.testing.expect(code.len > 0);
-    try std.testing.expectEqual(@intFromEnum(Opcode.CHAR32), code[0]);
+    var p = try testProgram("a", .{});
+    defer p.deinit();
+    // CHAR32 'a', MATCH
+    try std.testing.expectEqual(@intFromEnum(Opcode.CHAR32), p.code[0]);
+    try std.testing.expectEqual(@intFromEnum(Opcode.MATCH), p.code[p.code.len - 1]);
 }
 
-test "CodeGenerator: sequence" {
-    const parser_mod = @import("../parser/parser.zig");
-    const lexer_mod = @import("../parser/lexer.zig");
-
-    const pattern = "abc";
-    var lexer = lexer_mod.Lexer.init(pattern);
-    var parser = try parser_mod.Parser.init(std.testing.allocator, &lexer);
-    defer parser.deinit();
-
-    const ast_root = try parser.parse();
-    defer ast_root.deinit();
-
-    var writer = BytecodeWriter.init(std.testing.allocator);
-    defer writer.deinit();
-
-    var gen = CodeGenerator.init(std.testing.allocator, &writer, .{});
-
-    defer gen.deinit();
-    try gen.generate(ast_root);
-
-    const code = try writer.finalize();
-
-    // Should contain 3 CHAR32 instructions + MATCH
-    try std.testing.expect(code.len > 0);
+test "CodeGenerator: a literal is one CHAR32 per character" {
+    var p = try testProgram("abc", .{});
+    defer p.deinit();
+    try std.testing.expectEqual(@as(usize, 3 * 5 + 1), p.code.len);
 }
 
-test "CodeGenerator: alternation" {
-    const parser_mod = @import("../parser/parser.zig");
-    const lexer_mod = @import("../parser/lexer.zig");
-
-    const pattern = "a|b";
-    var lexer = lexer_mod.Lexer.init(pattern);
-    var parser = try parser_mod.Parser.init(std.testing.allocator, &lexer);
-    defer parser.deinit();
-
-    const ast_root = try parser.parse();
-    defer ast_root.deinit();
-
-    var writer = BytecodeWriter.init(std.testing.allocator);
-    defer writer.deinit();
-
-    var gen = CodeGenerator.init(std.testing.allocator, &writer, .{});
-
-    defer gen.deinit();
-    try gen.generate(ast_root);
-
-    const code = try writer.finalize();
-
-    // Should contain SPLIT instruction
-    try std.testing.expect(code.len > 0);
+test "CodeGenerator: alternation starts with SPLIT" {
+    var p = try testProgram("a|b", .{});
+    defer p.deinit();
+    try std.testing.expectEqual(@intFromEnum(Opcode.SPLIT), p.code[0]);
 }
 
-test "CodeGenerator: star quantifier" {
-    const parser_mod = @import("../parser/parser.zig");
-    const lexer_mod = @import("../parser/lexer.zig");
-
-    const pattern = "a*";
-    var lexer = lexer_mod.Lexer.init(pattern);
-    var parser = try parser_mod.Parser.init(std.testing.allocator, &lexer);
-    defer parser.deinit();
-
-    const ast_root = try parser.parse();
-    defer ast_root.deinit();
-
-    var writer = BytecodeWriter.init(std.testing.allocator);
-    defer writer.deinit();
-
-    var gen = CodeGenerator.init(std.testing.allocator, &writer, .{});
-
-    defer gen.deinit();
-    try gen.generate(ast_root);
-
-    const code = try writer.finalize();
-
-    try std.testing.expect(code.len > 0);
-}
-
-test "CodeGenerator: plus quantifier" {
-    const parser_mod = @import("../parser/parser.zig");
-    const lexer_mod = @import("../parser/lexer.zig");
-
-    const pattern = "a+";
-    var lexer = lexer_mod.Lexer.init(pattern);
-    var parser = try parser_mod.Parser.init(std.testing.allocator, &lexer);
-    defer parser.deinit();
-
-    const ast_root = try parser.parse();
-    defer ast_root.deinit();
-
-    var writer = BytecodeWriter.init(std.testing.allocator);
-    defer writer.deinit();
-
-    var gen = CodeGenerator.init(std.testing.allocator, &writer, .{});
-
-    defer gen.deinit();
-    try gen.generate(ast_root);
-
-    const code = try writer.finalize();
-
-    try std.testing.expect(code.len > 0);
+test "CodeGenerator: quantifiers" {
+    for ([_][]const u8{ "a*", "a+", "a{2,4}", "a{2,}?" }) |pattern| {
+        var p = try testProgram(pattern, .{});
+        defer p.deinit();
+        try std.testing.expect(p.code.len > 0);
+    }
 }
 
 test "CodeGenerator: group" {
-    const parser_mod = @import("../parser/parser.zig");
-    const lexer_mod = @import("../parser/lexer.zig");
-
-    const pattern = "(ab)";
-    var lexer = lexer_mod.Lexer.init(pattern);
-    var parser = try parser_mod.Parser.init(std.testing.allocator, &lexer);
-    defer parser.deinit();
-
-    const ast_root = try parser.parse();
-    defer ast_root.deinit();
-
-    var writer = BytecodeWriter.init(std.testing.allocator);
-    defer writer.deinit();
-
-    var gen = CodeGenerator.init(std.testing.allocator, &writer, .{});
-
-    defer gen.deinit();
-    try gen.generate(ast_root);
-
-    const code = try writer.finalize();
-
-    // Should contain SAVE_START and SAVE_END
-    try std.testing.expect(code.len > 0);
+    var p = try testProgram("(ab)", .{});
+    defer p.deinit();
+    try std.testing.expectEqual(@intFromEnum(Opcode.SAVE_START), p.code[0]);
 }
 
-test "CodeGenerator: anchors" {
-    const parser_mod = @import("../parser/parser.zig");
-    const lexer_mod = @import("../parser/lexer.zig");
-
-    const pattern = "^a$";
-    var lexer = lexer_mod.Lexer.init(pattern);
-    var parser = try parser_mod.Parser.init(std.testing.allocator, &lexer);
-    defer parser.deinit();
-
-    const ast_root = try parser.parse();
-    defer ast_root.deinit();
-
-    var writer = BytecodeWriter.init(std.testing.allocator);
-    defer writer.deinit();
-
-    var gen = CodeGenerator.init(std.testing.allocator, &writer, .{});
-
-    defer gen.deinit();
-    try gen.generate(ast_root);
-
-    const code = try writer.finalize();
-
-    try std.testing.expect(code.len > 0);
+test "CodeGenerator: anchors follow the scope's m flag" {
+    var p = try testProgram("^a$", .{});
+    defer p.deinit();
+    try std.testing.expectEqual(@intFromEnum(Opcode.STRING_START), p.code[0]);
+    var m = try testProgram("^a$", .{ .multiline = true });
+    defer m.deinit();
+    try std.testing.expectEqual(@intFromEnum(Opcode.LINE_START), m.code[0]);
 }
 
 test "CodeGenerator: dot excludes newline by default" {
-    const parser_mod = @import("../parser/parser.zig");
-    const lexer_mod = @import("../parser/lexer.zig");
-
-    const pattern = ".";
-    var lexer = lexer_mod.Lexer.init(pattern);
-    var parser = try parser_mod.Parser.init(std.testing.allocator, &lexer);
-    defer parser.deinit();
-
-    const ast_root = try parser.parse();
-    defer ast_root.deinit();
-
-    var writer = BytecodeWriter.init(std.testing.allocator);
-    defer writer.deinit();
-
-    var gen = CodeGenerator.init(std.testing.allocator, &writer, .{});
-
-    defer gen.deinit();
-    try gen.generate(ast_root);
-
-    const code = try writer.finalize();
-
+    var p = try testProgram(".", .{});
+    defer p.deinit();
     // Without dot_all, '.' must exclude '\n' (matches JS default): CHAR now
     // means "any Unicode scalar value except newline" (decoded at match time).
-    try std.testing.expectEqual(@intFromEnum(Opcode.CHAR), code[0]);
+    try std.testing.expectEqual(@intFromEnum(Opcode.CHAR), p.code[0]);
 }
 
 test "CodeGenerator: dot matches newline with dot_all" {
-    const parser_mod = @import("../parser/parser.zig");
-    const lexer_mod = @import("../parser/lexer.zig");
-
-    const pattern = ".";
-    var lexer = lexer_mod.Lexer.init(pattern);
-    var parser = try parser_mod.Parser.init(std.testing.allocator, &lexer);
-    defer parser.deinit();
-
-    const ast_root = try parser.parse();
-    defer ast_root.deinit();
-
-    var writer = BytecodeWriter.init(std.testing.allocator);
-    defer writer.deinit();
-
-    var gen = CodeGenerator.init(std.testing.allocator, &writer, .{ .dot_all = true });
-
-    defer gen.deinit();
-    try gen.generate(ast_root);
-
-    const code = try writer.finalize();
-
+    var p = try testProgram(".", .{ .dot_all = true });
+    defer p.deinit();
     // With dot_all, '.' matches newline too, so it compiles to the dedicated
     // CHAR_ANY opcode instead of the newline-excluding CHAR opcode.
-    try std.testing.expectEqual(@intFromEnum(Opcode.CHAR_ANY), code[0]);
+    try std.testing.expectEqual(@intFromEnum(Opcode.CHAR_ANY), p.code[0]);
 }
 
-test "CodeGenerator: repeat quantifier" {
-    const parser_mod = @import("../parser/parser.zig");
-    const lexer_mod = @import("../parser/lexer.zig");
+test "CodeGenerator: a?/a?? clear inner captures on skip, a{0,1} doesn't" {
+    var q = try testProgram("(a)?", .{});
+    defer q.deinit();
+    var c = try testProgram("(a){0,1}", .{});
+    defer c.deinit();
+    try std.testing.expect(try hasOpcode(q.code, .CLEAR_CAPTURE));
+    try std.testing.expect(!try hasOpcode(c.code, .CLEAR_CAPTURE));
+}
 
-    const pattern = "a{2,4}";
-    var lexer = lexer_mod.Lexer.init(pattern);
-    var parser = try parser_mod.Parser.init(std.testing.allocator, &lexer);
-    defer parser.deinit();
-
-    const ast_root = try parser.parse();
-    defer ast_root.deinit();
-
-    var writer = BytecodeWriter.init(std.testing.allocator);
-    defer writer.deinit();
-
-    var gen = CodeGenerator.init(std.testing.allocator, &writer, .{});
-
-    defer gen.deinit();
-    try gen.generate(ast_root);
-
-    const code = try writer.finalize();
-
-    try std.testing.expect(code.len > 0);
+fn hasOpcode(code: []const u8, op: Opcode) !bool {
+    const format = @import("../bytecode/format.zig");
+    var pc: usize = 0;
+    while (pc < code.len) {
+        const inst = try format.decodeInstruction(code, pc);
+        if (inst.opcode == op) return true;
+        pc += inst.size;
+    }
+    return false;
 }

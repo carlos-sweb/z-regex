@@ -23,8 +23,10 @@ const Allocator = std.mem.Allocator;
 /// Largest Unicode code point; `complement` is taken over [0, MAX_CODEPOINT].
 pub const MAX_CODEPOINT: u32 = 0x10FFFF;
 
-/// Inclusive code point range.
-pub const Range = struct {
+/// Inclusive code point range. `extern` so a table with the same layout
+/// (`unicode/tables.zig`'s `CodepointRange`) can be viewed as ranges without
+/// copying (`CharSet.borrowed`).
+pub const Range = extern struct {
     lo: u32,
     hi: u32,
 };
@@ -52,8 +54,18 @@ pub const CharSet = struct {
             buf[n] = .{ .lo = r.lo, .hi = hi };
             n += 1;
         }
-        n = normalize(buf[0..n]);
+        // Input that already keeps the invariant (e.g. a Unicode property
+        // table) needs no sort.
+        if (!isNormalized(buf[0..n])) n = normalize(buf[0..n]);
         return .{ .ranges = try shrink(allocator, buf, n) };
+    }
+
+    /// A set over `ranges` without copying them, for static tables that
+    /// already keep the invariant (checked in safe builds). The result owns
+    /// nothing: never `deinit` it (an arena-owned HIR never does).
+    pub fn borrowed(ranges: []const Range) Self {
+        std.debug.assert(isNormalized(ranges));
+        return .{ .ranges = ranges };
     }
 
     /// A copy of `self` owned by `allocator`.
@@ -170,6 +182,16 @@ pub const CharSet = struct {
         return a.intersect(not_b, allocator);
     }
 };
+
+/// Whether `ranges` already keeps the CharSet invariant: sorted, and no
+/// two ranges overlapping or adjacent.
+pub fn isNormalized(ranges: []const Range) bool {
+    for (ranges, 0..) |r, i| {
+        if (r.lo > r.hi) return false;
+        if (i > 0 and r.lo <= ranges[i - 1].hi +| 1) return false;
+    }
+    return true;
+}
 
 /// Sort `ranges` by `lo` and coalesce overlapping or adjacent ones in place;
 /// returns the new length.

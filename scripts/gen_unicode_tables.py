@@ -371,7 +371,7 @@ def main():
     print("//! See scripts/README.md for regeneration instructions.")
     print()
     print("/// An inclusive codepoint range.")
-    print("pub const CodepointRange = struct { start: u32, end: u32 };")
+    print("pub const CodepointRange = extern struct { start: u32, end: u32 };")
     print()
     print("/// A (from, to) codepoint case-mapping pair.")
     print("pub const CaseMapping = struct { from: u32, to: u32 };")
