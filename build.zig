@@ -85,6 +85,25 @@ pub fn build(b: *std.Build) void {
     const integration_test_step = b.step("test-integration", "Run integration tests only");
     integration_test_step.dependOn(&run_integration_tests.step);
 
+    // Bytecode snapshot (tests/snapshots/bytecode.txt, checked by
+    // tests/bytecode_snapshot.zig inside `test`): rewrite its outcomes after
+    // a justified bytecode change (docs/REGEX_TIERS_PLAN.md, F2c policy).
+    const snapshot_update_module = b.createModule(.{
+        .root_source_file = b.path("tests/snapshot_update.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    snapshot_update_module.addImport("zregex", lib_module);
+    const snapshot_update_exe = b.addExecutable(.{
+        .name = "snapshot-update",
+        .root_module = snapshot_update_module,
+    });
+    const run_snapshot_update = b.addRunArtifact(snapshot_update_exe);
+    run_snapshot_update.addArg(b.pathFromRoot("tests/snapshots/bytecode.txt"));
+    run_snapshot_update.has_side_effects = true;
+    const snapshot_update_step = b.step("update-bytecode-snapshot", "Rewrite tests/snapshots/bytecode.txt for the current compiler");
+    snapshot_update_step.dependOn(&run_snapshot_update.step);
+
     // Conformance sample against test262-derived cases (see
     // docs/ECMASCRIPT_COMPATIBILITY_PLAN.md Phase 6). Kept out of the
     // default `test` step deliberately: it's an informational pass-rate

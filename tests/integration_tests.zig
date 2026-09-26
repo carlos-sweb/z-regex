@@ -335,3 +335,6 @@ test {
 test {
     _ = @import("captures_tests.zig");
 }
+test {
+    _ = @import("bytecode_snapshot.zig");
+}

@@ -1,0 +1,695 @@
+# Bytecode snapshot (docs/REGEX_TIERS_PLAN.md: taken after F2b, checked from F2c on).
+# One line per (flags, pattern): outcome, flags, pattern as hex, pattern as JSON (informational).
+# outcome = Wyhash of the compiled program (bytecode, then every CharSet of
+# CompileResult.charsets in table order), or error:<Name> if compile fails.
+# Checked by tests/bytecode_snapshot.zig (zig build test); regenerate outcomes
+# with `zig build update-bytecode-snapshot`, the corpus with scripts/snapshot/corpus.py.
+#
+# Policy on a difference: report it (the test prints the pattern and the new
+# program); a length change without a behavior change (reordered SPLIT, an
+# omitted Empty, shifted offsets, several CHAR merged into a literal) is
+# justified in the commit that updates this file; a semantic change is a bug.
+#
+# Baseline notes (F2b): classes that don't fit the ASCII bitmap compile to
+# CHAR_SET idx:u32 (5 bytes) instead of the fixed-table instructions (up to
+# 242 bytes), e.g. `[]` was CHAR_CLASS_RANGES with 0 ranges and is now CHAR_SET
+# over an empty table. Shorter bytecode there is expected, not a regression.
+1f65ed2fc157c741		5b2f5d	[/]
+0dcc096902c1f92d		5b2f2f5d	[//]
+8570374eb144fd72		28612a29625c312b	(a*)b\\1+
+8fb48e25300198c0		285b78755d5c647b327d285b412d485d7b327d293f295c31	([xu]\\d{2}([A-H]{2})?)\\1
+77e94991ae1e272b		5c62285c772b29205c315c62	\\b(\\w+) \\1\\b
+18d679dadc5efb79		5b612d7a5d2b	[a-z]+
+3d40582a5fba5857	i	5b612d7a5d2b	[a-z]+
+f9e10bca68dfa588		2e2b	.+
+af59478d1072bab6		2e2a612e2a	.*a.*
+e71ee2ea6585169e		61622e6465	ab.de
+1fb59cbe21282203		282e7b327d292e2b5c31	(.{2}).+\\1
+8faca46fdda93ccc		286161292e2b5c31	(aa).+\\1
+0d1a32562a3b7383		286161296263645c31	(aa)bcd\\1
+4d1eea54de7608eb		282e7b337d29282e7b347d29	(.{3})(.{4})
+3856e82ee86d75a5		6128626329642865662967	a(bc)d(ef)g
+a480722817ee05b0		2861626329	(abc)
+9aae0e34a0927480		617c286229	a|(b)
+9454ee7632a3fc01		2861293f61	(a)?a
+b9a5d9818baf2b84		2841293f28412e2a29	(A)?(A.*)
+ce81b804252db35e		5e2841293f28412e2a2924	^(A)?(A.*)$
+1f304f25bd07e3cf		285b4a6a5d617661285b53735d6372697074293f295c7369735c732866756e5c772a29	([Jj]ava([Ss]cript)?)\\sis\\s(fun\\w*)
+58a0b18aad1eaa2f		285b5c535d2b285b205c745d2b5b5c535d2b292a295b205c745d2a3d5b205c745d2a5b5c535d2b	([\\S]+([ \\t]+[\\S]+)*)[ \\t]*=[ \\t]*[\\S]+
+5d6e182bfb38b5fd		61282e3f29625c31635c31645c31	a(.?)b\\1c\\1d\\1
+4acf005a709ffd13		2861286228632929292864286528662929295c325c35	(a(b(c)))(d(e(f)))\\2\\5
+264258235428ca0e		286128622863292929286428652866292929	(a(b(c)))(d(e(f)))
+ea423045e3c63a61		61282e2e282e2e292e2e29	a(..(..)..)
+26fdcf7b2d2fa3f4		285c647b337d29285c647b337d295c315c32	(\\d{3})(\\d{3})\\1\\2
+f7ec68b5ad580b28		283f21617c62297c63	(?!a|b)|c
+ce6f94b2a3a54336		4a617661283f2153637269707429285b412d5a5d5c772a29	Java(?!Script)([A-Z]\\w*)
+dcf9c344e7e1c7bf		282e2a3f2961283f2128612b29625c3263295c32282e2a29	(.*?)a(?!(a+)b\\2c)\\2(.*)
+c2fe8f28b731851f		5b4a6a5d617661285b53735d6372697074293f283f3d5c3a29	[Jj]ava([Ss]cript)?(?=\\:)
+bf2ce4360e5a2642		283f3d28612b2929612a625c31	(?=(a+))a*b\\1
+d16f6bd97fd70158		283f3d28612b2929	(?=(a+))
+471f6b3e3a609f85		787b312c327d787b312c7d	x{1,2}x{1,}
+824ba370f9495123		28313233297b312c7d785c31	(123){1,}x\\1
+6adeb7b57fa43cb4		28313233297b312c7d	(123){1,}
+e1b48ee90d78c537		5c647b312c7d	\\d{1,}
+120a0a1dc6a40d5e		627b322c7d63	b{2,}c
+9e433b712698130b		623f623f623f62	b?b?b?b
+94272f01fa89195e		783f61793f627a3f63	x?ay?bz?c
+136da16437eb0fa8		783f793f7a3f	x?y?z?
+a7638ce713143725		6f3f7071727374	o?pqrst
+24e4e2d02ccc65de		6364783f65	cdx?e
+6fa2b1bc798eab0d		63643f65	cd?e
+2e3f37b97a8c5e79		6a61766128736372697074293f	java(script)?
+0571ced1ce184a58		2e3f2e3f2e3f2e3f2e3f2e3f2e3f	.?.?.?.?.?.?.?
+68a0488e2a04144b		5c3f3f5c3f3f5c3f3f5c3f3f5c3f3f	\\??\\??\\??\\??\\??
+b8fcbb2ffd429648		61623f633f643f783f793f7a	ab?c?d?x?y?z
+60aab0c1596ae612		5b5e225d2a	[^\"]*
+59419d3cccea76d1		642b	d+
+284e013d011b6d5d		5b612d7a5d2b285c642b29	[a-z]+(\\d+)
+a724fc04d367f1bb		5b612d7a5d2b5c642b	[a-z]+\\d+
+588a8f4b1ad13433		5c732b6a6176615c732b	\\s+java\\s+
+4fae34cfae70e1e8		622a622b	b*b+
+9a61c9813440e589		28622b2928622a29	(b+)(b*)
+e6531b552c091454		28622b2928622b2928622b29	(b+)(b+)(b+)
+2378fdb87cab82ad		627b327d63	b{2}c
+ff992df2cb68dcf2		5c777b337d5c643f	\\w{3}\\d?
+004985a04f75bf25		627b322c337d63	b{2,3}c
+a325232f6dd5d6fa		5c647b322c347d	\\d{2,4}
+e83866ba70d92681		2e7b302c39337d	.{0,93}
+72039334ab22f0c4		62787b302c39337d63	bx{0,93}c
+d35bf30a0e8772cb		627b302c39337d63	b{0,93}c
+7792e1ee3b732433		5e2e2a283a7c2429	^.*(:|$)
+5d10dad599fb1b95		5e2e2a3f283a7c2429	^.*?(:|$)
+6e086e75778e41d8		5e2e2a3f	^.*?
+d091f075110cdb4a		5e2e2a3f24	^.*?$
+813073cbdbfee37f		5c425c425c425c425c425c42626f745c625c625c625c625c625c625c62	\\B\\B\\B\\B\\B\\Bbot\\b\\b\\b\\b\\b\\b\\b
+15180907a693aa69		5e5e5e5e5e5e5e726f626f7424242424	^^^^^^^robot$$$$
+69ddc8fcf521453c		5c425c777b347d5c42	\\B\\w{4}\\B
+82f56c367a41b9ad		5c425b5e7a5d7b347d5c42	\\B[^z]{4}\\B
+e224a906bc99d565		5c425c77	\\B\\w
+9b8917d02e50a866		5c775c42	\\w\\B
+2f690a3c7eecc8cb		5c425c775c42	\\B\\w\\B
+62b0122ade62fd16	i	5c426f5c42	\\Bo\\B
+73b9a70a601defc9		5b662d7a5d655c42	[f-z]e\\B
+01d8a7f92bb16ef2		5c426576696c5c42	\\Bevil\\B
+0edde7b5438d48b3		5c62726f	\\bro
+2e4cea9dff496088	i	5b5e6f5d745c62	[^o]t\\b
+657f2eb12968c724		5b5e6f5d745c62	[^o]t\\b
+8f50020b237af3db		5c62736f	\\bso
+22ddbc5acd0e4c65		6f745c62	ot\\b
+f96f1c9fba4544e3		655c62	e\\b
+992f4d4683d7a416		5c626f70	\\bop
+d81c5cb4474bab37		5c625c777b357d5c62	\\b\\w{5}\\b
+7156c2a6806bb618		5c62726f626f745c62	\\brobot\\b
+b34d5e5203699d0e		5c6270	\\bp
+5b0481cf2f9a4b17		5e5c5e2b	^\\^+
+b0ef903ae600ffc1		5e6162	^ab
+2dd20740005dbc88	m	5e5b5e705d	^[^p]
+05deb2fdcc10dcfe	m	5e705b622d7a5d	^p[b-z]
+33b6235bd08f48ba		5e705b612d7a5d	^p[a-z]
+dfced8699152bf34	m	5e6d	^m
+c3357e0ea0adddf7	m	5e5c642b	^\\d+
+c54433a8e9778f92	m	657324	es$
+89376f6c5899cbf4	m	5b5e655d24	[^e]$
+46bfc438693f1ab6	m	7324	s$
+248f137e0bd1b660		6524	e$
+3f6588e3fa5150e6		287a292828612b293f28622b293f286329292a	(z)((a+)?(b+)?(c))*
+5192ace5a0d3d541		2861617c6161626161637c62617c627c63292a	(aa|aabaac|ba|b|c)*
+b2bc388749ae88ad		615b612d7a5d7b322c347d3f	a[a-z]{2,4}?
+b6ba92dc41b46384		615b612d7a5d7b322c347d	a[a-z]{2,4}
+8f92f0f44e86084b	i	283f3a61627c6364292b7c6566	(?:ab|cd)+|ef
+ac548f2a7e79cd42	i	61627c63647c6566	ab|cd|ef
+b32641cc75f28c23		5c647b337d7c5b612d7a5d7b347d	\\d{3}|[a-z]{4}
+5082f08c917bf628		282861297c2861622929282863297c2862632929	((a)|(ab))((c)|(bc))
+d9596b65e0ec272f		7c2829	|()
+75268184487370eb		28297c	()|
+44300543b3f56ef9		28526f62297c28426f62297c28526f62657274297c28426f62627929	(Rob)|(Bob)|(Robert)|(Bobby)
+1342a72fed43b7a1		2e2b3a20677228617c652979	.+: gr(a|e)y
+c07ac9b38506c1a6		282e292e2e7c616263	(.)..|abc
+d50774aa0416aa3c		78797a7c2e2e2e	xyz|...
+ac28bb3fd4d50bc5		31313131317c313131	11111|111
+92523fa56d13b103		617c6162	a|ab
+57765eb91a4e5a1a		5b5e5c5b5c625c5d5d2b	[^\\[\\b\\]]+
+f74186aa9052697e		635b5c625d7b337d64	c[\\b]{3}d
+7218ab6e840a0a15		2e5b5c625d2e	.[\\b].
+fc6e68f2a2b07dda		5b5e5d	[^]
+e1df2fa917cb82e6		5b5e612d7a5d7b347d	[^a-z]{4}
+43c5599eb01e2e9e		615b5e312d395d63	a[^1-9]c
+5be285b50fbfffbe		5b5e5c625d2b	[^\\b]+
+e18611f7ae9de5b3		615b5e622d7a5d5c732b	a[^b-z]\\s+
+7e7b0fe35ce3bb5f		615b5e5d	a[^]
+fe9cdaa7c379a5ab	m	5b5e5d61	[^]a
+3dd959490ab5ce8d		5b313233343536375d2e7b327d	[1234567].{2}
+4d70a01530c10e22		5b642d685d2b	[d-h]+
+22a6f61c4bee962a		61625b65726373745d6465	ab[ercst]de
+87fe73908a1b5294		715b61782d7a625d283f3d5c732b29	q[ax-zb](?=\\s+)
+d5af5378903cede6		5b5c645d5b5c6e5d5b5e5c645d	[\\d][\\n][^\\d]
+b30a326309e6e004		5b2a26245d7b337d	[*&$]{3}
+31d609e7a1cfbc29		5b612d7a5d5b5e312d395d5b612d7a5d	[a-z][^1-9][a-z]
+d62ace5c979a5d57		615b625d63	a[b]c
+0b3b76bf2a638e3e		61625b2e5d3f63	ab[.]?c
+cfa5c58fa7e4a989		5b612d635c645d2b	[a-c\\d]+
+9eec5142a81e8174		317c3132	1|12
+8b886d658ea60caa		5c704c	\\pL
+error:InvalidEscape	u	5c704c	\\pL
+cedc142ce7311d00		5b5c707b7d5d	[\\p{}]
+error:InvalidEscape	u	5b5c707b7d5d	[\\p{}]
+7cc712a85a548123	u	5c707b4c7d	\\p{L}
+7cc712a85a548123		5c707b4c7d	\\p{L}
+fa12ce387be00aa2		61283f3d62293f	a(?=b)?
+error:InvalidQuantifier	u	61283f3d62293f	a(?=b)?
+0e9b485841bd59bc		283f3c613e78295c6b3c613e	(?<a>x)\\k<a>
+0e9b485841bd59bc	u	283f3c613e78295c6b3c613e	(?<a>x)\\k<a>
+07c52fe765143144		5c6b	\\k
+error:InvalidGroupName	u	5c6b	\\k
+a58efb448eddeb3c		5c6b3c61	\\k<a
+error:InvalidGroupName	u	5c6b3c61	\\k<a
+error:InvalidEscape	u	5c31	\\1
+f45620ffc98ad3ce		5c31	\\1
+error:InvalidEscape	u	5c38	\\8
+cd91986fd29fac51		5c38	\\8
+error:InvalidEscape	u	2861295c32	(a)\\2
+0cb1b71135281993		2861295c32	(a)\\2
+8d340c35ae3724ce	u	2861295c31	(a)\\1
+8d340c35ae3724ce		2861295c31	(a)\\1
+e34920fb5826c3fb	u	5c31286129	\\1(a)
+e34920fb5826c3fb		5c31286129	\\1(a)
+bfa398b61fcf855d	u	5c757b3130464646467d	\\u{10FFFF}
+bfa398b61fcf855d		5c757b3130464646467d	\\u{10FFFF}
+faa336142819240c	u	5c757b303030303030303034317d	\\u{0000000041}
+faa336142819240c		5c757b303030303030303034317d	\\u{0000000041}
+4d0060bb3b6d95a2		5c6330	\\c0
+error:InvalidEscape	u	5c6330	\\c0
+7ab1176b3b229586		5c7834	\\x4
+error:InvalidEscape	u	5c7834	\\x4
+392b714c3a8f9993		5b5c642d615d2b	[\\d-a]+
+error:InvalidCharRange	u	5b5c642d615d2b	[\\d-a]+
+aed8e868266a4d4a		5b252d5c645d2b	[%-\\d]+
+error:InvalidCharRange	u	5b252d5c645d2b	[%-\\d]+
+edc129483a809436	u	5b5c642d5d2b	[\\d-]+
+edc129483a809436		5b5c642d5d2b	[\\d-]+
+1170c72e19e1b519		5b2d2d305d2b	[--0]+
+1170c72e19e1b519	u	5b2d2d305d2b	[--0]+
+error:InvalidClassSetOperand	v	5b2d2d305d2b	[--0]+
+554e2015bfc7b75c		5b2d615d2b	[-a]+
+554e2015bfc7b75c	u	5b2d615d2b	[-a]+
+554e2015bfc7b75c	v	5b2d615d2b	[-a]+
+9655df47b9035d02		5b2d2d5d2b	[--]+
+9655df47b9035d02	u	5b2d2d5d2b	[--]+
+error:InvalidClassSetOperand	v	5b2d2d5d2b	[--]+
+error:InvalidCharRange		5b2d2d215d	[--!]
+error:InvalidCharRange	u	5b2d2d215d	[--!]
+9c7d5b46a0199348		5c784646	\\xFF
+9c7d5b46a0199348	u	5c784646	\\xFF
+9c7d5b46a0199348	v	5c784646	\\xFF
+c22995bc73c0bdeb		5c786539	\\xe9
+c22995bc73c0bdeb	u	5c786539	\\xe9
+c22995bc73c0bdeb	v	5c786539	\\xe9
+965923a163051bdb		5b5c7845302d5c7846465d2b	[\\xE0-\\xFF]+
+965923a163051bdb	u	5b5c7845302d5c7846465d2b	[\\xE0-\\xFF]+
+965923a163051bdb	v	5b5c7845302d5c7846465d2b	[\\xE0-\\xFF]+
+faa336142819240c		5c783431	\\x41
+faa336142819240c	u	5c783431	\\x41
+faa336142819240c	v	5c783431	\\x41
+9c7d5b46a0199348		5c7530304646	\\u00FF
+9c7d5b46a0199348	u	5c7530304646	\\u00FF
+9c7d5b46a0199348	v	5c7530304646	\\u00FF
+069a415916a02f23	i	5c786539	\\xe9
+3659a12158188bd2	u	5e5c75643833345c756466303624	^\\ud834\\udf06$
+7eb6a47a5a3713a8		5e5c75643833345c756466303624	^\\ud834\\udf06$
+e11aa4e8db30f8fe	u	5e5b5c75643833345c75646630365d24	^[\\ud834\\udf06]$
+60b49bf296d5329a		5e5b5c75643833345c75646630365d24	^[\\ud834\\udf06]$
+3659a12158188bd2	u	5e5c757b31643330367d24	^\\u{1d306}$
+3659a12158188bd2		5e5c757b31643330367d24	^\\u{1d306}$
+18beecebc80f2743	u	5b5c75643830305c75646330305d	[\\ud800\\udc00]
+0dada67c608ec6d0		5b5c75643830305c75646330305d	[\\ud800\\udc00]
+38e6ffbf08ef7f4d	u	5e5c75643833345c756438333424	^\\ud834\\ud834$
+38e6ffbf08ef7f4d		5e5c75643833345c756438333424	^\\ud834\\ud834$
+0d1fbd07b26c24d2		5c7564383030	\\ud800
+0d1fbd07b26c24d2	u	5c7564383030	\\ud800
+0d1fbd07b26c24d2	v	5c7564383030	\\ud800
+1270acb9cffb7dab		5b5c75646330302d5c75646666665d	[\\udc00-\\udfff]
+1270acb9cffb7dab	u	5b5c75646330302d5c75646666665d	[\\udc00-\\udfff]
+1270acb9cffb7dab	v	5b5c75646330302d5c75646666665d	[\\udc00-\\udfff]
+f936740236e9418f		5c75643833345c7564663036	\\ud834\\udf06
+d5ab4b424c10d3e9	u	5c75643833345c7564663036	\\ud834\\udf06
+1baf1be8e22bf545		5b5ef09f929a5d	[^\ud83d\udc9a]
+1baf1be8e22bf545	u	5b5ef09f929a5d	[^\ud83d\udc9a]
+1baf1be8e22bf545	v	5b5ef09f929a5d	[^\ud83d\udc9a]
+1b77aa7f8170b8f3		78	x
+1b77aa7f8170b8f3	u	78	x
+1b77aa7f8170b8f3	v	78	x
+ddbed1592e00ae67	u	282e2b292e2a5c31	(.+).*\\1
+ddbed1592e00ae67		282e2b292e2a5c31	(.+).*\\1
+11a37662c2d2f6ba			
+11a37662c2d2f6ba	u		
+fc68b3a027f8b88d		5e5c7324	^\\s$
+fc68b3a027f8b88d	u	5e5c7324	^\\s$
+fc68b3a027f8b88d	v	5e5c7324	^\\s$
+fc68b3a027f8b88d		5e5b5c735d24	^[\\s]$
+fc68b3a027f8b88d	u	5e5b5c735d24	^[\\s]$
+fc68b3a027f8b88d	v	5e5b5c735d24	^[\\s]$
+201457060cddefa5		5e5c5324	^\\S$
+201457060cddefa5	u	5e5c5324	^\\S$
+201457060cddefa5	v	5e5c5324	^\\S$
+2670e491f47a7cce		5e5b5c535d24	^[\\S]$
+2670e491f47a7cce	u	5e5b5c535d24	^[\\S]$
+2670e491f47a7cce	v	5e5b5c535d24	^[\\S]$
+201457060cddefa5		5e5b5e5c735d24	^[^\\s]$
+201457060cddefa5	u	5e5b5e5c735d24	^[^\\s]$
+201457060cddefa5	v	5e5b5e5c735d24	^[^\\s]$
+654e8364f2f530ac		5e5b5c445d24	^[\\D]$
+654e8364f2f530ac	u	5e5b5c445d24	^[\\D]$
+654e8364f2f530ac	v	5e5b5c445d24	^[\\D]$
+5fb9e79c4ef6e325		5e5b5c575d24	^[\\W]$
+5fb9e79c4ef6e325	u	5e5b5c575d24	^[\\W]$
+5fb9e79c4ef6e325	v	5e5b5c575d24	^[\\W]$
+e0bbbbac037dd6a4		5e5b5c735c535d2b24	^[\\s\\S]+$
+e0bbbbac037dd6a4	u	5e5b5c735c535d2b24	^[\\s\\S]+$
+e0bbbbac037dd6a4	v	5e5b5c735c535d2b24	^[\\s\\S]+$
+8397a41b21b5caba		5e5b5c735c645c772d5d2b24	^[\\s\\d\\w-]+$
+8397a41b21b5caba	u	5e5b5c735c645c772d5d2b24	^[\\s\\d\\w-]+$
+8397a41b21b5caba	v	5e5b5c735c645c772d5d2b24	^[\\s\\d\\w-]+$
+1c2e45c244aa7b6b		5e2e24	^.$
+1c2e45c244aa7b6b	u	5e2e24	^.$
+1c2e45c244aa7b6b	v	5e2e24	^.$
+784e5ccef954b074	s	5e2e24	^.$
+9bda40bf57b1bc5a	m	5e62	^b
+1c15d4758c7addba		5e62	^b
+1c15d4758c7addba	u	5e62	^b
+c0dbcda90468b07a	m	6124	a$
+b60fc84c259a38c2		6124	a$
+b60fc84c259a38c2	u	6124	a$
+951d65c7fc29ab39	m	5e24	^$
+ad00935f039194ac		5e24	^$
+ad00935f039194ac	u	5e24	^$
+c81b3770f8ac78d5		617b2c357d	a{,5}
+error:InvalidRepeat	u	617b2c357d	a{,5}
+141d4c63c68ba25d		5e617b7d24	^a{}$
+error:InvalidRepeat	u	5e617b7d24	^a{}$
+e3a3f11acc96d92c		787b2c7d	x{,}
+error:InvalidRepeat	u	787b2c7d	x{,}
+8e200c71c7887c1e		617b327d	a{2}
+8e200c71c7887c1e	u	617b327d	a{2}
+fd600b80e6ed63a3	u	617b322c7d	a{2,}
+fd600b80e6ed63a3		617b322c7d	a{2,}
+f44df8b24fee99f6		617b312c327d	a{1,2}
+f44df8b24fee99f6	u	617b312c327d	a{1,2}
+5c2fe3b74a803606		617b312c	a{1,
+error:UnterminatedRepeat	u	617b312c	a{1,
+a944bea4f55d934e		5d2b	]+
+error:UnmatchedBracket	u	5d2b	]+
+0fe8c853325d0f13		5e7d24	^}$
+error:InvalidRepeat	u	5e7d24	^}$
+478453acf24225dd	u	5c7b5c7d5c5d	\\{\\}\\]
+478453acf24225dd		5c7b5c7d5c5d	\\{\\}\\]
+error:InvalidQuantifier		617b322c317d	a{2,1}
+error:InvalidQuantifier	u	617b322c317d	a{2,1}
+cee1a76107bd4cb6		5b5d	[]
+cee1a76107bd4cb6	u	5b5d	[]
+cee1a76107bd4cb6	v	5b5d	[]
+641ddd92605f64fb		615b5d	a[]
+641ddd92605f64fb	u	615b5d	a[]
+641ddd92605f64fb	v	615b5d	a[]
+1f451a6d0d8a1563		5b5d61	[]a
+1f451a6d0d8a1563	u	5b5d61	[]a
+1f451a6d0d8a1563	v	5b5d61	[]a
+9c63d8f033dfe898		617c5b5d	a|[]
+9c63d8f033dfe898	u	617c5b5d	a|[]
+9c63d8f033dfe898	v	617c5b5d	a|[]
+aee89a718a6dc009		5b5d2a62	[]*b
+aee89a718a6dc009	u	5b5d2a62	[]*b
+aee89a718a6dc009	v	5b5d2a62	[]*b
+188224104b8876ec		5b5d3f62	[]?b
+188224104b8876ec	u	5b5d3f62	[]?b
+188224104b8876ec	v	5b5d3f62	[]?b
+ce91fe71518e3fec		5e5b5e5d24	^[^]$
+ce91fe71518e3fec	u	5e5b5e5d24	^[^]$
+ce91fe71518e3fec	v	5e5b5e5d24	^[^]$
+cee1a76107bd4cb6	i	5b5d	[]
+0ff823de2a66dd27		5c63d090	\\c\u0410
+error:InvalidEscape	u	5c63d090	\\c\u0410
+8b1d757714d85995		5c63	\\c
+error:InvalidEscape	u	5c63	\\c
+7bd6ddf896c92dd8		5c6331	\\c1
+error:InvalidEscape	u	5c6331	\\c1
+7d00851df4307570		5c634a	\\cJ
+7d00851df4307570	u	5c634a	\\cJ
+4607fae6dff451e8		5b5c63305d	[\\c0]
+error:InvalidEscape	u	5b5c63305d	[\\c0]
+82a3742f6d3ee2ed		5b5c635f5d	[\\c_]
+error:InvalidEscape	u	5b5c635f5d	[\\c_]
+6acab0989ea70552		5b5c6330305d2b	[\\c00]+
+error:InvalidEscape	u	5b5c6330305d2b	[\\c00]+
+008ed3899b016caf		5b5c63205d2b	[\\c ]+
+error:InvalidEscape	u	5b5c63205d2b	[\\c ]+
+fe0276490c09b792		5b5c635d2b	[\\c]+
+error:InvalidEscape	u	5b5c635d2b	[\\c]+
+7f5725058e1c79b8		375c3839	7\\89
+error:InvalidEscape	u	375c3839	7\\89
+faa336142819240c		5c313031	\\101
+error:InvalidEscape	u	5c313031	\\101
+0eebf5fd40592553		5c343030	\\400
+error:InvalidEscape	u	5c343030	\\400
+9c7d5b46a0199348		5c333737	\\377
+error:InvalidEscape	u	5c333737	\\377
+ad56ad873f855ed1		5c30313131	\\0111
+error:InvalidEscape	u	5c30313131	\\0111
+da61ad90b368920a		5c62285c772b29205c325c62	\\b(\\w+) \\2\\b
+error:InvalidEscape	u	5c62285c772b29205c325c62	\\b(\\w+) \\2\\b
+c18ad0f9078a406f		282e295c31	(.)\\1
+c18ad0f9078a406f	u	282e295c31	(.)\\1
+3de5be6dcab6f833		282e29282e29282e29282e29282e29282e29282e29282e295c385c38	(.)(.)(.)(.)(.)(.)(.)(.)\\8\\8
+3de5be6dcab6f833	u	282e29282e29282e29282e29282e29282e29282e29282e295c385c38	(.)(.)(.)(.)(.)(.)(.)(.)\\8\\8
+6f6387f5bfe3a967		2828282828282828282841292929292929292929295c3130	((((((((((A))))))))))\\10
+6f6387f5bfe3a967	u	2828282828282828282841292929292929292929295c3130	((((((((((A))))))))))\\10
+6c2bb1ce69014f86		5b5c31322d5c31345d2b	[\\12-\\14]+
+error:InvalidEscape	u	5b5c31322d5c31345d2b	[\\12-\\14]+
+43660f17c611065b		2861295b5c315d	(a)[\\1]
+error:InvalidEscape	u	2861295b5c315d	(a)[\\1]
+cd91986fd29fac51		5b5c385d	[\\8]
+error:InvalidEscape	u	5b5c385d	[\\8]
+3b7a83fe2cfac16c		5c6b3c613e	\\k<a>
+error:UnknownGroupName	u	5c6b3c613e	\\k<a>
+937dc35eb319a960		5c6b3c613e283f3c3d3e2961	\\k<a>(?<=>)a
+error:UnknownGroupName	u	5c6b3c613e283f3c3d3e2961	\\k<a>(?<=>)a
+error:UnknownGroupName		283f3c623e2e295c6b3c613e	(?<b>.)\\k<a>
+error:UnknownGroupName	u	283f3c623e2e295c6b3c613e	(?<b>.)\\k<a>
+error:UnexpectedToken		612a2b	a*+
+error:UnexpectedToken	u	612a2b	a*+
+error:UnexpectedToken		612b2b61	a++a
+error:UnexpectedToken	u	612b2b61	a++a
+aa10350e64a97fca		612b61	a+a
+aa10350e64a97fca	u	612b61	a+a
+9b36bcb6215a877c		612b3f	a+?
+9b36bcb6215a877c	u	612b3f	a+?
+d6197ba0281785eb		5c70	\\p
+error:InvalidEscape	u	5c70	\\p
+d6197ba0281785eb	v	5c70	\\p
+3c4fa27b831da21a		5c50	\\P
+error:InvalidEscape	u	5c50	\\P
+3c4fa27b831da21a	v	5c50	\\P
+8b886d658ea60caa	v	5c704c	\\pL
+9a2193b4a6309483		5c504c	\\PL
+error:InvalidEscape	u	5c504c	\\PL
+9a2193b4a6309483	v	5c504c	\\PL
+a83fc1059dfa0d53		5c707d	\\p}
+error:InvalidEscape	u	5c707d	\\p}
+a83fc1059dfa0d53	v	5c707d	\\p}
+1f9b9a88306d5c57		5c507d	\\P}
+error:InvalidEscape	u	5c507d	\\P}
+1f9b9a88306d5c57	v	5c507d	\\P}
+cedc142ce7311d00	v	5b5c707b7d5d	[\\p{}]
+492297354f7b5685		5b5c507b7d5d	[\\P{}]
+error:InvalidEscape	u	5b5c507b7d5d	[\\P{}]
+492297354f7b5685	v	5b5c507b7d5d	[\\P{}]
+6172123bf140084c		5c707b	\\p{
+error:InvalidEscape	u	5c707b	\\p{
+6172123bf140084c	v	5c707b	\\p{
+error:InvalidQuantifier		2e283f3c3d2e293f	.(?<=.)?
+error:InvalidQuantifier	u	2e283f3c3d2e293f	.(?<=.)?
+error:InvalidQuantifier	v	2e283f3c3d2e293f	.(?<=.)?
+error:InvalidQuantifier		2e283f3c212e293f	.(?<!.)?
+error:InvalidQuantifier	u	2e283f3c212e293f	.(?<!.)?
+error:InvalidQuantifier	v	2e283f3c212e293f	.(?<!.)?
+error:InvalidQuantifier		2e283f3c3d2e297b322c337d	.(?<=.){2,3}
+error:InvalidQuantifier	u	2e283f3c3d2e297b322c337d	.(?<=.){2,3}
+error:InvalidQuantifier	v	2e283f3c3d2e297b322c337d	.(?<=.){2,3}
+error:InvalidQuantifier		2e283f3c212e292a	.(?<!.)*
+error:InvalidQuantifier	u	2e283f3c212e292a	.(?<!.)*
+error:InvalidQuantifier	v	2e283f3c212e292a	.(?<!.)*
+75dc7e5feb714ce8		2e283f3d2e293f	.(?=.)?
+error:InvalidQuantifier	u	2e283f3d2e293f	.(?=.)?
+75dc7e5feb714ce8	v	2e283f3d2e293f	.(?=.)?
+5de42b7690b0ee65		2e283f212e293f	.(?!.)?
+error:InvalidQuantifier	u	2e283f212e293f	.(?!.)?
+5de42b7690b0ee65	v	2e283f212e293f	.(?!.)?
+eff756307ca5bb77		2e283f3d2e297b322c337d	.(?=.){2,3}
+error:InvalidQuantifier	u	2e283f3d2e297b322c337d	.(?=.){2,3}
+eff756307ca5bb77	v	2e283f3d2e297b322c337d	.(?=.){2,3}
+5f1359383029bf80		283f3d61292a	(?=a)*
+error:InvalidQuantifier	u	283f3d61292a	(?=a)*
+5f1359383029bf80	v	283f3d61292a	(?=a)*
+error:InvalidGroupName		283f3c613e2e295c6b	(?<a>.)\\k
+error:InvalidGroupName	u	283f3c613e2e295c6b	(?<a>.)\\k
+error:InvalidGroupName	v	283f3c613e2e295c6b	(?<a>.)\\k
+error:InvalidGroupName		283f3c613e2e295c6b3c61	(?<a>.)\\k<a
+error:InvalidGroupName	u	283f3c613e2e295c6b3c61	(?<a>.)\\k<a
+error:InvalidGroupName	v	283f3c613e2e295c6b3c61	(?<a>.)\\k<a
+error:InvalidGroupName		283f3c613e2e295c6b3c3e	(?<a>.)\\k<>
+error:InvalidGroupName	u	283f3c613e2e295c6b3c3e	(?<a>.)\\k<>
+error:InvalidGroupName	v	283f3c613e2e295c6b3c3e	(?<a>.)\\k<>
+error:InvalidGroupName		5c6b3c61283f3c613e6129	\\k<a(?<a>a)
+error:InvalidGroupName	u	5c6b3c61283f3c613e6129	\\k<a(?<a>a)
+error:InvalidGroupName	v	5c6b3c61283f3c613e6129	\\k<a(?<a>a)
+error:InvalidGroupName		5c6b283f3c613e2e29	\\k(?<a>.)
+error:InvalidGroupName	u	5c6b283f3c613e2e29	\\k(?<a>.)
+error:InvalidGroupName	v	5c6b283f3c613e2e29	\\k(?<a>.)
+07c52fe765143144	v	5c6b	\\k
+a58efb448eddeb3c	v	5c6b3c61	\\k<a
+5465011088a917cf		5c6b3c3e	\\k<>
+error:InvalidGroupName	u	5c6b3c3e	\\k<>
+5465011088a917cf	v	5c6b3c3e	\\k<>
+4d0060bb3b6d95a2	v	5c6330	\\c0
+4607fae6dff451e8	v	5b5c63305d	[\\c0]
+8b1d757714d85995	v	5c63	\\c
+7ab1176b3b229586	v	5c7834	\\x4
+bbec5b2809fe0926		5c786731	\\xg1
+error:InvalidEscape	u	5c786731	\\xg1
+bbec5b2809fe0926	v	5c786731	\\xg1
+e5327b7394b019f7		5c753132	\\u12
+error:InvalidEscape	u	5c753132	\\u12
+e5327b7394b019f7	v	5c753132	\\u12
+bf55b440cf3c1e27		5c757b312c7d	\\u{1,}
+error:InvalidEscape	u	5c757b312c7d	\\u{1,}
+bf55b440cf3c1e27	v	5c757b312c7d	\\u{1,}
+ba9ddb6a850bcd1e		5c757b7d	\\u{}
+error:InvalidEscape	u	5c757b7d	\\u{}
+ba9ddb6a850bcd1e	v	5c757b7d	\\u{}
+77fdd831aed0b881		5c757b3131303030307d	\\u{110000}
+error:InvalidEscape	u	5c757b3131303030307d	\\u{110000}
+77fdd831aed0b881	v	5c757b3131303030307d	\\u{110000}
+ff2d6ef7316e3e9d		5b5c757b3131303030307d5d	[\\u{110000}]
+error:InvalidEscape	u	5b5c757b3131303030307d5d	[\\u{110000}]
+ff2d6ef7316e3e9d	v	5b5c757b3131303030307d5d	[\\u{110000}]
+a11d17f6b6d94428		5b5c642d615d	[\\d-a]
+error:InvalidCharRange	u	5b5c642d615d	[\\d-a]
+a11d17f6b6d94428	v	5b5c642d615d	[\\d-a]
+e1fcccabca86111d		5b5c732d5c645d	[\\s-\\d]
+error:InvalidCharRange	u	5b5c732d5c645d	[\\s-\\d]
+e1fcccabca86111d	v	5b5c732d5c645d	[\\s-\\d]
+b73da3ef044b56a9		5b252d5c645d	[%-\\d]
+error:InvalidCharRange	u	5b252d5c645d	[%-\\d]
+b73da3ef044b56a9	v	5b252d5c645d	[%-\\d]
+9475e375b57376dd		5b2d2d5c645d	[--\\d]
+error:InvalidCharRange	u	5b2d2d5c645d	[--\\d]
+error:InvalidClassSetOperand	v	5b2d2d5c645d	[--\\d]
+46b463093aa81012		5b5c707b4c7d2d7a5d	[\\p{L}-z]
+error:InvalidCharRange	u	5b5c707b4c7d2d7a5d	[\\p{L}-z]
+46b463093aa81012	v	5b5c707b4c7d2d7a5d	[\\p{L}-z]
+62164679a717bd9a		09	\t
+62164679a717bd9a	u	09	\t
+62164679a717bd9a	v	09	\t
+7d00851df4307570		0a	\n
+7d00851df4307570	u	0a	\n
+7d00851df4307570	v	0a	\n
+fb4a7b29ebe79366		0b	\u000b
+fb4a7b29ebe79366	u	0b	\u000b
+fb4a7b29ebe79366	v	0b	\u000b
+8fd035d559283e54		0c	\f
+8fd035d559283e54	u	0c	\f
+8fd035d559283e54	v	0c	\f
+4fe678d4b457446a		0d	\r
+4fe678d4b457446a	u	0d	\r
+4fe678d4b457446a	v	0d	\r
+3779b54ef09881ad		20	 
+3779b54ef09881ad	u	20	 
+3779b54ef09881ad	v	20	 
+47f8ecd675ca895e		c2a0	\u00a0
+47f8ecd675ca895e	u	c2a0	\u00a0
+47f8ecd675ca895e	v	c2a0	\u00a0
+be3c5b416285caf6		e19a80	\u1680
+be3c5b416285caf6	u	e19a80	\u1680
+be3c5b416285caf6	v	e19a80	\u1680
+1ba47b01bd7a52f4		e28080	\u2000
+1ba47b01bd7a52f4	u	e28080	\u2000
+1ba47b01bd7a52f4	v	e28080	\u2000
+7301b05038bbe2af		e2808a	\u200a
+7301b05038bbe2af	u	e2808a	\u200a
+7301b05038bbe2af	v	e2808a	\u200a
+ad0a62ff9c10d873		e280a8	\u2028
+ad0a62ff9c10d873	u	e280a8	\u2028
+ad0a62ff9c10d873	v	e280a8	\u2028
+05c8eae16830d19a		e280a9	\u2029
+05c8eae16830d19a	u	e280a9	\u2029
+05c8eae16830d19a	v	e280a9	\u2029
+069a96a9eb78b3ad		e280af	\u202f
+069a96a9eb78b3ad	u	e280af	\u202f
+069a96a9eb78b3ad	v	e280af	\u202f
+b377dd329e8bdfcb		e2819f	\u205f
+b377dd329e8bdfcb	u	e2819f	\u205f
+b377dd329e8bdfcb	v	e2819f	\u205f
+8d595a18f45e5d90		e38080	\u3000
+8d595a18f45e5d90	u	e38080	\u3000
+8d595a18f45e5d90	v	e38080	\u3000
+8d307f40a21d4546		efbbbf	\ufeff
+8d307f40a21d4546	u	efbbbf	\ufeff
+8d307f40a21d4546	v	efbbbf	\ufeff
+005f0e9e947349d2		61	a
+005f0e9e947349d2	u	61	a
+005f0e9e947349d2	v	61	a
+0dfed6dad07c753b		30	0
+0dfed6dad07c753b	u	30	0
+0dfed6dad07c753b	v	30	0
+07d1c9df695dfd57		5f	_
+07d1c9df695dfd57	u	5f	_
+07d1c9df695dfd57	v	5f	_
+c22995bc73c0bdeb		c3a9	\u00e9
+c22995bc73c0bdeb	u	c3a9	\u00e9
+c22995bc73c0bdeb	v	c3a9	\u00e9
+a1b9d7b0f8fd1a0a		e282ac	\u20ac
+a1b9d7b0f8fd1a0a	u	e282ac	\u20ac
+a1b9d7b0f8fd1a0a	v	e282ac	\u20ac
+9b5d980d28755f2b		e2808b	\u200b
+9b5d980d28755f2b	u	e2808b	\u200b
+9b5d980d28755f2b	v	e2808b	\u200b
+8dcc04d16c1dffad		c285	\u0085
+8dcc04d16c1dffad	u	c285	\u0085
+8dcc04d16c1dffad	v	c285	\u0085
+37a334dafdb04d3d		f09f929a	\ud83d\udc9a
+37a334dafdb04d3d	u	f09f929a	\ud83d\udc9a
+37a334dafdb04d3d	v	f09f929a	\ud83d\udc9a
+b3df15df255a3720		5c7320616e64205c5320666f6c6c6f772045434d412d3236322057686974655370616365202b204c696e655465726d696e61746f722c207374616e64616c6f6e6520616e6420696e206120636c617373	\\s and \\S follow ECMA-262 WhiteSpace + LineTerminator, standalone and in a class
+b3df15df255a3720	u	5c7320616e64205c5320666f6c6c6f772045434d412d3236322057686974655370616365202b204c696e655465726d696e61746f722c207374616e64616c6f6e6520616e6420696e206120636c617373	\\s and \\S follow ECMA-262 WhiteSpace + LineTerminator, standalone and in a class
+b3df15df255a3720	v	5c7320616e64205c5320666f6c6c6f772045434d412d3236322057686974655370616365202b204c696e655465726d696e61746f722c207374616e64616c6f6e6520616e6420696e206120636c617373	\\s and \\S follow ECMA-262 WhiteSpace + LineTerminator, standalone and in a class
+07a2f835b8717759		e280a7	\u2027
+07a2f835b8717759	u	e280a7	\u2027
+07a2f835b8717759	v	e280a7	\u2027
+c81b3770f8ac78d5	v	617b2c357d	a{,5}
+21e1903f4c9018f6		617b7d	a{}
+error:InvalidRepeat	u	617b7d	a{}
+21e1903f4c9018f6	v	617b7d	a{}
+4fd2561642ff6bcf		617b2c7d	a{,}
+error:InvalidRepeat	u	617b2c7d	a{,}
+4fd2561642ff6bcf	v	617b2c7d	a{,}
+e75b12d2e5aafbcf		617b	a{
+error:InvalidRepeat	u	617b	a{
+e75b12d2e5aafbcf	v	617b	a{
+3303a2b1d2bf3ec8		7b	{
+error:InvalidRepeat	u	7b	{
+3303a2b1d2bf3ec8	v	7b	{
+091e6c4b985e6de0		617b31	a{1
+error:InvalidRepeat	u	617b31	a{1
+091e6c4b985e6de0	v	617b31	a{1
+5c2fe3b74a803606	v	617b312c	a{1,
+74a33cada5197696		617b312c32	a{1,2
+error:UnterminatedRepeat	u	617b312c32	a{1,2
+74a33cada5197696	v	617b312c32	a{1,2
+63373c009035ab6c		617b787d	a{x}
+error:InvalidRepeat	u	617b787d	a{x}
+63373c009035ab6c	v	617b787d	a{x}
+29d5709f4a4b0396		7d	}
+error:InvalidRepeat	u	7d	}
+29d5709f4a4b0396	v	7d	}
+bc8e36c622519b9b		617d	a}
+error:InvalidRepeat	u	617d	a}
+bc8e36c622519b9b	v	617d	a}
+26685c70b6ee37da		5d	]
+error:UnmatchedBracket	u	5d	]
+26685c70b6ee37da	v	5d	]
+df9fb13dd1de4261		615d	a]
+error:UnmatchedBracket	u	615d	a]
+df9fb13dd1de4261	v	615d	a]
+error:UnexpectedToken		7b317d	{1}
+error:UnexpectedToken	u	7b317d	{1}
+error:UnexpectedToken	v	7b317d	{1}
+error:UnexpectedToken		7b312c7d	{1,}
+error:UnexpectedToken	u	7b312c7d	{1,}
+error:UnexpectedToken	v	7b312c7d	{1,}
+error:UnexpectedToken		7b312c327d	{1,2}
+error:UnexpectedToken	u	7b312c327d	{1,2}
+error:UnexpectedToken	v	7b312c327d	{1,2}
+error:UnexpectedToken		617c7b317d	a|{1}
+error:UnexpectedToken	u	617c7b317d	a|{1}
+error:UnexpectedToken	v	617c7b317d	a|{1}
+cd91986fd29fac51	v	5c38	\\8
+f45620ffc98ad3ce		5c3031	\\01
+error:InvalidEscape	u	5c3031	\\01
+f45620ffc98ad3ce	v	5c3031	\\01
+f45620ffc98ad3ce		5b5c315d	[\\1]
+error:InvalidEscape	u	5b5c315d	[\\1]
+f45620ffc98ad3ce	v	5b5c315d	[\\1]
+cd91986fd29fac51	v	5b5c385d	[\\8]
+0cb1b71135281993	v	2861295c32	(a)\\2
+error:UnexpectedToken	v	612a2b	a*+
+error:UnexpectedToken		612b2b	a++
+error:UnexpectedToken	u	612b2b	a++
+error:UnexpectedToken	v	612b2b	a++
+error:UnexpectedToken		613f2b	a?+
+error:UnexpectedToken	u	613f2b	a?+
+error:UnexpectedToken	v	613f2b	a?+
+error:UnexpectedToken		283f3a6162292a2b63	(?:ab)*+c
+error:UnexpectedToken	u	283f3a6162292a2b63	(?:ab)*+c
+error:UnexpectedToken	v	283f3a6162292a2b63	(?:ab)*+c
+error:UnexpectedToken		617b327d2b	a{2}+
+error:UnexpectedToken	u	617b327d2b	a{2}+
+error:UnexpectedToken	v	617b327d2b	a{2}+
+063c62577ed44026		28615c3162292a	(a\\1b)*
+063c62577ed44026	u	28615c3162292a	(a\\1b)*
+error:UnknownGroupName		283f3c613e78295c6b3c623e	(?<a>x)\\k<b>
+error:UnknownGroupName	u	283f3c613e78295c6b3c623e	(?<a>x)\\k<b>
+error:UnknownGroupName		5c6b3c623e283f3c613e7829	\\k<b>(?<a>x)
+error:UnknownGroupName	u	5c6b3c623e283f3c613e7829	\\k<b>(?<a>x)
+db8ee6e2f27f24b7		283f3a2861295c313f625c31292a	(?:(a)\\1?b\\1)*
+db8ee6e2f27f24b7	u	283f3a2861295c313f625c31292a	(?:(a)\\1?b\\1)*
+db8ee6e2f27f24b7	v	283f3a2861295c313f625c31292a	(?:(a)\\1?b\\1)*
+ee8760117f7c3be4		28283f3a785c317c612962292a63	((?:x\\1|a)b)*c
+ee8760117f7c3be4	u	28283f3a785c317c612962292a63	((?:x\\1|a)b)*c
+ee8760117f7c3be4	v	28283f3a785c317c612962292a63	((?:x\\1|a)b)*c
+5742bfa316463df6		285c31617c62297b327d	(\\1a|b){2}
+5742bfa316463df6	u	285c31617c62297b327d	(\\1a|b){2}
+5742bfa316463df6	v	285c31617c62297b327d	(\\1a|b){2}
+a5657c369b8f380e		61626162	abab
+a5657c369b8f380e	u	61626162	abab
+a5657c369b8f380e	v	61626162	abab
+0c19e5df03cec3c8		616278616263	abxabc
+0c19e5df03cec3c8	u	616278616263	abxabc
+0c19e5df03cec3c8	v	616278616263	abxabc
+e5399e37b452d4d2		6261	ba
+e5399e37b452d4d2	u	6261	ba
+e5399e37b452d4d2	v	6261	ba
+5023168b744ac10d		6262616261	bbaba
+5023168b744ac10d	u	6262616261	bbaba
+5023168b744ac10d	v	6262616261	bbaba
+error:InvalidGroupName		283f3cf09fa68a3e6129	(?<\ud83e\udd8a>a)
+error:InvalidGroupName	u	283f3cf09fa68a3e6129	(?<\ud83e\udd8a>a)
+error:InvalidGroupName	v	283f3cf09fa68a3e6129	(?<\ud83e\udd8a>a)
+error:InvalidGroupName		283f3c61f09f90953e6129	(?<a\ud83d\udc15>a)
+error:InvalidGroupName	u	283f3c61f09f90953e6129	(?<a\ud83d\udc15>a)
+error:InvalidGroupName	v	283f3c61f09f90953e6129	(?<a\ud83d\udc15>a)
+error:InvalidGroupName		283f3cf09d9f9a3e6129	(?<\ud835\udfda>a)
+error:InvalidGroupName	u	283f3cf09d9f9a3e6129	(?<\ud835\udfda>a)
+error:InvalidGroupName	v	283f3cf09d9f9a3e6129	(?<\ud835\udfda>a)
+error:InvalidGroupName		283f3c31613e6129	(?<1a>a)
+error:InvalidGroupName	u	283f3c31613e6129	(?<1a>a)
+error:InvalidGroupName	v	283f3c31613e6129	(?<1a>a)
+error:InvalidGroupName		283f3c3e6129	(?<>a)
+error:InvalidGroupName	u	283f3c3e6129	(?<>a)
+error:InvalidGroupName	v	283f3c3e6129	(?<>a)
+error:InvalidGroupName		283f3c612d623e6129	(?<a-b>a)
+error:InvalidGroupName	u	283f3c612d623e6129	(?<a-b>a)
+error:InvalidGroupName	v	283f3c612d623e6129	(?<a-b>a)
+error:InvalidGroupName		283f3c5c757b3131303030307d3e6129	(?<\\u{110000}>a)
+error:InvalidGroupName	u	283f3c5c757b3131303030307d3e6129	(?<\\u{110000}>a)
+error:InvalidGroupName	v	283f3c5c757b3131303030307d3e6129	(?<\\u{110000}>a)
+error:InvalidGroupName		283f3c5c7834313e6129	(?<\\x41>a)
+error:InvalidGroupName	u	283f3c5c7834313e6129	(?<\\x41>a)
+error:InvalidGroupName	v	283f3c5c7834313e6129	(?<\\x41>a)
+f9c92db5869e37c3		5c6b3c613e283f3c613e6229283f3c5c757b303343307d3e63295c6b3ccf803e	\\k<a>(?<a>b)(?<\\u{03C0}>c)\\k<\u03c0>
+f9c92db5869e37c3	u	5c6b3c613e283f3c613e6229283f3c5c757b303343307d3e63295c6b3ccf803e	\\k<a>(?<a>b)(?<\\u{03C0}>c)\\k<\u03c0>
+f9c92db5869e37c3	v	5c6b3c613e283f3c613e6229283f3c5c757b303343307d3e63295c6b3ccf803e	\\k<a>(?<a>b)(?<\\u{03C0}>c)\\k<\u03c0>
+26c395c1096d80b5		283f3c613e78297c283f3c613e79295c6b3c613e	(?<a>x)|(?<a>y)\\k<a>
+26c395c1096d80b5	u	283f3c613e78297c283f3c613e79295c6b3c613e	(?<a>x)|(?<a>y)\\k<a>
+26c395c1096d80b5	v	283f3c613e78297c283f3c613e79295c6b3c613e	(?<a>x)|(?<a>y)\\k<a>
+d7064fecff20f756		283f3c613e283f3c623e78295c6b3c623e29	(?<a>(?<b>x)\\k<b>)
+d7064fecff20f756	u	283f3c613e283f3c623e78295c6b3c623e29	(?<a>(?<b>x)\\k<b>)
+d7064fecff20f756	v	283f3c613e283f3c623e78295c6b3c623e29	(?<a>(?<b>x)\\k<b>)

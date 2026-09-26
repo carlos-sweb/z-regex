@@ -48,6 +48,7 @@ pub const OpcodeCategory = @import("bytecode/opcodes.zig").OpcodeCategory;
 pub const Instruction = @import("bytecode/format.zig").Instruction;
 pub const BytecodeWriter = @import("bytecode/writer.zig").BytecodeWriter;
 pub const BytecodeReader = @import("bytecode/reader.zig").BytecodeReader;
+pub const disassemble = @import("bytecode/reader.zig").disassemble;
 
 // Parser module exports
 pub const Token = @import("parser/lexer.zig").Token;
