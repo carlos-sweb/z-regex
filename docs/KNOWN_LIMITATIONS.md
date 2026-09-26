@@ -720,6 +720,11 @@ difference, and three kinds of match difference, all expected:
   finds), which is not a position, the old matcher read byte by byte and the new one
   also reaches `b+2`. From F3c such an offset gives no match.
 
+Bench (median of 10 against F3a): every case within noise or faster (−1.5 % to
++25.8 %). The first version lost 17–34 % on ASCII cases and 53 % on lookbehind, because
+every character went through the generic decoding path; the matcher now decodes ASCII
+inline and shares one inline character test.
+
 ### test262 baseline (F0b)
 
 The real test262 measurement that replaces the sample above as the semantic
