@@ -158,3 +158,20 @@ test "the F1 syntax paths don't leak on any allocation failure" {
         }.run, .{ c[0], c[1] });
     }
 }
+
+// --- \xHH above 0x7F (S15.10.2.10_A3.1_T1) ---
+
+test "\\xHH is the code point U+00HH, also above 0x7F" {
+    for ([_]zregex.CompileOptions{ annex_b, u }) |opts| {
+        try expectMatch("\\xFF", opts, "\xC3\xBF", "\xC3\xBF"); // ÿ
+        try expectMatch("\\xe9", opts, "caf\xC3\xA9", "\xC3\xA9"); // é
+        try expectMatch("[\\xE0-\\xFF]+", opts, "caf\xC3\xA9\xC3\xBF", "\xC3\xA9\xC3\xBF");
+        try expectMatch("\\x41", opts, "A", "A");
+        // Same thing as the \u spelling.
+        try expectMatch("\\xFF", opts, "\xC3\xBF", "\xC3\xBF");
+        try expectMatch("\\u00FF", opts, "\xC3\xBF", "\xC3\xBF");
+    }
+    // The raw byte 0xFF (invalid UTF-8) is not U+00FF.
+    try expectMatch("\\xFF", annex_b, "\xFF", null);
+    try expectMatch("\\xe9", .{ .case_insensitive = true }, "\xC3\x89", "\xC3\x89"); // É
+}

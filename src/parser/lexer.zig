@@ -896,7 +896,10 @@ pub const Lexer = struct {
         {
             const value = @as(u32, hexValue(self.pattern[self.pos])) * 16 + hexValue(self.pattern[self.pos + 1]);
             self.pos += 2;
-            return Token.escaped(value, start_pos);
+            // `\xHH` is the code point U+00HH (like `\u00HH`), not the raw
+            // byte: above 0x7F it must become its UTF-8 sequence to match
+            // text (`/\xFF/` matches "ÿ", C3 BF).
+            return codepointToken(value, start_pos);
         }
         if (self.unicode_mode) return error.InvalidEscape;
         return Token.escaped('x', start_pos);
