@@ -10,57 +10,6 @@
 
 const std = @import("std");
 
-/// Maximum number of code point ranges inline in a CHAR_CLASS_RANGES(_INV)
-/// instruction. A fixed cap keeps instruction size static (like
-/// CHAR_CLASS's fixed 32-byte bitmap) instead of requiring variable-length
-/// instruction decoding. Classes needing more ranges than this are a
-/// compile error (`error.TooManyRanges`) rather than silently truncated.
-/// 30 is the most that keeps CHAR_CLASS_UNICODE within the u8 instruction
-/// size (1 + 1 + 30*8 + 1 + MAX_CLASS_PROPERTIES*3 = 255); the codegen
-/// merges overlapping/adjacent ranges first. F2's dynamic CharSet removes
-/// the cap.
-pub const MAX_CLASS_RANGES = 30;
-
-/// Range slots per CHAR_CLASS_SET_OP operand: two operand blocks must fit the
-/// u8 instruction size (3 + 2 * CLASS_SET_OPERAND_SIZE <= 255). 13 holds a
-/// spliced `\S` (11 ranges).
-pub const MAX_SET_OP_RANGES = 13;
-
-/// Maximum number of `\p{...}`/`\P{...}` (property, script, or
-/// script-extensions) tests inline in a CHAR_CLASS_UNICODE(_INV)
-/// instruction -- e.g. `[\p{L}\p{N}\p{Script=Greek}]` uses 3. A class
-/// needing more than this is a compile error (`error.TooManyClassProperties`)
-/// rather than silently truncated, same policy as MAX_CLASS_RANGES.
-pub const MAX_CLASS_PROPERTIES = 4;
-
-/// Which lookup a CHAR_CLASS_UNICODE(_INV) property-test entry's `value`
-/// indexes into -- three different index spaces (`UnicodeProperty` enum
-/// ordinal, or a script-table index shared by `.script`/`.script_extensions`)
-/// need to be told apart at match time.
-pub const ClassPropertyKind = enum(u8) {
-    unicode_property = 0,
-    script = 1,
-    script_extensions = 2,
-};
-
-/// Byte size of one CHAR_CLASS_SET_OP operand block: negated:u8 +
-/// range_count:u8 + MAX_SET_OP_RANGES*(u32+u32) + prop_count:u8 +
-/// MAX_CLASS_PROPERTIES*(u8+u8+u8) -- the same range/property-table layout
-/// CHAR_CLASS_UNICODE uses, plus one leading `negated` byte for this
-/// operand's own `[^...]` (only meaningful when the operand is a nested
-/// class; see CHAR_CLASS_SET_OP's doc comment).
-pub const CLASS_SET_OPERAND_SIZE = 1 + 1 + MAX_SET_OP_RANGES * 8 + 1 + MAX_CLASS_PROPERTIES * 3;
-
-/// One `\p{...}`/`\P{...}` test inline in a CHAR_CLASS_UNICODE(_INV)
-/// instruction. `negated` is this individual test's own `\P{...}`-ness
-/// (independent of the whole instruction's _INV variant -- see
-/// CHAR_CLASS_UNICODE's doc comment for why those are different things).
-pub const ClassPropertyTest = struct {
-    kind: ClassPropertyKind,
-    negated: bool,
-    value: u8,
-};
-
 /// Bytecode opcode enumeration
 /// Matches libregexp opcode values for compatibility
 pub const Opcode = enum(u8) {
@@ -309,66 +258,12 @@ pub const Opcode = enum(u8) {
     /// Format: [CHECK_POS]
     CHECK_POS = 0x61,
 
-    // =========================================================================
-    // More Character Matching (Character Matching's 0x00-0x0F range filled up
-    // by the UNICODE_SCRIPT_EXTENSIONS pair -- these two continue it here
-    // rather than renumbering anything that shipped earlier)
-    // =========================================================================
-
-    /// Match a character class containing a mix of inline code-point ranges
-    /// (literal chars/ranges/shorthand-splices, same MAX_CLASS_RANGES cap as
-    /// CHAR_CLASS_RANGES) and `\p{...}`/`\P{...}` tests (General_Category,
-    /// binary property, Script, or Script_Extensions, up to
-    /// MAX_CLASS_PROPERTIES) -- e.g. `[\p{L}\d]` or `[\P{Alphabetic}a-z]`.
-    /// Matches if the decoded code point is in ANY inline range OR satisfies
-    /// ANY property test (each property test carries its own `negated` bit
-    /// for `\P{...}` used as a class member, independent of the whole-class
-    /// negation this opcode's _INV form applies -- `[\P{L}\d]` and
-    /// `[^\p{L}\d]` are different things).
-    /// Format: [CHAR_CLASS_UNICODE range_count:u8 (start:u32 end:u32){8}
-    ///          prop_count:u8 (kind:u8 negated:u8 value:u8){4}]
-    /// kind: 0 = UnicodeProperty (value = enum ordinal), 1 = Script,
-    /// 2 = Script_Extensions (value = script index for both).
-    CHAR_CLASS_UNICODE = 0x62,
-
-    /// Inverted form of CHAR_CLASS_UNICODE: matches if the decoded code
-    /// point matches NONE of the ranges or property tests (De Morgan's
-    /// complement of the union -- same single-XOR-at-the-end approach
-    /// CHAR_CLASS_RANGES_INV already uses, no per-member negation needed
-    /// here since that's already handled by each property test's own
-    /// `negated` bit).
-    /// Format: same as CHAR_CLASS_UNICODE.
-    CHAR_CLASS_UNICODE_INV = 0x63,
-
-    /// Match a `v`-mode class set operation (`[A--B]` difference, `[A&&B]`
-    /// intersection) -- see `docs/KNOWN_LIMITATIONS.md` for this feature's
-    /// scope (exactly one operation, no chaining, no `\q{...}`). Decodes one
-    /// code point and evaluates it against *two* independent
-    /// CHAR_CLASS_UNICODE-shaped operand specs (same range-table +
-    /// property-table layout, each with its own `negated` bit for its own
-    /// `[^...]`, if it's a nested class), then combines with AND (`op=1`,
-    /// intersection) or AND-NOT (`op=0`, difference); `result_negated` is
-    /// this whole operation's *own* `[^...]`, from the outermost bracket --
-    /// a third, independent negation layer on top of each operand's own.
-    /// Format: [CHAR_CLASS_SET_OP op:u8 result_negated:u8
-    ///          left:(negated:u8 range_count:u8 (start:u32 end:u32){8}
-    ///                prop_count:u8 (kind:u8 negated:u8 value:u8){4})
-    ///          right:(same layout as left)]
-    CHAR_CLASS_SET_OP = 0x64,
-
-    /// Superseded by CHAR_SET (F2b); no longer emitted, removed next.
-    /// Format: [CHAR_CLASS_RANGES count:u8 (start:u32 end:u32){MAX_CLASS_RANGES}]
-    CHAR_CLASS_RANGES = 0x65,
-
-    /// Superseded by CHAR_SET_INV (F2b); no longer emitted, removed next.
-    CHAR_CLASS_RANGES_INV = 0x66,
-
     _,
 
     /// Get the category of this opcode
     pub fn category(self: Opcode) OpcodeCategory {
         return switch (self) {
-            .CHAR, .CHAR32, .CHAR2, .CHAR_RANGE, .CHAR_RANGE_INV, .CHAR_CLASS, .CHAR_CLASS_INV, .CHAR_ANY, .CHAR_SET, .CHAR_SET_INV, .CHAR_CLASS_RANGES, .CHAR_CLASS_RANGES_INV, .UNICODE_PROPERTY, .UNICODE_PROPERTY_INV, .UNICODE_SCRIPT, .UNICODE_SCRIPT_INV, .UNICODE_SCRIPT_EXTENSIONS, .UNICODE_SCRIPT_EXTENSIONS_INV, .CHAR_CLASS_UNICODE, .CHAR_CLASS_UNICODE_INV, .CHAR_CLASS_SET_OP => .character_match,
+            .CHAR, .CHAR32, .CHAR2, .CHAR_RANGE, .CHAR_RANGE_INV, .CHAR_CLASS, .CHAR_CLASS_INV, .CHAR_ANY, .CHAR_SET, .CHAR_SET_INV, .UNICODE_PROPERTY, .UNICODE_PROPERTY_INV, .UNICODE_SCRIPT, .UNICODE_SCRIPT_INV, .UNICODE_SCRIPT_EXTENSIONS, .UNICODE_SCRIPT_EXTENSIONS_INV => .character_match,
             .MATCH, .GOTO, .SPLIT, .SPLIT_GREEDY, .SPLIT_LAZY, .SPLIT_POSSESSIVE, .LOOP => .control_flow,
             .SAVE_START, .SAVE_END, .SAVE_START_NAMED, .SAVE_END_NAMED, .CLEAR_CAPTURE => .capture,
             .BACK_REF, .BACK_REF_I => .backreference,
@@ -411,15 +306,6 @@ pub const Opcode = enum(u8) {
 
             // 33 bytes (opcode + 32 bytes bit table)
             .CHAR_CLASS, .CHAR_CLASS_INV => 33,
-
-            // opcode + count:u8 + MAX_CLASS_RANGES * (start:u32 + end:u32)
-            .CHAR_CLASS_RANGES, .CHAR_CLASS_RANGES_INV => 2 + MAX_CLASS_RANGES * 8,
-
-            // opcode + range_count:u8 + MAX_CLASS_RANGES*(u32+u32) + prop_count:u8 + MAX_CLASS_PROPERTIES*(u8+u8+u8)
-            .CHAR_CLASS_UNICODE, .CHAR_CLASS_UNICODE_INV => 1 + 1 + MAX_CLASS_RANGES * 8 + 1 + MAX_CLASS_PROPERTIES * 3,
-
-            // opcode + op:u8 + result_negated:u8 + 2 * CLASS_SET_OPERAND_SIZE
-            .CHAR_CLASS_SET_OP => 1 + 1 + 1 + 2 * CLASS_SET_OPERAND_SIZE,
 
             _ => 1, // Unknown opcodes default to 1 byte
         };
@@ -540,6 +426,14 @@ test "Opcode: values match expected" {
     try std.testing.expectEqual(@as(u8, 0x30), @intFromEnum(Opcode.BACK_REF));
     try std.testing.expectEqual(@as(u8, 0x40), @intFromEnum(Opcode.LINE_START));
     try std.testing.expectEqual(@as(u8, 0x50), @intFromEnum(Opcode.LOOKAHEAD));
+    try std.testing.expectEqual(@as(u8, 0x08), @intFromEnum(Opcode.CHAR_SET));
+    try std.testing.expectEqual(@as(u8, 0x09), @intFromEnum(Opcode.CHAR_SET_INV));
+}
+
+test "Opcode: CHAR_SET is opcode + u32 index" {
+    try std.testing.expectEqual(@as(u8, 5), Opcode.CHAR_SET.size());
+    try std.testing.expectEqual(@as(u8, 5), Opcode.CHAR_SET_INV.size());
+    try std.testing.expectEqual(OpcodeCategory.character_match, Opcode.CHAR_SET.category());
 }
 
 test "Opcode: category classification" {

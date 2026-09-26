@@ -99,25 +99,6 @@ pub fn decodeInstruction(bytecode: []const u8, offset: usize) !Instruction {
             inst.operand_count = 0;
         },
 
-        // CHAR_CLASS_RANGES(_INV): count byte + fixed-size range table.
-        // Executor reads both directly from bytecode.
-        .CHAR_CLASS_RANGES, .CHAR_CLASS_RANGES_INV => {
-            inst.operand_count = 0;
-        },
-
-        // CHAR_CLASS_UNICODE(_INV): range table + property-test table, both
-        // fixed-size. Executor reads everything directly from bytecode, same
-        // as CHAR_CLASS_RANGES(_INV).
-        .CHAR_CLASS_UNICODE, .CHAR_CLASS_UNICODE_INV => {
-            inst.operand_count = 0;
-        },
-
-        // CHAR_CLASS_SET_OP: op/result_negated bytes + two fixed-size
-        // operand blocks. Executor reads everything directly from bytecode.
-        .CHAR_CLASS_SET_OP => {
-            inst.operand_count = 0;
-        },
-
         // 4 byte operand (u32)
         .CHAR32, .CHAR_SET, .CHAR_SET_INV, .LOOKAHEAD, .NEGATIVE_LOOKAHEAD, .LOOKBEHIND, .NEGATIVE_LOOKBEHIND => {
             inst.operands[0] = readU32(bytecode[offset + 1 ..]);
@@ -175,7 +156,7 @@ pub fn encodeInstruction(inst: Instruction, buffer: []u8) !usize {
     // Encode operands based on opcode
     switch (inst.opcode) {
         // No operands
-        .CHAR, .CHAR_ANY, .MATCH, .LINE_START, .LINE_END, .WORD_BOUNDARY, .NOT_WORD_BOUNDARY, .STRING_START, .STRING_END, .LOOKAHEAD_END, .LOOKBEHIND_END, .PUSH_POS, .CHECK_POS, .CHAR_CLASS_RANGES, .CHAR_CLASS_RANGES_INV, .CHAR_CLASS_UNICODE, .CHAR_CLASS_UNICODE_INV, .CHAR_CLASS_SET_OP => {},
+        .CHAR, .CHAR_ANY, .MATCH, .LINE_START, .LINE_END, .WORD_BOUNDARY, .NOT_WORD_BOUNDARY, .STRING_START, .STRING_END, .LOOKAHEAD_END, .LOOKBEHIND_END, .PUSH_POS, .CHECK_POS => {},
 
         // u16 capture group (D9)
         .SAVE_START, .SAVE_END, .BACK_REF, .BACK_REF_I, .CLEAR_CAPTURE => {
@@ -336,6 +317,15 @@ test "encode/decode: opcode with u32 operand" {
     try std.testing.expectEqual(Opcode.CHAR32, decoded.opcode);
     try std.testing.expectEqual(@as(u8, 1), decoded.operand_count);
     try std.testing.expectEqual(@as(u32, 0x1F600), decoded.operands[0]);
+}
+
+test "encode/decode: CHAR_SET carries a u32 table index" {
+    var buffer: [5]u8 = undefined;
+    _ = try encodeInstruction(Instruction.with1(.CHAR_SET_INV, 0x12345678), &buffer);
+    const decoded = try decodeInstruction(&buffer, 0);
+    try std.testing.expectEqual(Opcode.CHAR_SET_INV, decoded.opcode);
+    try std.testing.expectEqual(@as(u8, 5), decoded.size);
+    try std.testing.expectEqual(@as(u32, 0x12345678), decoded.operands[0]);
 }
 
 test "encode/decode: opcode with 2 u32 operands" {

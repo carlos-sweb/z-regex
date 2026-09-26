@@ -253,6 +253,21 @@ test "Matcher: matchFull success" {
     try std.testing.expect(result);
 }
 
+test "Matcher: CHAR_SET without its CharSet table is InvalidCharSet, not a panic" {
+    const compiler = @import("../codegen/compiler.zig");
+    const compiled = try compiler.compileSimple(std.testing.allocator, "[\u{E9}]");
+    defer compiled.deinit();
+
+    // Bytecode alone (no table) isn't executable.
+    const bare = Matcher.init(std.testing.allocator, compiled.bytecode);
+    try std.testing.expectError(error.InvalidCharSet, bare.find("\u{E9}"));
+
+    const full = Matcher.initCompiled(std.testing.allocator, compiled);
+    const m = (try full.find("x\u{E9}")).?;
+    defer m.deinit();
+    try std.testing.expectEqual(@as(usize, 1), m.start);
+}
+
 test "Matcher: matchFull failure" {
     const compiler = @import("../codegen/compiler.zig");
 

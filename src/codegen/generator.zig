@@ -41,8 +41,6 @@ pub const CodegenError = error{
     UnsupportedNode,
     InvalidPattern,
     TooManyGroups,
-    TooManyRanges,
-    TooManyClassProperties,
     OutOfMemory,
     // BytecodeWriter errors
     BufferTooSmall,
@@ -438,8 +436,7 @@ pub const CodeGenerator = struct {
     }
 
     /// One `v`-mode set operation operand: a class (its members, then its
-    /// own `[^...]` as a complement -- the operand-level negation the
-    /// CHAR_CLASS_SET_OP operand block had) or a bare `\p{...}`.
+    /// own `[^...]` as a complement) or a bare `\p{...}`.
     fn classSetOperandSet(self: *Self, node: *Node) !CharSet {
         switch (node.type) {
             .char_class => {

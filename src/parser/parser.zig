@@ -923,7 +923,7 @@ pub const Parser = struct {
             // never itself negated -- that outer negation belongs solely to
             // the set-op result (`outer_negated`, passed separately below).
             // Leaving it set here would double-count it: once via
-            // `collectClassSetOperand` reading this flag as operand1's own
+            // `CodeGenerator.classSetOperandSet` reading this flag as operand1's own
             // negation, and again via `outer_negated`.
             class.inverted = false;
             class_owned = false;

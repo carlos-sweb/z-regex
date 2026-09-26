@@ -83,7 +83,7 @@ pub fn checkPattern(gpa: std.mem.Allocator, pattern: []const u8) !void {
             else => {
                 // Any defined compile error is fine, but a parse error must be
                 // one for analyze too (codegen-only errors, e.g.
-                // TooManyRanges, are not parse errors).
+                // PatternTooLarge, are not parse errors).
                 if (isParseError(err) and !analyzed_syntax_error) return reportDisagreement(pattern, mode, "compile: parse error, analyze: classified");
             },
         }

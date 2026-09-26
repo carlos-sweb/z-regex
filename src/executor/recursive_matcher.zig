@@ -299,36 +299,6 @@ pub const RecursiveMatcher = struct {
                 return self.matchFrom(pc + inst.size, r.end_pos);
             },
 
-            .CHAR_CLASS_RANGES => {
-                const r = try self.checkCharClassRanges(pc, pos, false);
-                if (!r.matched) return MatchResult{ .matched = false, .end_pos = pos };
-                return self.matchFrom(pc + inst.size, r.end_pos);
-            },
-
-            .CHAR_CLASS_RANGES_INV => {
-                const r = try self.checkCharClassRanges(pc, pos, true);
-                if (!r.matched) return MatchResult{ .matched = false, .end_pos = pos };
-                return self.matchFrom(pc + inst.size, r.end_pos);
-            },
-
-            .CHAR_CLASS_UNICODE => {
-                const r = try self.checkCharClassUnicode(pc, pos, false);
-                if (!r.matched) return MatchResult{ .matched = false, .end_pos = pos };
-                return self.matchFrom(pc + inst.size, r.end_pos);
-            },
-
-            .CHAR_CLASS_UNICODE_INV => {
-                const r = try self.checkCharClassUnicode(pc, pos, true);
-                if (!r.matched) return MatchResult{ .matched = false, .end_pos = pos };
-                return self.matchFrom(pc + inst.size, r.end_pos);
-            },
-
-            .CHAR_CLASS_SET_OP => {
-                const r = try self.checkCharClassSetOp(pc, pos);
-                if (!r.matched) return MatchResult{ .matched = false, .end_pos = pos };
-                return self.matchFrom(pc + inst.size, r.end_pos);
-            },
-
             .UNICODE_PROPERTY => {
                 const r = try self.checkUnicodeProperty(pc, pos, false);
                 if (!r.matched) return MatchResult{ .matched = false, .end_pos = pos };
@@ -800,171 +770,6 @@ pub const RecursiveMatcher = struct {
         return .{ .matched = matched, .end_pos = if (matched) pos + decoded.len else pos };
     }
 
-    /// Shared range-matching logic for CHAR_CLASS_RANGES(_INV), used by both
-    /// the main recursive matcher and the star-loop fast path
-    /// (matchSingleInstruction). Decodes the code point at `pos` and checks
-    /// it against the instruction's inline range table.
-    fn checkCharClassRanges(self: *Self, pc: usize, pos: usize, inverted: bool) MatchError!struct { matched: bool, end_pos: usize } {
-        if (pos >= self.input.len) return .{ .matched = false, .end_pos = pos };
-        if (pc + 2 > self.bytecode.len) return error.UnexpectedEndOfBytecode;
-
-        const count = self.bytecode[pc + 1];
-        const ranges_start = pc + 2;
-        if (ranges_start + @as(usize, count) * 8 > self.bytecode.len) return error.UnexpectedEndOfBytecode;
-
-        const decoded = decodeCodepointAt(self.input, pos);
-
-        var in_range = false;
-        var i: usize = 0;
-        while (i < count) : (i += 1) {
-            const offset = ranges_start + i * 8;
-            const start = std.mem.readInt(u32, self.bytecode[offset..][0..4], .little);
-            const end = std.mem.readInt(u32, self.bytecode[offset + 4 ..][0..4], .little);
-            if (decoded.codepoint >= start and decoded.codepoint <= end) {
-                in_range = true;
-                break;
-            }
-        }
-
-        const matched = if (inverted) !in_range else in_range;
-        return .{ .matched = matched, .end_pos = if (matched) pos + decoded.len else pos };
-    }
-
-    /// Shared matching logic for CHAR_CLASS_UNICODE(_INV), used by both the
-    /// main recursive matcher and the star-loop fast path
-    /// (matchSingleInstruction). Decodes the code point at `pos` and checks
-    /// it against the instruction's inline range table (same layout as
-    /// CHAR_CLASS_RANGES) OR any of its property/script/script-extensions
-    /// tests (each with its own `negated` bit, independent of this
-    /// function's `inverted` parameter -- which applies once, to the whole
-    /// union, matching the opcode's _INV form -- see CHAR_CLASS_UNICODE's
-    /// doc comment in opcodes.zig for why those are different things).
-    fn checkCharClassUnicode(self: *Self, pc: usize, pos: usize, inverted: bool) MatchError!struct { matched: bool, end_pos: usize } {
-        if (pos >= self.input.len) return .{ .matched = false, .end_pos = pos };
-
-        const ranges_start = pc + 2;
-        const props_count_offset = ranges_start + opcodes.MAX_CLASS_RANGES * 8;
-        const props_start = props_count_offset + 1;
-        const total_size = props_start + opcodes.MAX_CLASS_PROPERTIES * 3;
-        if (pc + 2 > self.bytecode.len or total_size > self.bytecode.len) return error.UnexpectedEndOfBytecode;
-
-        const range_count = self.bytecode[pc + 1];
-        const prop_count = self.bytecode[props_count_offset];
-        const decoded = decodeCodepointAt(self.input, pos);
-
-        var matched_any = false;
-
-        var i: usize = 0;
-        while (i < range_count) : (i += 1) {
-            const offset = ranges_start + i * 8;
-            const start = std.mem.readInt(u32, self.bytecode[offset..][0..4], .little);
-            const end = std.mem.readInt(u32, self.bytecode[offset + 4 ..][0..4], .little);
-            if (decoded.codepoint >= start and decoded.codepoint <= end) {
-                matched_any = true;
-                break;
-            }
-        }
-
-        if (!matched_any) {
-            var j: usize = 0;
-            while (j < prop_count) : (j += 1) {
-                const offset = props_start + j * 3;
-                const kind: opcodes.ClassPropertyKind = @enumFromInt(self.bytecode[offset]);
-                const negated = self.bytecode[offset + 1] != 0;
-                const value = self.bytecode[offset + 2];
-                const in_prop = switch (kind) {
-                    .unicode_property => properties.isInCategory(decoded.codepoint, @enumFromInt(value)),
-                    .script => properties.isInScript(decoded.codepoint, value),
-                    .script_extensions => properties.isInScriptExtensions(decoded.codepoint, value),
-                };
-                const prop_matched = if (negated) !in_prop else in_prop;
-                if (prop_matched) {
-                    matched_any = true;
-                    break;
-                }
-            }
-        }
-
-        const matched = if (inverted) !matched_any else matched_any;
-        return .{ .matched = matched, .end_pos = if (matched) pos + decoded.len else pos };
-    }
-
-    /// Evaluate one CHAR_CLASS_SET_OP operand block (see the opcode's doc
-    /// comment for the byte layout -- identical range/property-table shape
-    /// `checkCharClassUnicode` uses, prefixed with this operand's own
-    /// `negated` byte) against an already-decoded code point. Shared by
-    /// `checkCharClassSetOp`'s two operands.
-    fn evalClassSetOperand(self: *Self, offset: usize, cp: u32) bool {
-        const negated = self.bytecode[offset] != 0;
-        const range_count = self.bytecode[offset + 1];
-        const ranges_start = offset + 2;
-        var matched = false;
-
-        var i: usize = 0;
-        while (i < range_count) : (i += 1) {
-            const roff = ranges_start + i * 8;
-            const start = std.mem.readInt(u32, self.bytecode[roff..][0..4], .little);
-            const end = std.mem.readInt(u32, self.bytecode[roff + 4 ..][0..4], .little);
-            if (cp >= start and cp <= end) {
-                matched = true;
-                break;
-            }
-        }
-
-        if (!matched) {
-            const props_count_offset = ranges_start + opcodes.MAX_SET_OP_RANGES * 8;
-            const props_start = props_count_offset + 1;
-            const prop_count = self.bytecode[props_count_offset];
-            var j: usize = 0;
-            while (j < prop_count) : (j += 1) {
-                const poff = props_start + j * 3;
-                const kind: opcodes.ClassPropertyKind = @enumFromInt(self.bytecode[poff]);
-                const pnegated = self.bytecode[poff + 1] != 0;
-                const value = self.bytecode[poff + 2];
-                const in_prop = switch (kind) {
-                    .unicode_property => properties.isInCategory(cp, @enumFromInt(value)),
-                    .script => properties.isInScript(cp, value),
-                    .script_extensions => properties.isInScriptExtensions(cp, value),
-                };
-                const prop_matched = if (pnegated) !in_prop else in_prop;
-                if (prop_matched) {
-                    matched = true;
-                    break;
-                }
-            }
-        }
-
-        return if (negated) !matched else matched;
-    }
-
-    /// Shared matching logic for CHAR_CLASS_SET_OP, used by both the main
-    /// recursive matcher and the star-loop fast path (matchSingleInstruction).
-    /// Decodes the code point at `pos` once and evaluates it against both
-    /// operand blocks (see `evalClassSetOperand`), combining with AND
-    /// (intersection, `op=1`) or AND-NOT (difference, `op=0`), then applies
-    /// `result_negated` (the whole operation's own `[^...]`, a third,
-    /// independent negation layer -- see CHAR_CLASS_SET_OP's doc comment in
-    /// opcodes.zig).
-    fn checkCharClassSetOp(self: *Self, pc: usize, pos: usize) MatchError!struct { matched: bool, end_pos: usize } {
-        if (pos >= self.input.len) return .{ .matched = false, .end_pos = pos };
-
-        const op = self.bytecode[pc + 1];
-        const result_negated = self.bytecode[pc + 2] != 0;
-        const left_offset = pc + 3;
-        const right_offset = left_offset + opcodes.CLASS_SET_OPERAND_SIZE;
-        const total_size = right_offset + opcodes.CLASS_SET_OPERAND_SIZE;
-        if (total_size > self.bytecode.len) return error.UnexpectedEndOfBytecode;
-
-        const decoded = decodeCodepointAt(self.input, pos);
-        const left_matched = self.evalClassSetOperand(left_offset, decoded.codepoint);
-        const right_matched = self.evalClassSetOperand(right_offset, decoded.codepoint);
-
-        const combined = if (op == 1) (left_matched and right_matched) else (left_matched and !right_matched);
-        const matched = if (result_negated) !combined else combined;
-
-        return .{ .matched = matched, .end_pos = if (matched) pos + decoded.len else pos };
-    }
-
     /// Shared matching logic for UNICODE_PROPERTY(_INV), used by both the
     /// main recursive matcher and the star-loop fast path
     /// (matchSingleInstruction). Decodes the code point at `pos` and checks
@@ -1037,7 +842,7 @@ pub const RecursiveMatcher = struct {
     /// limit (found via test262-derived conformance testing).
     fn isQuantifiableAtomOpcode(opcode: Opcode) bool {
         return switch (opcode) {
-            .CHAR, .CHAR_ANY, .CHAR32, .CHAR2, .CHAR_RANGE, .CHAR_RANGE_INV, .CHAR_CLASS, .CHAR_CLASS_INV, .CHAR_SET, .CHAR_SET_INV, .CHAR_CLASS_RANGES, .CHAR_CLASS_RANGES_INV, .CHAR_CLASS_UNICODE, .CHAR_CLASS_UNICODE_INV, .CHAR_CLASS_SET_OP, .UNICODE_PROPERTY, .UNICODE_PROPERTY_INV, .UNICODE_SCRIPT, .UNICODE_SCRIPT_INV, .UNICODE_SCRIPT_EXTENSIONS, .UNICODE_SCRIPT_EXTENSIONS_INV, .BACK_REF, .BACK_REF_I => true,
+            .CHAR, .CHAR_ANY, .CHAR32, .CHAR2, .CHAR_RANGE, .CHAR_RANGE_INV, .CHAR_CLASS, .CHAR_CLASS_INV, .CHAR_SET, .CHAR_SET_INV, .UNICODE_PROPERTY, .UNICODE_PROPERTY_INV, .UNICODE_SCRIPT, .UNICODE_SCRIPT_INV, .UNICODE_SCRIPT_EXTENSIONS, .UNICODE_SCRIPT_EXTENSIONS_INV, .BACK_REF, .BACK_REF_I => true,
             else => false,
         };
     }
@@ -1293,31 +1098,6 @@ pub const RecursiveMatcher = struct {
 
             .CHAR_SET, .CHAR_SET_INV => {
                 const r = try self.checkCharSet(inst, pos);
-                return .{ .matched = r.matched, .end_pos = r.end_pos };
-            },
-
-            .CHAR_CLASS_RANGES => {
-                const r = try self.checkCharClassRanges(pc, pos, false);
-                return .{ .matched = r.matched, .end_pos = r.end_pos };
-            },
-
-            .CHAR_CLASS_RANGES_INV => {
-                const r = try self.checkCharClassRanges(pc, pos, true);
-                return .{ .matched = r.matched, .end_pos = r.end_pos };
-            },
-
-            .CHAR_CLASS_UNICODE => {
-                const r = try self.checkCharClassUnicode(pc, pos, false);
-                return .{ .matched = r.matched, .end_pos = r.end_pos };
-            },
-
-            .CHAR_CLASS_UNICODE_INV => {
-                const r = try self.checkCharClassUnicode(pc, pos, true);
-                return .{ .matched = r.matched, .end_pos = r.end_pos };
-            },
-
-            .CHAR_CLASS_SET_OP => {
-                const r = try self.checkCharClassSetOp(pc, pos);
                 return .{ .matched = r.matched, .end_pos = r.end_pos };
             },
 
