@@ -609,6 +609,13 @@ non-capturing groups no longer cost the code generator any stack; the new loweri
 pass takes ~0.6 KiB in Debug and ~0.24 KiB in ReleaseSafe. 256 levels stay far below
 1 MiB in every stage.
 
+Performance (median of 10 `zig build bench` runs each against `0a43ff0`): matching is
+unchanged within noise (-5.1 %..+1.8 %; the matcher didn't change; this run's
+half-vs-half resolution was 4.4 % for the old build and 13.2 % for the new one).
+Compilation pays for the extra pass (arena, lowering, CharSets materialized for every
+class): a few microseconds per pattern, e.g. `hello` 0.5 → 1.1 µs, the `email` pattern
+1.8 → 4.9 µs, `[\p{L}--\p{Lu}]` 11.6 → 19.6 µs.
+
 ### test262 baseline (F0b)
 
 The real test262 measurement that replaces the sample above as the semantic
