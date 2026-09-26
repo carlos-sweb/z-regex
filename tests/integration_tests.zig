@@ -347,3 +347,9 @@ test {
 test {
     _ = @import("exec_tests.zig");
 }
+test {
+    _ = @import("subject_tests.zig");
+}
+test {
+    _ = @import("differential.zig");
+}

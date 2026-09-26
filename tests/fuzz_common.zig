@@ -17,12 +17,15 @@
 
 const std = @import("std");
 const zregex = @import("zregex");
+const dual = @import("dual_encoding.zig");
 
 pub const Mode = enum { none, u, v };
 
 // Short subjects keep a pathological pattern's worst case (the step limit
-// per start position) small.
-pub const subjects = [_][]const u8{ "", "a", "ab1_ \xC3\xA9", "aaaaab" };
+// per start position) small. Since F3c they include astral characters and
+// lone surrogates, and every executed pattern is also run on each
+// subject's UTF-16 form (it must find the same match).
+pub const subjects = [_][]const u8{ "", "a", "ab1_ \xC3\xA9", "aaaaab", "\u{1F600}x\u{1F600}", "a\xED\xA0\x80b\xED\xB0\x80", "\u{1D306}\u{2028}_" };
 
 /// Pattern×mode pairs that compiled, by what happened to them next.
 pub const Stats = struct {
@@ -77,6 +80,7 @@ pub fn checkPattern(gpa: std.mem.Allocator, pattern: []const u8) !void {
                     error.OutOfMemory => return err,
                     else => {}, // resource limits are a defined outcome
                 }
+                try sameInBoth(gpa, re, subject, pattern, mode);
             }
         } else |err| switch (err) {
             error.OutOfMemory => return err,
@@ -87,6 +91,35 @@ pub fn checkPattern(gpa: std.mem.Allocator, pattern: []const u8) !void {
                 if (isParseError(err) and !analyzed_syntax_error) return reportDisagreement(pattern, mode, "compile: parse error, analyze: classified");
             },
         }
+    }
+}
+
+/// F3c: a search from 0 on the subject and on its UTF-16 form give the
+/// same outcome (the same slots once mapped, or the same error).
+fn sameInBoth(gpa: std.mem.Allocator, re: zregex.Regex, subject: []const u8, pattern: []const u8, mode: Mode) !void {
+    // Raw bytes of an ill-formed pattern (BYTE) only exist in WTF-8.
+    if (!dual.wellFormed(subject) or !dual.wellFormed(pattern)) return;
+    var err_w: ?anyerror = null;
+    var err_u: ?anyerror = null;
+    const w = dual.execWtf8(gpa, re, subject, 0) catch |e| blk: {
+        err_w = e;
+        break :blk null;
+    };
+    defer if (w) |f| f.deinit(gpa);
+    const u = dual.execUtf16(gpa, re, subject, 0) catch |e| blk: {
+        err_u = e;
+        break :blk null;
+    };
+    defer if (u) |f| f.deinit(gpa);
+    for ([_]?anyerror{ err_w, err_u }) |e| {
+        if (e) |x| if (x == error.OutOfMemory) return error.OutOfMemory;
+    }
+    const same_err = if (err_w) |x| (if (err_u) |y| x == y else false) else err_u == null;
+    const same = same_err and (w == null) == (u == null) and
+        (w == null or std.mem.eql(?usize, w.?.slots, u.?.slots));
+    if (!same) {
+        std.debug.print("\n/{s}/ ({s}) on {x}: WTF-8 and UTF-16 differ\n", .{ pattern, @tagName(mode), subject });
+        return error.EncodingsDisagree;
     }
 }
 

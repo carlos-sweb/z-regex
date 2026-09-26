@@ -476,9 +476,12 @@ pub const Lexer = struct {
         }
     }
 
-    /// Consume the full UTF-8 sequence starting at the current position
+    /// Consume the full WTF-8 sequence starting at the current position
     /// (lead byte `c`, already known to be >= 0x80) and return it as one
-    /// token, or fall back to a single-byte literal if it isn't valid UTF-8.
+    /// token, or fall back to a single-byte literal if it isn't valid WTF-8.
+    /// A lone surrogate (3 bytes, `ED A0..BF xx`) is one character since F3c:
+    /// before, it fell back to three raw bytes, which only a WTF-8 subject
+    /// can match.
     fn literalMultibyteToken(self: *Self, c: u8, start_pos: usize) Token {
         const seq_len = std.unicode.utf8ByteSequenceLength(c) catch {
             self.pos += 1;
@@ -489,7 +492,7 @@ pub const Lexer = struct {
             return Token.char_token(c, start_pos);
         }
         const bytes = self.pattern[self.pos..][0..seq_len];
-        if (std.unicode.utf8Decode(bytes)) |_| {
+        if (std.unicode.wtf8Decode(bytes)) |_| {
             self.pos += seq_len;
             var buf: [4]u8 = undefined;
             @memcpy(buf[0..seq_len], bytes);
@@ -628,6 +631,12 @@ pub const Lexer = struct {
             else => {
                 if (self.unicode_mode and !isStrictIdentityEscape(c, true)) {
                     return error.InvalidEscape;
+                }
+                // `\` before a non-ASCII character escapes the whole
+                // character (F3c), not its first byte.
+                if (c >= 0x80) {
+                    self.pos -= 1;
+                    return self.literalMultibyteToken(c, start_pos);
                 }
                 return Token.escaped(c, start_pos);
             },
@@ -814,6 +823,12 @@ pub const Lexer = struct {
             else => {
                 if (self.unicode_mode and !isStrictIdentityEscape(c, false)) {
                     return error.InvalidEscape;
+                }
+                // `\` before a non-ASCII character escapes the whole
+                // character (F3c), not its first byte.
+                if (c >= 0x80) {
+                    self.pos -= 1;
+                    return self.literalMultibyteToken(c, start_pos);
                 }
                 return Token.escaped(c, start_pos);
             },

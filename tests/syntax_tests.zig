@@ -7,6 +7,7 @@
 const std = @import("std");
 const zregex = @import("zregex");
 const testing = std.testing;
+const dual = @import("dual_encoding.zig");
 
 const u: zregex.CompileOptions = .{ .unicode = true };
 const annex_b: zregex.CompileOptions = .{};
@@ -30,6 +31,8 @@ fn expectAccepted(pattern: []const u8, options: zregex.CompileOptions) !void {
     re.deinit();
 }
 
+/// Checks `find` on the WTF-8 input, and (F3c) the same search on its
+/// UTF-16 form, which must find the same match.
 fn expectMatch(pattern: []const u8, options: zregex.CompileOptions, input: []const u8, expected: ?[]const u8) !void {
     var re = try zregex.Regex.compileWithOptions(testing.allocator, pattern, options);
     defer re.deinit();
@@ -40,6 +43,14 @@ fn expectMatch(pattern: []const u8, options: zregex.CompileOptions, input: []con
         try testing.expectEqualStrings(e, got.group(input));
     } else {
         try testing.expect(m == null);
+    }
+    if (!dual.wellFormed(input)) return;
+    const in16 = try dual.execUtf16(testing.allocator, re, input, 0);
+    defer if (in16) |f| f.deinit(testing.allocator);
+    try testing.expectEqual(m == null, in16 == null);
+    if (m) |x| {
+        try testing.expectEqual(x.start, in16.?.slots[0].?);
+        try testing.expectEqual(x.end, in16.?.slots[1].?);
     }
 }
 

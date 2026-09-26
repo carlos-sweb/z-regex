@@ -217,3 +217,27 @@ test "PatternTooLarge is exactly MAX_PROGRAM_BYTES (16 MiB) of bytecode" {
     try testing.expect(at_cap.bytecode.len > max - 327680);
     try testing.expectError(error.PatternTooLarge, zregex.compile(testing.allocator, "(?:a{65536}){52}", .{}));
 }
+
+// F3c: a lone surrogate written in WTF-8 inside the pattern (bytes ED A0 80),
+// and `\` before a non-ASCII character, were split into raw bytes (BYTE),
+// which only a WTF-8 subject can match and which a quantifier binds to the
+// last byte of. Found by the fuzz's WTF-8 vs UTF-16 comparison.
+test "regression: a WTF-8 surrogate or an escaped non-ASCII character in the pattern is one character (F3c)" {
+    const a = testing.allocator;
+    var lone = try zregex.Regex.compile(a, "^\xED\xA0\x80+$");
+    defer lone.deinit();
+    const m = (try lone.find("\xED\xA0\x80\xED\xA0\x80")) orelse return error.TestExpectedMatch;
+    m.deinit();
+    var scratch = zregex.Scratch.init(a);
+    defer scratch.deinit();
+    var buf: [2]?usize = undefined;
+    var out: zregex.MatchSlots = .{ .slots = &buf };
+    const units = [_]u16{ 0xD800, 0xD800 };
+    try testing.expect(try lone.execAt(.{ .utf16 = &units }, 0, &scratch, &out, .{}));
+    try testing.expectEqualSlices(?usize, &.{ 0, 2 }, &buf);
+
+    var esc = try zregex.Regex.compile(a, "^\\\u{E9}+$");
+    defer esc.deinit();
+    const e = (try esc.find("\u{E9}\u{E9}")) orelse return error.TestExpectedMatch;
+    e.deinit();
+}
