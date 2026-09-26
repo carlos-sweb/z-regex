@@ -6,9 +6,6 @@
 const std = @import("std");
 const Allocator = std.mem.Allocator;
 
-const lexer_mod = @import("../parser/lexer.zig");
-const parser_mod = @import("../parser/parser.zig");
-const ast_mod = @import("../parser/ast.zig");
 const generator_mod = @import("generator.zig");
 const optimizer_mod = @import("optimizer.zig");
 const bytecode_writer = @import("../bytecode/writer.zig");
@@ -16,8 +13,6 @@ const format_mod = @import("../bytecode/format.zig");
 const charset_mod = @import("../ir/charset.zig");
 const lower_mod = @import("../lower/lower.zig");
 
-const Lexer = lexer_mod.Lexer;
-const Parser = parser_mod.Parser;
 const CodeGenerator = generator_mod.CodeGenerator;
 const Optimizer = optimizer_mod.Optimizer;
 const OptLevel = optimizer_mod.OptLevel;
@@ -79,7 +74,7 @@ pub const CompileOptions = struct {
     /// code-point-aware (see Phase 1 in the compatibility plan) and already
     /// supports `\p{...}`/`\P{...}` unconditionally, so this flag's only
     /// current effect is stricter escape-sequence syntax validation, read by
-    /// the lexer (`Lexer.unicode_mode`, set from this field in `compile()`):
+    /// the lexer (`Lexer.unicode_mode`, set from this field by `lower.Frontend`):
     /// a backslash followed by a character that isn't a recognized escape or
     /// syntax character (e.g. `\q`) is `error.InvalidEscape` instead of
     /// falling back to a literal character (Annex-B-style leniency, this
@@ -95,8 +90,8 @@ pub const CompileOptions = struct {
     /// (difference: matches `A` but not `B`) or `&&` (intersection: matches
     /// both), where each operand is either an ordinary class body
     /// (`\p{L}`, `a-z\d`, ...) or a nested `[...]` class (which may itself
-    /// be `[^...]`-negated). Read by the lexer (`Lexer.v_mode`, set from
-    /// this field in `compile()`) to recognize `--`/`&&`/`[` as their own
+    /// be `[^...]`-negated). Read by the lexer (`Lexer.v_mode`, set by `lower.Frontend` from
+    /// this field) to recognize `--`/`&&`/`[` as their own
     /// tokens inside a class instead of literal characters -- outside a
     /// class, or with this flag off, they're unaffected. Does **not**
     /// (yet) turn on full `u`-mode strictness the way real `v` implies, nor
@@ -114,29 +109,20 @@ pub const CompileOptions = struct {
 
 /// Compile a regex pattern to bytecode
 pub fn compile(allocator: Allocator, pattern: []const u8, options: CompileOptions) !CompileResult {
-    // Phase 1: Lexing
-    var lexer = Lexer.init(pattern);
-    lexer.unicode_mode = options.unicode;
-    lexer.v_mode = options.v;
-    lexer.possessive = options.possessive;
-
-    // Phase 2: Parsing
-    var parser = try Parser.init(allocator, &lexer);
-    defer parser.deinit();
-    const ast = try parser.parse();
-    defer ast.deinit();
-
-    // Phase 3: Lowering to the HIR (F2c). The HIR lives in this arena and
-    // holds no pointer into the AST; both die when this function returns.
-    var hir_arena = std.heap.ArenaAllocator.init(allocator);
-    defer hir_arena.deinit();
-    const names = try hir_arena.allocator().alloc(lower_mod.GroupName, parser.group_names.items.len);
-    for (parser.group_names.items, names) |entry, *n| n.* = .{ .name = entry.name, .index = entry.index };
-    const hir_root = try lower_mod.lower(hir_arena.allocator(), ast, .{
+    // Phases 1-3: lex, parse and lower to the HIR (F2c), through the front
+    // end `analyze()` shares (F2d). The HIR holds no pointer into the AST;
+    // both, and the parser, die when this function returns.
+    const fe = try lower_mod.Frontend.init(allocator, pattern, .{
+        .unicode = options.unicode,
+        .v = options.v,
+        .possessive = options.possessive,
+    }, .{
         .ignore_case = options.case_insensitive,
         .multiline = options.multiline,
         .dot_all = options.dot_all,
-    }, names);
+    });
+    defer fe.deinit();
+    const parser = &fe.parser;
 
     // Phase 4: Code generation, from the HIR only
     var writer = BytecodeWriter.init(allocator);
@@ -144,7 +130,7 @@ pub fn compile(allocator: Allocator, pattern: []const u8, options: CompileOption
 
     var generator = CodeGenerator.init(allocator, &writer);
     defer generator.deinit();
-    try generator.generate(hir_root);
+    try generator.generate(fe.root);
 
     const unoptimized = try writer.finalize();
     // Note: unoptimized is owned by writer, will be freed by writer.deinit()

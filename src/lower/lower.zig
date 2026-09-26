@@ -20,6 +20,8 @@ const hir = @import("../ir/hir.zig");
 const charset_mod = @import("../ir/charset.zig");
 const properties = @import("../unicode/properties.zig");
 const casefold = @import("../unicode/casefold.zig");
+const Lexer = @import("../parser/lexer.zig").Lexer;
+const Parser = @import("../parser/parser.zig").Parser;
 
 const AstNode = ast.Node;
 const Node = hir.Node;
@@ -30,6 +32,61 @@ const MAX_CODEPOINT = charset_mod.MAX_CODEPOINT;
 pub const LowerError = error{ OutOfMemory, InvalidPattern };
 
 pub const GroupName = struct { name: []const u8, index: u16 };
+
+/// Lexer modes: what the pattern's grammar is (`CompileOptions.unicode`,
+/// `.v`, `.possessive`; the flags that change only matching are
+/// `hir.Flags`).
+pub const LexOptions = struct {
+    unicode: bool = false,
+    v: bool = false,
+    possessive: bool = false,
+};
+
+/// The shared front end of `compile()` and `analyze()` (F2d): lex, parse
+/// and lower one pattern, so both see exactly the same HIR. Heap-allocated
+/// because the parser keeps a pointer to the lexer. The AST, the parser's
+/// group names and the HIR arena all live until `deinit`.
+pub const Frontend = struct {
+    gpa: Allocator,
+    lexer: Lexer,
+    parser: Parser,
+    ast: *AstNode,
+    arena: std.heap.ArenaAllocator,
+    /// The HIR: a root ModifierScope carrying the flags.
+    root: *const Node,
+
+    /// Parse errors (and the lowering's own) are returned as is; the lexer's
+    /// record of a known deviation (D10) is in `lexer.deviation`.
+    pub fn init(gpa: Allocator, pattern: []const u8, lex: LexOptions, flags: hir.Flags) !*Frontend {
+        const self = try gpa.create(Frontend);
+        errdefer gpa.destroy(self);
+        self.gpa = gpa;
+        self.lexer = Lexer.init(pattern);
+        self.lexer.unicode_mode = lex.unicode;
+        self.lexer.v_mode = lex.v;
+        self.lexer.possessive = lex.possessive;
+
+        self.parser = try Parser.init(gpa, &self.lexer);
+        errdefer self.parser.deinit();
+        self.ast = try self.parser.parse();
+        errdefer self.ast.deinit();
+
+        self.arena = std.heap.ArenaAllocator.init(gpa);
+        errdefer self.arena.deinit();
+        const arena = self.arena.allocator();
+        const names = try arena.alloc(GroupName, self.parser.group_names.items.len);
+        for (self.parser.group_names.items, names) |entry, *n| n.* = .{ .name = entry.name, .index = entry.index };
+        self.root = try lower(arena, self.ast, flags, names);
+        return self;
+    }
+
+    pub fn deinit(self: *Frontend) void {
+        self.arena.deinit();
+        self.ast.deinit();
+        self.parser.deinit();
+        self.gpa.destroy(self);
+    }
+};
 
 /// Lower `root` into a HIR tree allocated in `arena` (free the arena to free
 /// the tree). The result is the root `ModifierScope`, carrying `flags`.
@@ -393,9 +450,6 @@ const Lowerer = struct {
 // =============================================================================
 // Tests
 // =============================================================================
-
-const Lexer = @import("../parser/lexer.zig").Lexer;
-const Parser = @import("../parser/parser.zig").Parser;
 
 const TestOptions = struct { flags: hir.Flags = .{}, unicode: bool = false, v: bool = false, possessive: bool = false };
 
