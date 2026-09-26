@@ -250,7 +250,13 @@ pub const RecursiveMatcher = struct {
                 return MatchResult{ .matched = true, .end_pos = pos };
             },
 
-            .CHAR32, .BYTE, .CHAR_RANGE, .CHAR_RANGE_INV, .CHAR_CLASS, .CHAR_CLASS_INV => {
+            .CHAR32 => {
+                const d = self.decodeAt(pos) orelse return MatchResult{ .matched = false, .end_pos = pos };
+                if (d.invalid or d.value != inst.operands[0]) return MatchResult{ .matched = false, .end_pos = pos };
+                return self.matchFrom(pc + inst.size, d.pos);
+            },
+
+            .BYTE, .CHAR_RANGE, .CHAR_RANGE_INV, .CHAR_CLASS, .CHAR_CLASS_INV => {
                 const r = try self.matchSingleInstruction(inst, pc, pos);
                 if (!r.matched) return MatchResult{ .matched = false, .end_pos = pos };
                 return self.matchFrom(pc + inst.size, r.end_pos);
@@ -559,11 +565,15 @@ pub const RecursiveMatcher = struct {
     /// The character at `pos`, one code point (F3b keeps the pre-F3
     /// semantics for every pattern; F3d decodes code units without `u`).
     /// Null at the end of input.
-    fn decodeAt(self: *const Self, pos: usize) ?Decoded {
+    /// ASCII is decoded here, inline: an ASCII byte is always a whole
+    /// character, and never next to a `b+2` position.
+    inline fn decodeAt(self: *const Self, pos: usize) ?Decoded {
+        if (pos < self.input.len and self.input[pos] < 0x80) return .{ .value = self.input[pos], .pos = pos + 1 };
         return self.subject().decodeAt(.code_point, pos);
     }
 
-    fn decodeBefore(self: *const Self, pos: usize) ?Decoded {
+    inline fn decodeBefore(self: *const Self, pos: usize) ?Decoded {
+        if (pos > 0 and pos <= self.input.len and self.input[pos - 1] < 0x80) return .{ .value = self.input[pos - 1], .pos = pos - 1 };
         return self.subject().decodeBefore(.code_point, pos);
     }
 
