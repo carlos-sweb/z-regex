@@ -597,14 +597,21 @@ pub const Lexer = struct {
             'f' => return Token.escaped(0x0C, start_pos),
             'x' => return try self.parseHexEscape(start_pos),
             'u' => return try self.parseUnicodeEscape(start_pos),
-            'c' => return try self.parseControlEscape(start_pos),
+            'c' => return try self.parseControlEscape(start_pos, true),
             '0' => {
                 if (self.pos < self.pattern.len and isAsciiDigit(self.pattern[self.pos])) {
                     // Legacy Annex B octal (`\01`), never valid under `u`.
                     if (self.unicode_mode) return error.InvalidEscape;
-                    return Token.escaped('0', start_pos);
+                    return self.legacyOctal('0', start_pos);
                 }
                 return Token.escaped(0, start_pos);
+            },
+            // Annex B: in a class a decimal escape is never a backreference;
+            // `\1`-`\7` are legacy octal, `\8`/`\9` identity escapes. Both
+            // are SyntaxErrors under `u`.
+            '1'...'7' => {
+                if (self.unicode_mode) return error.InvalidEscape;
+                return self.legacyOctal(c, start_pos);
             },
             // \], \\, \-, \^, \B, backref digits, and anything else: no
             // special class meaning, fall back to the literal character --
@@ -738,12 +745,15 @@ pub const Lexer = struct {
             'f' => return Token.escaped(0x0C, start_pos),
             'x' => return try self.parseHexEscape(start_pos),
             'u' => return try self.parseUnicodeEscape(start_pos),
-            'c' => return try self.parseControlEscape(start_pos),
+            'c' => return try self.parseControlEscape(start_pos, false),
             // \k<name> named backreference. With `named_groups` ([N]: `u`
             // mode, or the pattern has a named group) it must be a
             // well-formed `\k<GroupName>`; otherwise it falls back to a
             // literal 'k' (Annex B identity escape).
             'k' => {
+                // Without [N], `\k` is an Annex B identity escape: `\k<a>` is
+                // the text "k<a>", even when the name is well formed.
+                if (!self.named_groups) return Token.escaped('k', start_pos);
                 if (self.pos < self.pattern.len and self.pattern[self.pos] == '<') {
                     const saved_pos = self.pos;
                     self.pos += 1; // consume '<'
@@ -754,26 +764,37 @@ pub const Lexer = struct {
                         self.pos = saved_pos;
                     }
                 }
-                if (self.named_groups) return error.InvalidGroupName;
-                return Token.escaped('k', start_pos);
+                return error.InvalidGroupName;
             },
-            // \0 is NUL, but only when not followed by another digit.
-            // \0<digit> is legacy Annex B octal, not yet implemented; fall back
-            // to a literal '0' (matching prior behavior) rather than guessing --
-            // unless `unicode_mode` is set, where legacy octal is never valid.
+            // \0 is NUL, but only when not followed by another digit;
+            // \0<digit> is Annex B legacy octal, never valid under `u`.
             '0' => {
                 if (self.pos < self.pattern.len and isAsciiDigit(self.pattern[self.pos])) {
                     if (self.unicode_mode) return error.InvalidEscape;
-                    return Token.escaped('0', start_pos);
+                    return self.legacyOctal('0', start_pos);
                 }
                 return Token.escaped(0, start_pos);
             },
-            // Backreferences \1-\9. Under `u` a reference past the pattern's
-            // last capturing group is a SyntaxError (no Annex B octal).
-            '1', '2', '3', '4', '5', '6', '7', '8', '9' => {
-                const group = @as(u8, c - '0');
-                if (self.unicode_mode and group > self.group_total) return error.InvalidEscape;
-                return Token.backref_token(group, start_pos);
+            // DecimalEscape: all the digits form N. N up to the pattern's
+            // capturing-group count (from `scanGroups`, so groups after the
+            // reference count) is a backreference. Past it, `u` makes it a
+            // SyntaxError; Annex B reads `\8`/`\9` as identity escapes and
+            // anything else as a legacy octal escape.
+            '1'...'9' => {
+                var n: u64 = c - '0';
+                var end = self.pos;
+                while (end < self.pattern.len and isAsciiDigit(self.pattern[end])) : (end += 1) {
+                    n = @min(n * 10 + (self.pattern[end] - '0'), std.math.maxInt(u32));
+                }
+                if (n <= self.group_total) {
+                    // Group indices are u8 until F1c (D9/D16).
+                    if (n > std.math.maxInt(u8)) return error.InvalidEscape;
+                    self.pos = end;
+                    return Token.backref_token(@intCast(n), start_pos);
+                }
+                if (self.unicode_mode) return error.InvalidEscape;
+                if (c >= '8') return Token.escaped(c, start_pos);
+                return self.legacyOctal(c, start_pos);
             },
             '\\', '.', '*', '+', '?', '|', '(', ')', '[', ']', '{', '}', '^', '$' => {
                 return Token.escaped(c, start_pos);
@@ -914,20 +935,38 @@ pub const Lexer = struct {
         return Token.escaped('x', start_pos);
     }
 
-    /// Parse \cX control character escape. If not followed by an ASCII
-    /// letter, falls back to a literal 'c' (Annex-B-style leniency; a
-    /// SyntaxError under `unicode_mode`).
-    fn parseControlEscape(self: *Self, start_pos: usize) error{InvalidEscape}!Token {
+    /// Parse \cX control character escape (X an ASCII letter: X % 32). In
+    /// Annex B, inside a class a digit or `_` works too (ClassControlLetter);
+    /// otherwise the `\` is a literal backslash and lexing resumes at the
+    /// `c` (`\c0` is the text "\c0"). A SyntaxError under `unicode_mode`.
+    fn parseControlEscape(self: *Self, start_pos: usize, in_class: bool) error{InvalidEscape}!Token {
         if (self.pos < self.pattern.len) {
             const c = self.pattern[self.pos];
-            if ((c >= 'a' and c <= 'z') or (c >= 'A' and c <= 'Z')) {
-                const upper = if (c >= 'a' and c <= 'z') c - 'a' + 'A' else c;
+            const letter = (c >= 'a' and c <= 'z') or (c >= 'A' and c <= 'Z');
+            const class_extra = in_class and !self.unicode_mode and (isAsciiDigit(c) or c == '_');
+            if (letter or class_extra) {
                 self.pos += 1;
-                return Token.escaped(upper - 'A' + 1, start_pos);
+                return Token.escaped(c % 32, start_pos);
             }
         }
         if (self.unicode_mode) return error.InvalidEscape;
-        return Token.escaped('c', start_pos);
+        self.pos = start_pos + 1; // resume at the `c`
+        return Token.escaped('\\', start_pos);
+    }
+
+    /// Annex B LegacyOctalEscapeSequence starting with digit `first` (already
+    /// consumed): up to three octal digits, as long as the value stays
+    /// within \377. The value is a code point (`\377` is U+00FF).
+    fn legacyOctal(self: *Self, first: u8, start_pos: usize) Token {
+        var value: u32 = first - '0';
+        var digits: usize = 1;
+        while (digits < 3 and self.pos < self.pattern.len) : (digits += 1) {
+            const d = self.pattern[self.pos];
+            if (d < '0' or d > '7' or value * 8 + (d - '0') > 0o377) break;
+            value = value * 8 + (d - '0');
+            self.pos += 1;
+        }
+        return codepointToken(value, start_pos);
     }
 
     /// Parse \uHHHH or \u{H+}. Falls back to a literal 'u' if malformed

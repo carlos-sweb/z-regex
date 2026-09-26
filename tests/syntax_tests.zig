@@ -109,7 +109,8 @@ test "u: malformed \\c, \\x and \\u escapes are SyntaxErrors" {
     }
     try expectAccepted("\\u{10FFFF}", u);
     try expectAccepted("\\u{0000000041}", u);
-    try expectMatch("\\c0", annex_b, "\\c0", "c0");
+    // Annex B: the backslash itself is literal (F1b).
+    try expectMatch("\\c0", annex_b, "\\c0", "\\c0");
     try expectMatch("\\x4", annex_b, "x4", "x4");
 }
 
@@ -346,4 +347,51 @@ test "D3: [] compiles and never matches; [^] matches any character" {
         try expectMatch("^[^]$", opts, "\n", "\n");
     }
     try expectMatch("[]", .{ .case_insensitive = true }, "A", null);
+}
+
+// --- Annex B escapes (F1b) ---
+
+test "Annex B \\c: an invalid control escape is a literal backslash, then c" {
+    try expectMatch("\\c\xD0\x90", annex_b, "\\c\xD0\x90", "\\c\xD0\x90"); // \cА
+    try expectMatch("\\c", annex_b, "x\\c", "\\c");
+    try expectMatch("\\c1", annex_b, "\x11", null);
+    try expectMatch("\\cJ", annex_b, "\n", "\n");
+    // In a class, a digit or `_` is a ClassControlLetter.
+    try expectMatch("[\\c0]", annex_b, "\x0f\x10\x11", "\x10");
+    try expectMatch("[\\c_]", annex_b, "\x1e\x1f", "\x1f");
+    try expectMatch("[\\c00]+", annex_b, "\x0f0\x10", "0\x10");
+    // Otherwise `\` and `c` are both class members.
+    try expectMatch("[\\c ]+", annex_b, "x\\c ", "\\c ");
+    try expectMatch("[\\c]+", annex_b, "x\\c", "\\c");
+    try expectRejected("[\\c_]", u);
+}
+
+test "Annex B decimal escapes: backreference, identity or legacy octal" {
+    // Past the group count: \8 and \9 are identity escapes...
+    try expectMatch("\\8", annex_b, "789", "8");
+    try expectMatch("7\\89", annex_b, "67890", "789");
+    // ...and \1-\7 legacy octal, up to three digits within \377.
+    try expectMatch("\\1", annex_b, "\x01", "\x01");
+    try expectMatch("\\101", annex_b, "A", "A");
+    try expectMatch("\\400", annex_b, " 0", " 0");
+    try expectMatch("\\377", annex_b, "\xC3\xBF", "\xC3\xBF"); // U+00FF
+    try expectMatch("\\0111", annex_b, "\t1", "\t1");
+    try expectMatch("\\b(\\w+) \\2\\b", annex_b, "the the", null);
+    // Up to the group count it is a backreference, groups after it included.
+    try expectMatch("(.)\\1", annex_b, "a\x01 aa", "aa");
+    try expectMatch("\\1(a)", annex_b, "a", "a");
+    try expectMatch("(.)(.)(.)(.)(.)(.)(.)(.)\\8\\8", annex_b, "0123456777", "0123456777");
+    try expectMatch("((((((((((A))))))))))\\10", annex_b, "AA", "AA");
+    // In a class a decimal escape is never a backreference.
+    try expectMatch("[\\12-\\14]+", annex_b, "x\n\x0B\x0C", "\n\x0B\x0C");
+    try expectMatch("(a)[\\1]", annex_b, "a\x01", "a\x01");
+    try expectMatch("[\\8]", annex_b, "8", "8");
+    for ([_][]const u8{ "\\8", "\\01", "[\\1]", "[\\8]", "(a)\\2" }) |p| try expectRejected(p, u);
+}
+
+test "Annex B \\k without named groups is the text k" {
+    try expectMatch("\\k<a>", annex_b, "k<a>", "k<a>");
+    try expectMatch("\\k<a>(?<=>)a", annex_b, "k<a>a", "k<a>a");
+    try expectRejected("\\k<a>", u);
+    try expectRejected("(?<b>.)\\k<a>", annex_b);
 }

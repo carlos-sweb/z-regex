@@ -1838,10 +1838,20 @@ test "Regex: $<name> replacement finds whichever duplicate-named group actually 
 }
 
 test "Regex: unknown named backreference is rejected" {
+    // With named groups in the pattern (or with `u`), `\k<name>` must name
+    // one of them.
     try std.testing.expectError(
         error.UnknownGroupName,
-        Regex.compile(std.testing.allocator, "\\k<nope>"),
+        Regex.compile(std.testing.allocator, "(?<a>x)\\k<nope>"),
     );
+    try std.testing.expectError(
+        error.UnknownGroupName,
+        Regex.compileWithOptions(std.testing.allocator, "\\k<nope>", .{ .unicode = true }),
+    );
+    // Without any, Annex B reads it as the text "k<nope>" (F1b).
+    var re = try Regex.compile(std.testing.allocator, "\\k<nope>");
+    defer re.deinit();
+    try std.testing.expect(try re.test_("k<nope>"));
 }
 
 test "Regex: character class range with multi-byte endpoints" {
@@ -3023,11 +3033,12 @@ test "Regex: unicode flag rejects legacy octal escapes (\\0 followed by a digit)
 test "Regex: unicode flag off (default) keeps legacy octal Annex-B leniency" {
     const allocator = std.testing.allocator;
 
-    // \01 falls back to a literal '0' (matching prior behavior) when the
-    // unicode flag isn't set.
+    // \01 is Annex B legacy octal (U+0001) when the unicode flag isn't set
+    // (F1b; before it fell back to a literal '0').
     var re = try Regex.compile(allocator, "\\01");
     defer re.deinit();
-    try std.testing.expect(try re.test_("01"));
+    try std.testing.expect(try re.test_("\x01"));
+    try std.testing.expect(!try re.test_("01"));
 }
 
 test "Regex: v flag class set difference [A--B]" {
