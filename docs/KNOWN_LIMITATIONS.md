@@ -616,6 +616,28 @@ Compilation pays for the extra pass (arena, lowering, CharSets materialized for 
 class): a few microseconds per pattern, e.g. `hello` 0.5 → 1.1 µs, the `email` pattern
 1.8 → 4.9 µs, `[\p{L}--\p{Lu}]` 11.6 → 19.6 µs.
 
+### F2d: `analyze()` on the HIR
+
+`analyze()` now classifies the HIR, through the same front end as `compile()`
+(`lower.Frontend`), so it classifies exactly what `compile()` generates from. Tiers are
+unchanged: an old-vs-new comparison of 162,331 analyses found no Tier or
+classifiability difference. What changed in the result (`zregex.analysis`):
+
+- **A known deviation (D10) keeps its features.** Before F2d, `known_deviation` came
+  with an empty feature set (the walk stopped at the deviation, so `(a)\1{70000}` did not
+  report its backreference); now `features` is complete. `min_tier` is still `null`
+  and `reasons()` still empty, since the semantics deviates until F5. A `parse_error`
+  still has no features.
+- **`Feature.non_capturing_group` is removed**: the lowering drops `(?:...)`, so the HIR
+  has nothing to report. It never affected a Tier.
+- **A one-member class `[a]` reports `literal`, not `char_class`**, and **class members
+  no longer count as `literal`** (`[ab]` reports `char_class` only).
+
+Nothing in this repository depended on the old contract (the only consumer,
+`tests/fuzz_common.zig`, reads `min_tier`); a caller outside it matching on
+`Feature.non_capturing_group` has to drop that case. `analyze()` now pays for the
+lowering too (+57 % on the fuzz stress patterns).
+
 ### test262 baseline (F0b)
 
 The real test262 measurement that replaces the sample above as the semantic
