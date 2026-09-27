@@ -9,7 +9,16 @@
 //! report the time until the engine gives up; a watchdog aborts the process
 //! if any single measurement exceeds 30 s of wall time.
 //!
-//! Output: a Markdown table on stdout and JSON at the path given as the
+//! Since F4a each throughput case is also run as a host runs it: a loop of
+//! `execAt` + `advanceIndex` with a warm `Scratch` (no allocation), on the
+//! executor the dispatcher picks, on T0's VM without prefilters
+//! (`t0_prefilters = false`) and on the backtracker (`force_tier =
+//! .expert`); §7.2's T0 targets are read in that table. Short overhead
+//! cases (`/abc/` on 5 B and on 2 KB) give ns per `execAt` for each
+//! executor, and compile cases give the dispatcher's compile time against
+//! the backtracker's alone.
+//!
+//! Output: Markdown tables on stdout and JSON at the path given as the
 //! first argument (default zig-out/bench/results.json).
 
 const std = @import("std");
@@ -181,6 +190,39 @@ const throughput_cases = [_]Case{
     .{ .name = "(?<=\\$)\\d+", .pattern = "(?<=\\$)\\d+", .input = .prices },
 };
 
+// ------------------------------------------------------------- F4a cases
+
+/// The executors an `execAt` case runs on.
+const Engine = enum { routed, vm_plain, backtracker };
+
+fn engineOptions(base: zregex.CompileOptions, e: Engine) zregex.CompileOptions {
+    var o = base;
+    switch (e) {
+        .routed => {},
+        .vm_plain => o.t0_prefilters = false,
+        .backtracker => o.force_tier = .expert,
+    }
+    return o;
+}
+
+/// §7.2's overhead cases (reviewer closure 6): per `execAt`, short and long.
+const overhead_cases = [_]struct { name: []const u8, pattern: []const u8, input: []const u8 }{
+    .{ .name = "/abc/ on \"xabc\" (5 B)", .pattern = "abc", .input = "xabc" },
+    .{ .name = "/abc/ on 2 KB", .pattern = "abc", .input = "x" ** 1000 ++ "abc" ++ "y" ** 1000 },
+    .{ .name = "/\\d{3}-\\d{4}/ on \"tel 555-1234\"", .pattern = "\\d{3}-\\d{4}", .input = "tel 555-1234" },
+    .{ .name = "/[a-z]+@[a-z]+/ on 2 KB", .pattern = "[a-z]+@[a-z]+", .input = "1 " ** 500 ++ "ab@cd" ++ " 2" ** 500 },
+};
+
+/// Compile cost of the dispatcher (reviewer's F4a(4) closure): eligible
+/// with the literal prefilter, eligible with `first`, and T0 but not
+/// eligible (it decides eligibility and compiles no T0 program).
+const compile_cases = [_]struct { name: []const u8, pattern: []const u8 }{
+    .{ .name = "eligible, literal: hello", .pattern = "hello" },
+    .{ .name = "eligible, first: \\d{3}-\\d{4}", .pattern = "\\d{3}-\\d{4}" },
+    .{ .name = "T0, not eligible: (\\d{3})-(\\d{4})", .pattern = "(\\d{3})-(\\d{4})" },
+    .{ .name = "eligible, first: email", .pattern = "[\\w.+-]+@[\\w-]+\\.[\\w.]+" },
+};
+
 const Adversarial = struct { name: []const u8, pattern: []const u8, input: []const u8 };
 const adversarial_cases = [_]Adversarial{
     .{ .name = "(a+)+b", .pattern = "(a+)+b", .input = "a" ** 40 ++ "c" },
@@ -232,6 +274,30 @@ const Row = struct {
     allocs_per_match: f64,
     compile_us: f64,
     input_bytes: usize,
+};
+
+const ExecRow = struct {
+    name: []const u8,
+    /// Where the dispatcher sends the pattern, and T0's prefilter.
+    engine: []const u8,
+    mbps: [3]f64,
+    matches: usize,
+    compile_us: f64,
+    compile_expert_us: f64,
+};
+
+const OverheadRow = struct {
+    name: []const u8,
+    bytes: usize,
+    engine: []const u8,
+    ns: [3]f64,
+};
+
+const CompileRow = struct {
+    name: []const u8,
+    engine: []const u8,
+    us: f64,
+    expert_us: f64,
 };
 
 const AdvRow = struct {
@@ -304,6 +370,113 @@ fn benchCase(gpa: Allocator, io: Io, c: Case, input: []const u8) !Row {
     };
 }
 
+/// One pass of `execAt` + `advanceIndex` over `input`, as a host's
+/// `matchAll` runs; returns the number of matches.
+fn execAtPass(re: zregex.Regex, input: []const u8, scratch: *zregex.Scratch) !usize {
+    var buf: [64]?usize = undefined;
+    var out: zregex.MatchSlots = .{ .slots = buf[0..re.slotCount()] };
+    const s: zregex.Subject = .{ .wtf8 = input };
+    var n: usize = 0;
+    var i: usize = 0;
+    while (i <= input.len) {
+        if (!try re.execAt(s, i, scratch, &out, .{})) break;
+        n += 1;
+        const start = buf[0].?;
+        const end = buf[1].?;
+        i = if (end == start) re.advanceIndex(s, end) else end;
+    }
+    return n;
+}
+
+fn engineName(re: zregex.Regex) []const u8 {
+    const p = re.t0 orelse return "backtracker";
+    return switch (p.prefilter.kind) {
+        .none => "VM",
+        .literal => "VM, literal",
+        .class_run => "VM, class_run",
+        .first => "VM, first",
+    };
+}
+
+fn compileMedianUs(gpa: Allocator, io: Io, pattern: []const u8, options: zregex.CompileOptions) !f64 {
+    var ns: [200]i64 = undefined;
+    for (&ns) |*slot| {
+        const t0 = now(io);
+        var re = try zregex.Regex.compileWithOptions(gpa, pattern, options);
+        slot.* = now(io) - t0;
+        re.deinit();
+    }
+    return @as(f64, @floatFromInt(median(&ns))) / 1e3;
+}
+
+fn benchExecAt(gpa: Allocator, io: Io, c: Case, input: []const u8) !ExecRow {
+    var row: ExecRow = .{ .name = c.name, .engine = "", .mbps = undefined, .matches = 0, .compile_us = 0, .compile_expert_us = 0 };
+    for (std.enums.values(Engine), 0..) |e, k| {
+        var re = try zregex.Regex.compileWithOptions(gpa, c.pattern, engineOptions(c.options, e));
+        defer re.deinit();
+        if (e == .routed) row.engine = engineName(re);
+        var scratch = zregex.Scratch.init(gpa);
+        defer scratch.deinit();
+        var times: [MAX_RUNS]i64 = undefined;
+        var runs: usize = 0;
+        var spent: i64 = 0;
+        var i: usize = 0;
+        while (i < MAX_RUNS + 1) : (i += 1) {
+            arm(io, c.name);
+            const t0 = now(io);
+            const n = try execAtPass(re, input, &scratch);
+            const dt = now(io) - t0;
+            disarm();
+            if (i == 0) {
+                if (e == .routed) row.matches = n;
+                if (dt * @as(i64, MAX_RUNS) > @as(i64, @intCast(RUN_BUDGET_NS))) {
+                    times[0] = dt;
+                    runs = 1;
+                    break;
+                }
+                continue;
+            }
+            times[runs] = dt;
+            runs += 1;
+            spent += dt;
+            if (spent > @as(i64, @intCast(RUN_BUDGET_NS))) break;
+        }
+        const secs = @as(f64, @floatFromInt(median(times[0..runs]))) / 1e9;
+        row.mbps[k] = @as(f64, @floatFromInt(input.len)) / (1024.0 * 1024.0) / secs;
+    }
+    row.compile_us = try compileMedianUs(gpa, io, c.pattern, c.options);
+    row.compile_expert_us = try compileMedianUs(gpa, io, c.pattern, engineOptions(c.options, .backtracker));
+    return row;
+}
+
+fn benchOverhead(gpa: Allocator, io: Io, name: []const u8, pattern: []const u8, input: []const u8) !OverheadRow {
+    var row: OverheadRow = .{ .name = name, .bytes = input.len, .engine = "", .ns = undefined };
+    // Enough executions per sample for ~1 ms at 1 ns per byte.
+    const iters: usize = @max(1000, 1_000_000 / (input.len + 16));
+    for (std.enums.values(Engine), 0..) |e, k| {
+        var re = try zregex.Regex.compileWithOptions(gpa, pattern, engineOptions(.{}, e));
+        defer re.deinit();
+        if (e == .routed) row.engine = engineName(re);
+        var scratch = zregex.Scratch.init(gpa);
+        defer scratch.deinit();
+        var buf: [2]?usize = undefined;
+        var out: zregex.MatchSlots = .{ .slots = &buf };
+        _ = try re.execAt(.{ .wtf8 = input }, 0, &scratch, &out, .{});
+        var samples: [11]i64 = undefined;
+        for (&samples) |*slot| {
+            const t0 = now(io);
+            var n: usize = 0;
+            for (0..iters) |_| {
+                if (try re.execAt(.{ .wtf8 = input }, 0, &scratch, &out, .{})) n += 1;
+            }
+            std.mem.doNotOptimizeAway(n);
+            slot.* = now(io) - t0;
+        }
+        row.ns[k] = @as(f64, @floatFromInt(median(&samples))) / @as(f64, @floatFromInt(iters));
+    }
+    return row;
+}
+
 fn benchAdversarial(gpa: Allocator, io: Io, c: Adversarial) !AdvRow {
     var re = try zregex.Regex.compile(gpa, c.pattern);
     defer re.deinit();
@@ -328,15 +501,47 @@ pub fn main(init: std.process.Init) !void {
     var args = init.minimal.args.iterate();
     _ = args.next();
     const out_path = args.next() orelse "zig-out/bench/results.json";
+    // Optional: run only the cases whose name contains this (running the
+    // binary by hand; `zig build bench` runs everything).
+    const filter = args.next() orelse "";
 
     _ = try std.Thread.spawn(.{}, watchdog, .{io});
 
     var rows: [throughput_cases.len]Row = undefined;
     for (throughput_cases, 0..) |c, i| {
+        if (std.mem.indexOf(u8, c.name, filter) == null) {
+            rows[i] = std.mem.zeroes(Row);
+            rows[i].name = c.name;
+            continue;
+        }
         const input = try makeInput(gpa, c.input);
         defer gpa.free(input);
         rows[i] = try benchCase(gpa, io, c, input);
         std.debug.print("  {s}: {d:.2} MB/s\n", .{ c.name, rows[i].mbps });
+    }
+    var exec_rows: [throughput_cases.len]ExecRow = undefined;
+    for (throughput_cases, 0..) |c, i| {
+        if (std.mem.indexOf(u8, c.name, filter) == null) {
+            exec_rows[i] = .{ .name = c.name, .engine = "", .mbps = .{ 0, 0, 0 }, .matches = 0, .compile_us = 0, .compile_expert_us = 0 };
+            continue;
+        }
+        const input = try makeInput(gpa, c.input);
+        defer gpa.free(input);
+        exec_rows[i] = try benchExecAt(gpa, io, c, input);
+        std.debug.print("  execAt {s}: {d:.2} MB/s ({s})\n", .{ c.name, exec_rows[i].mbps[0], exec_rows[i].engine });
+    }
+    var overhead: [overhead_cases.len]OverheadRow = undefined;
+    for (overhead_cases, 0..) |c, i| overhead[i] = try benchOverhead(gpa, io, c.name, c.pattern, c.input);
+    var compiles: [compile_cases.len]CompileRow = undefined;
+    for (compile_cases, 0..) |c, i| {
+        const re = try zregex.Regex.compile(gpa, c.pattern);
+        defer re.deinit();
+        compiles[i] = .{
+            .name = c.name,
+            .engine = engineName(re),
+            .us = try compileMedianUs(gpa, io, c.pattern, .{}),
+            .expert_us = try compileMedianUs(gpa, io, c.pattern, .{ .force_tier = .expert }),
+        };
     }
     var adv: [adversarial_cases.len]AdvRow = undefined;
     for (adversarial_cases, 0..) |c, i| {
@@ -355,12 +560,18 @@ pub fn main(init: std.process.Init) !void {
     }
     try w.print("\n| Adversarial case (41-byte input) | Time (ms) | Outcome |\n|---|---|---|\n", .{});
     for (adv) |a| try w.print("| `{s}` | {d:.1} | {s} |\n", .{ a.name, a.ms, a.outcome });
+    try w.print("\n| execAt case | Routed to | Routed (MB/s) | VM, no prefilters (MB/s) | Backtracker (MB/s) | Compile (µs) | Compile, backtracker only (µs) |\n|---|---|---|---|---|---|---|\n", .{});
+    for (exec_rows) |r| try w.print("| {s} | {s} | {d:.2} | {d:.2} | {d:.2} | {d:.1} | {d:.1} |\n", .{ r.name, r.engine, r.mbps[0], r.mbps[1], r.mbps[2], r.compile_us, r.compile_expert_us });
+    try w.print("\n| Overhead case | Routed to | Routed (ns) | VM, no prefilters (ns) | Backtracker (ns) | Routed / backtracker |\n|---|---|---|---|---|---|\n", .{});
+    for (overhead) |r| try w.print("| {s} | {s} | {d:.1} | {d:.1} | {d:.1} | {d:.2} |\n", .{ r.name, r.engine, r.ns[0], r.ns[1], r.ns[2], r.ns[0] / r.ns[2] });
+    try w.print("\n| Compile case | Routed to | Dispatcher (µs) | Backtracker only (µs) | Ratio |\n|---|---|---|---|---|\n", .{});
+    for (compiles) |r| try w.print("| {s} | {s} | {d:.2} | {d:.2} | {d:.2} |\n", .{ r.name, r.engine, r.us, r.expert_us, r.us / r.expert_us });
     try std.Io.File.stdout().writeStreamingAll(io, buf.written());
 
     // JSON file.
     var json: std.Io.Writer.Allocating = .init(gpa);
     defer json.deinit();
-    try json.writer.print("{f}\n", .{std.json.fmt(.{ .input_bytes = INPUT_SIZE, .throughput = rows, .adversarial = adv }, .{ .whitespace = .indent_1 })});
+    try json.writer.print("{f}\n", .{std.json.fmt(.{ .input_bytes = INPUT_SIZE, .throughput = rows, .adversarial = adv, .exec_at = exec_rows, .overhead = overhead, .compile = compiles }, .{ .whitespace = .indent_1 })});
     if (std.fs.path.dirname(out_path)) |dir| try std.Io.Dir.cwd().createDirPath(io, dir);
     try std.Io.Dir.cwd().writeFile(io, .{ .sub_path = out_path, .data = json.written() });
 }

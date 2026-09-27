@@ -5,6 +5,24 @@
 adversarial cases (time until the engine gives up). See the header of `bench.zig` and
 `docs/REGEX_TIERS_PLAN.md` §7.2.
 
+Since F4a it also reports, in separate tables:
+
+- **`execAt`** per throughput case: a loop of `execAt` + `advanceIndex` with a warm
+  `Scratch` (no allocation, what a host runs), on the executor the dispatcher picks, on
+  T0's VM without prefilters (`t0_prefilters = false`) and on the backtracker
+  (`force_tier = .expert`), with the compile time of the dispatcher and of the
+  backtracker alone. §7.2's T0 targets are read here: `findAll` allocates per match and
+  hides the executor.
+- **Overhead**: ns per `execAt` of `/abc/` on 5 B and on 2 KB (and two more cases), per
+  executor, with the ratio to the backtracker (§7.2: ≤ 1.5× under 64 B, ≤ 1.2× from 1 KB).
+- **Compile**: the dispatcher against the backtracker alone, for a pattern with the
+  literal prefilter, one with `first`, and a T0 pattern the VM doesn't take (§7.2:
+  ≤ 2×).
+
+The JSON has them under `exec_at`, `overhead` and `compile`. To run only some
+throughput cases, run the bench binary by hand with a second argument: the cases whose
+name contains it (`bench out.json '<'`).
+
 ## Comparing two versions
 
 One run moves by ±15 % on this machine, so a comparison is:
