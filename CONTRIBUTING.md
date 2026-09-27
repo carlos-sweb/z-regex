@@ -191,7 +191,10 @@ Could be added in 2.0 as extension
 - Use `zig fmt` for formatting, except for generated files,
   which keep their generator's layout: `tests/test262_data.zig`
   (`scripts/gen_test262_data.py`) is marked `linguist-generated` in `.gitattributes`.
-  Format the files you touch, not `tests/*.zig` wholesale.
+- **Never run `zig fmt` on `tests/` as a whole** (nor `zig fmt .`): it reformats
+  `tests/test262_data.zig`, which is generated and never formatted. Name the files you
+  touched: `zig fmt src/foo.zig tests/bar_tests.zig`. (It happened in F0d, F4a and F4b(3);
+  each time it was caught before a commit and reverted.)
 - 4-space indentation (enforced by `zig fmt`)
 - No trailing whitespace
 

@@ -872,6 +872,10 @@ execution, under one `in_use` flag.
   (7,453 without `p`, the F4a(1) predicate exactly, and 833 with the opt-in but no
   possessive quantifier). test262 (UTF-16): 714 of 4,294 unique pattern/mode pairs,
   1,541 of 8,743 compilations; 3,289 of the pairs on the backtracker are `u`/`v`.
+  *Correction (F4b(3)):* 711, not 714. The probe's log had 3 lines garbled by
+  interleaved stderr of the harness's workers (two truncated copies of a deeply nested
+  `(?:` pattern and one line glued to the next); the set of patterns on F4a's program is
+  the same. Not a routing change.
 - **Checks.** The fuzz stress runs every pattern the dispatcher sends to the VM on
   the backtracker too (every index of every subject, sticky and not, both encodings):
   2,868 of 8,533 executed patterns, no difference. `differential-v8` is identical to
@@ -988,6 +992,13 @@ between runs (34, 35, 43 in three) because those patterns compile in microsecond
 **Worst case:** an IPv6-address pattern (a long alternation of counted groups), 123 us of
 extra compile time, the maximum over the 3,924. It doesn't block; if it grows in F5, this
 is the baseline to compare with.
+
+**Routing (F4b(3)).** Groups and iterated nullable bodies run on the tagged VM (D5's two
+passes); patterns `tier0.check` accepts keep F4a's program. F2c corpus: 10,386 on the VM,
+8,286 with F4a's program (unchanged) and 2,100 tagged. test262 (UTF-16): 837 of 4,299
+unique pattern/mode pairs on the VM, 711 with F4a's program and 126 tagged (F4a reported
+714: see the correction in the F4a section). `differential-v8`: the 59 T0 divergences of
+`diff-F3d.json` are gone, none new (`diff-F4b.json`).
 
 ### test262 baseline (F0b)
 
