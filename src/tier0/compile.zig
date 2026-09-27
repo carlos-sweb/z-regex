@@ -176,7 +176,13 @@ pub fn compileAccepted(gpa: Allocator, root: *const hir.Node, options: Options) 
         gpa.free(insts);
         return err;
     };
-    var prog: Program = .{ .insts = insts, .sets = owned_sets, .nslots = if (options.tagged) slotCount(root) else 2 };
+    var undo: u32 = 0;
+    for (insts) |inst| switch (inst) {
+        .save => undo += 1,
+        .clear => |c| undo += c.hi - c.lo,
+        else => {},
+    };
+    var prog: Program = .{ .insts = insts, .sets = owned_sets, .nslots = if (options.tagged) slotCount(root) else 2, .max_undo = undo };
     errdefer prog.deinit(gpa);
     try buildClosures(gpa, &prog);
     if (options.prefilters) prog.prefilter = try prefilter.analyze(gpa, root, &prog);

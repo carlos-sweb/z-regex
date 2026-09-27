@@ -88,6 +88,11 @@ pub const Program = struct {
     /// Capture slots: 2 per group, group 0 (the match) included. Programs
     /// compiled without captures have just group 0.
     nslots: u32 = 2,
+    /// The most undo frames one closure of the tagged VM can hold: 1 per
+    /// `save`, `hi - lo` per `clear` (each pc is visited once per closure).
+    /// Set by `compile`; a program built by hand with `save`/`clear` and
+    /// run on the tagged VM must set it too.
+    max_undo: u32 = 0,
     follow: []const u32 = &.{},
     /// Fast paths and the start-position skip (`prefilter.zig`); empty when
     /// compiled without them.

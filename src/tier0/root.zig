@@ -21,6 +21,8 @@ pub const compileWith = compile_mod.compileWith;
 pub const compileAccepted = compile_mod.compileAccepted;
 pub const VmScratch = pikevm.VmScratch;
 pub const exec = pikevm.exec;
+pub const execTagged = pikevm.execTagged;
+pub const execCaptures = pikevm.execCaptures;
 pub const existsAnchoredMatch = pikevm.existsAnchoredMatch;
 
 test {
