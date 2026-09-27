@@ -19,7 +19,14 @@ Since F4a it also reports, in separate tables:
   literal prefilter, one with `first`, and a T0 pattern the VM doesn't take (§7.2:
   ≤ 2×).
 
-The JSON has them under `exec_at`, `overhead` and `compile`. To run only some
+Since F4b the cases with groups run on the tagged VM (D5's two passes): four throughput
+cases (`(\d{3})-(\d{4})` sparse and dense, `(\w+)@(\w+)\.com`, `(?:(a)|b)*c` on the
+`ab_runs` input), whose `execAt` row adds **Without groups**: the routed throughput of the
+same pattern without its groups (§7.2: with captures ≥ 50% of it); three overhead and
+three compile cases with groups; and the count of D5 fallbacks to the backtracker
+(`two_pass_fallbacks`, must be 0). Engines read "tagged VM" for a tagged program.
+
+The JSON has them under `exec_at`, `overhead`, `compile` and `two_pass_fallbacks`. To run only some
 throughput cases, run the bench binary by hand with a second argument: the cases whose
 name contains it (`bench out.json '<'`).
 
