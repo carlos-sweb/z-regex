@@ -73,6 +73,9 @@ pub const CompileResult = @import("compile.zig").CompileResult;
 pub const compileTiers = @import("compile.zig").compileTiers;
 pub const Compiled = @import("compile.zig").Compiled;
 pub const TierUnavailable = @import("compile.zig").TierUnavailable;
+/// Whether this build runs patterns without an explicit `force_tier` on the
+/// backtracker (`-Dforce-backtracker`-style builds; tests only, F4a(5)).
+pub const force_backtracker = @import("build_options").force_backtracker;
 pub const CharSet = @import("ir").charset.CharSet;
 /// The input a regex runs over: WTF-8 or UTF-16, indices in its own units (F3).
 pub const subject = @import("subject");

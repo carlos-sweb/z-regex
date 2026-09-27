@@ -825,7 +825,7 @@ starts inside a character. That also fixes captures that were silently wrong:
 | F3d | Without `u`/`v` an astral pattern character is two `CHAR32`, its UTF-16 halves | 4 | `4d6aa33` |
 | F4a(4) prep | `u` and `v` together are `error.IncompatibleFlags` (a SyntaxError, as `Flags.parse` already said) | 5 | this phase |
 
-### F4a: linear VM without captures (in progress)
+### F4a: linear VM without captures (F4a closed)
 
 F4a adds T0's Pike VM for the patterns it can run exactly; everything else stays on the
 backtracker with unchanged behavior. A pattern is eligible (`tier0.check`) when
@@ -946,6 +946,27 @@ cases of the bench stay on the backtracker, whose code F4a doesn't touch:
   can move again.
 - **F4b/F6a rewrite the backtracker. These numbers are not a target of F4a nor of F4b.**
   The F6a row of the plan says the same: F4a's bench is not F6a's reference.
+
+**The backtracker keeps its coverage (F4a(5)).** Since F4a(3) T0 patterns run on the VM,
+so the integration tests stopped exercising the backtracker on them. `zig build test`
+now also builds `test-integration-backtracker`: the same `tests/integration_tests.zig`
+over a module graph built with `build_options.force_backtracker = true`, where a pattern
+compiled without an explicit `CompileOptions.force_tier` goes to the backtracker (an
+explicit one still wins). The 7 tests about routing itself skip there
+(`zregex.force_backtracker`); 139 pass, and the 8th skip is the one every run has. Cost: `zig build test` in ReleaseSafe,
+cold, median of 3: 137.9 s (117.3 / 137.9 / 143.2), from 93.3 s at F4a(3); the second
+binary recompiles the whole module graph with its own `build_options`. That is under the
+150 s review trigger (F2e) with little margin.
+
+**What F4a leaves to later phases:**
+
+| Pattern | Where it runs | Recovered by |
+|---|---|---|
+| T0 with captures (19.2% of T0 in the corpus) | backtracker | F4b |
+| T0 with an iterating repeat over a nullable body | backtracker | F4b (empty-iteration rule) |
+| T0 with a raw pattern byte | backtracker | stays there |
+| `u`/`v`, `i` over non-ASCII, `\p`, possessive (opt-in) | backtracker | F5 |
+| lookaround, backreferences | backtracker | F6a |
 
 ### test262 baseline (F0b)
 

@@ -16,6 +16,7 @@ const program_mod = @import("tier2").program;
 const tier0 = @import("tier0");
 const classify = @import("analysis/classify.zig");
 const Tier = classify.Tier;
+const build_options = @import("build_options");
 
 const CodeGenerator = generator_mod.CodeGenerator;
 const Optimizer = optimizer_mod.Optimizer;
@@ -164,7 +165,9 @@ fn frontend(allocator: Allocator, pattern: []const u8, options: CompileOptions) 
 /// Whether the pattern runs on T0's VM, or `error.TierUnavailable` when
 /// `force_tier` asks for what it can't have.
 fn route(fe: *const lower_mod.Frontend, options: CompileOptions) error{TierUnavailable}!bool {
-    const force = options.force_tier;
+    // The build's `force_backtracker` (the second integration test run,
+    // F4a(5)) makes `.expert` the default; an explicit `force_tier` wins.
+    const force = options.force_tier orelse if (build_options.force_backtracker) Tier.expert else null;
     if (force == .expert) return false;
     if (force == .unicode) return unavailable(options, .{ .not_built = .unicode });
     const analysis = classify.analyzeFrontend(fe, .{

@@ -146,6 +146,8 @@ fn routedToVm(pattern: []const u8, options: zregex.CompileOptions) !bool {
 }
 
 test "dispatcher: eligible T0 patterns go to the VM, the rest to the backtracker" {
+    // Routing to the VM: not in the forced-backtracker run (F4a(5)).
+    if (zregex.force_backtracker) return error.SkipZigTest;
     for (cases) |c| try testing.expect(try routedToVm(c[0], .{ .case_insensitive = c[1].i, .multiline = c[1].m, .dot_all = c[1].s }));
     // Captures (F4b), T2, T1, a raw pattern byte.
     for ([_][]const u8{ "(a)", "(?<n>a)b", "a(?=b)", "(a)\\1", "(?<=a)b", "\xE9", "(?:a?)*" }) |p|
@@ -205,6 +207,8 @@ test "force_tier .regular: the three reasons it can't be honored" {
 }
 
 test "force_tier .expert and .unicode" {
+    // Routing to the VM: not in the forced-backtracker run (F4a(5)).
+    if (zregex.force_backtracker) return error.SkipZigTest;
     try testing.expect(!try routedToVm("abc", .{ .force_tier = .expert }));
     try expectUnavailableTier("abc", .unicode, .{ .not_built = .unicode });
 }
@@ -216,6 +220,8 @@ fn expectUnavailableTier(pattern: []const u8, tier: zregex.analysis.Tier, expect
 }
 
 test "the facade gives the same results on the VM and on the backtracker" {
+    // Routing to the VM: not in the forced-backtracker run (F4a(5)).
+    if (zregex.force_backtracker) return error.SkipZigTest;
     const a = testing.allocator;
     const inputs = [_][]const u8{ "", "abc aab ab", "\u{E9}ab\u{1F600}abab", "xxaaaa" };
     for ([_][]const u8{ "ab", "a*", "a+?b", "(?:ab|a)", "\\bab", "$", "[^b]" }) |p| {
@@ -260,6 +266,8 @@ test "the facade gives the same results on the VM and on the backtracker" {
 }
 
 test "execAt on the VM: a warm composite scratch allocates nothing" {
+    // Routing to the VM: not in the forced-backtracker run (F4a(5)).
+    if (zregex.force_backtracker) return error.SkipZigTest;
     const a = testing.allocator;
     var re = try zregex.Regex.compile(a, "a+b|c");
     defer re.deinit();
@@ -358,6 +366,8 @@ fn prefilterKind(pattern: []const u8) !std.meta.Tag(tier0.prefilter.Prefilter.Ki
 }
 
 test "prefilters: which one each pattern gets" {
+    // Routing to the VM: not in the forced-backtracker run (F4a(5)).
+    if (zregex.force_backtracker) return error.SkipZigTest;
     try testing.expectEqual(.literal, try prefilterKind("hello"));
     try testing.expectEqual(.class_run, try prefilterKind("[a-z]+"));
     try testing.expectEqual(.first, try prefilterKind("\\d{3}-\\d{4}"));
@@ -369,6 +379,8 @@ test "prefilters: which one each pattern gets" {
 }
 
 test "class_run sticky: only at the index" {
+    // Routing to the VM: not in the forced-backtracker run (F4a(5)).
+    if (zregex.force_backtracker) return error.SkipZigTest;
     var re = try zregex.Regex.compileWithOptions(testing.allocator, "[a-z]+", .{ .sticky = true });
     defer re.deinit();
     var scratch = zregex.Scratch.init(testing.allocator);
@@ -382,6 +394,8 @@ test "class_run sticky: only at the index" {
 }
 
 test "fast paths never touch the VM scratch" {
+    // Routing to the VM: not in the forced-backtracker run (F4a(5)).
+    if (zregex.force_backtracker) return error.SkipZigTest;
     var failing: std.testing.FailingAllocator = .init(testing.allocator, .{});
     var scratch = zregex.Scratch.init(failing.allocator());
     defer scratch.deinit();
@@ -398,4 +412,14 @@ test "fast paths never touch the VM scratch" {
     }
     try testing.expectEqual(@as(usize, 0), failing.allocations);
     try testing.expectEqual(@as(usize, 0), scratch.vm.capacity);
+}
+
+test "forced-backtracker build: an eligible pattern stays on the backtracker" {
+    const re = try zregex.Regex.compile(testing.allocator, "abc");
+    defer re.deinit();
+    try testing.expectEqual(zregex.force_backtracker, re.t0 == null);
+    // An explicit force_tier still wins.
+    const forced = try zregex.Regex.compileWithOptions(testing.allocator, "abc", .{ .force_tier = .regular });
+    defer forced.deinit();
+    try testing.expect(forced.t0 != null);
 }

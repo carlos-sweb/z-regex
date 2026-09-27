@@ -23,8 +23,13 @@ pub const layers = [_]Layer{
     .{ .name = "tier0", .root = "src/tier0/root.zig", .deps = &.{ "ir", "utils", "subject" } },
     .{ .name = "tier1", .root = "src/tier1/root.zig", .deps = &.{ "ir", "unicode", "utils", "subject", "tier0" } },
     .{ .name = "tier2", .root = "src/tier2/root.zig", .deps = &.{ "ir", "unicode", "utils", "subject" } },
-    .{ .name = "zregex", .root = "src/main.zig", .deps = &.{ "ir", "unicode", "utils", "subject", "frontend", "tier0", "tier1", "tier2" } },
+    .{ .name = "zregex", .root = "src/main.zig", .deps = &.{ "ir", "unicode", "utils", "subject", "frontend", "tier0", "tier1", "tier2", "build_options" } },
 };
+
+/// Generated modules a layer may import besides the layers above:
+/// `build_options` (`force_backtracker`, F4a(5): the second integration
+/// test binary runs every test on the backtracker).
+const generated_modules = [_][]const u8{"build_options"};
 
 /// One build of the whole module graph (per target/optimize mode).
 const Modules = struct {
@@ -39,7 +44,16 @@ const Modules = struct {
 /// `public`, `zregex` is the package's exported module (`b.addModule`); the
 /// others are always internal.
 fn addModules(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.builtin.OptimizeMode, public: bool) Modules {
+    return addModulesWith(b, target, optimize, public, false);
+}
+
+/// `addModules`, with `force_backtracker`: a pattern compiled without an
+/// explicit `CompileOptions.force_tier` runs on the backtracker (tests only).
+fn addModulesWith(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.builtin.OptimizeMode, public: bool, force_backtracker: bool) Modules {
     var mods: Modules = .{ .by_name = .empty };
+    const options = b.addOptions();
+    options.addOption(bool, "force_backtracker", force_backtracker);
+    mods.by_name.put(b.allocator, generated_modules[0], options.createModule()) catch @panic("OOM");
     for (layers) |layer| {
         const opts: std.Build.Module.CreateOptions = .{
             .root_source_file = b.path(layer.root),
@@ -266,6 +280,21 @@ pub fn build(b: *std.Build) void {
 
     const integration_test_step = b.step("test-integration", "Run integration tests only");
     integration_test_step.dependOn(&run_integration_tests.step);
+
+    // The same integration tests with every pattern on the backtracker
+    // (F4a(5)): since F4a(3) T0 patterns run on the VM, and without this run
+    // the backtracker would lose their coverage until F6a rewrites it. Tests
+    // about routing itself skip here (`zregex.force_backtracker`).
+    const bt_module = b.createModule(.{
+        .root_source_file = b.path("tests/integration_tests.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    bt_module.addImport("zregex", addModulesWith(b, target, optimize, false, true).get("zregex"));
+    const bt_tests = b.addTest(.{ .name = "test-integration-backtracker", .root_module = bt_module });
+    const run_bt_tests = b.addRunArtifact(bt_tests);
+    test_step.dependOn(&run_bt_tests.step);
+    integration_test_step.dependOn(&run_bt_tests.step);
 
     // Bytecode snapshot (tests/snapshots/bytecode.txt, checked by
     // tests/bytecode_snapshot.zig inside `test`): rewrite its outcomes after

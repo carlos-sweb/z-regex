@@ -101,8 +101,9 @@ reference run, not against zero:
   different) is superseded: 106 of its 248 "D6" entries were pure D6 and are gone, and
   142 belonged to F4b.
 - **Lifecycle:**
-  - The current reference is the entry reference of the next phase. `diff-F3d.json` is
-    F4a's.
+  - The current reference is the entry reference of the next phase. `diff-F3d.json` was
+    F4a's, and F4a closed identical to it (0 gone, 0 appeared, 0 changed, in both
+    encodings), so no `diff-F4a.json` was generated: `diff-F3d.json` is also F4b's.
   - A phase that changes the executor but not the semantics (F4a) must not add any
     divergence against it. That is its gate.
   - When the phase closes, a new reference (`diff-F4a.json`, ...) is generated only if

@@ -147,6 +147,8 @@ fn sampled(pattern: []const u8) bool {
 /// agrees with that routing.
 fn checkRouting(gpa: std.mem.Allocator, re: zregex.Regex, pattern: []const u8, options: zregex.CompileOptions, analysis: zregex.analysis.Analysis, mode: Mode) !void {
     stats.audited += 1;
+    // The forced-backtracker run (F4a(5)) routes nothing to the VM.
+    if (zregex.force_backtracker) return;
     const eligible = blk: {
         if (analysis.min_tier != .regular) break :blk false;
         const fe = try zregex.lower.Frontend.init(gpa, pattern, .{ .unicode = options.unicode, .v = options.v }, .{});
