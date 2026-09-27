@@ -889,7 +889,7 @@ time, used in code-unit mode (all of T0):
 | Prefilter | When | What |
 |---|---|---|
 | `anchored` | `^` without `m` leads every path | from an index above 0, no match; from 0, only at 0 |
-| `literal` | the whole pattern is one literal, without `i` on a letter, surrogates, astral or raw bytes | `std.mem.indexOfPos`, no VM |
+| `literal` | the whole pattern is one literal, without `i` on a letter, surrogates, astral or raw bytes | `prefilter.findLiteral` (SIMD first/last-byte pair search; scalar without vectors), no VM |
 | `class_run` | greedy `C+`/`C*` over an ASCII class | the first member, then the longest run, no VM |
 | `first` | anything non-nullable | skips positions where no match can start, while no thread is alive |
 

@@ -63,7 +63,7 @@ zig-regex has no execAt API and a quadratic findAll: it isn't in these tables.
 
 | T0 case | z-regex | V8 (warm) | Rust regex |
 |---|---|---|---|
-| `literal hello` | 943.1 | 1791.8 | 20999.1 |
+| `literal hello` | 16925.1 † | 1791.8 | 20999.1 |
 | `[a-z]+` | 214.8 | 116.7 | 75.0 |
 | `\d{3}-\d{4} (sparse)` | 644.7 | 1342.9 | 2319.2 |
 | `\d{3}-\d{4} (dense)` | 42.5 | 222.8 | 85.0 |
@@ -71,7 +71,7 @@ zig-regex has no execAt API and a quadratic findAll: it isn't in these tables.
 | `(\d{3})-(\d{4}) (sparse)` | 358.9 | 1629.6 | 1493.7 |
 | `(\d{3})-(\d{4}) (dense)` | 33.6 | 198.5 | 76.5 |
 | `(?:(a)\|b)*c` | 15.5 | 37.2 | 58.4 |
-| `book: Darcy` | 885.5 | 15514.4 | 19231.8 |
+| `book: Darcy` | 15925.0 † | 15514.4 | 19231.8 |
 | `book: [A-Z][a-z]+` | 400.7 | 622.9 | 290.1 |
 | `book: (Mr\|Mrs\|Miss)\.? ([A-Z][a-z]+)` | 681.5 | 532.0 | 2662.5 |
 
@@ -90,10 +90,16 @@ zig-regex has no execAt API and a quadratic findAll: it isn't in these tables.
 | `(?<=\$)\d+` | 0.8 | 233.2 | 1073.6 | 529.1 |
 | `book: \b(\w+) \1\b` | 11.4 | 134.1 | 112.3 | 31.9 |
 
+† Re-measured after the SIMD literal search (z-regex alone, 10 interleaved rounds against
+the previous code: 926.3 and 886.5 before); see docs/BENCHMARKS.md. Measured on Xeon with
+SSE2 + AVX2 + AVX-512BW; other CPUs will see less.
+
 Notes:
 
 - V8 has a JIT; z-regex doesn't. Both are real.
 - Rust regex doesn't support backreferences; the T2 cases are not compared against it.
 - Absolute numbers vary with LLVM's code layout between builds. Median of 10 runs.
+- 735 of the corpus's 10,386 T0-routed patterns are pure literals (~7%), but literals are
+  the most common case in real use.
 - z-regex T0 has 0 divergences from V8 in test262 and in the differential. The 477
   divergences are T2/T1.

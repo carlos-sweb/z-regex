@@ -225,6 +225,54 @@ fn mark(utf8: *Bits, utf16: *Bits, high: *bool, lo: u32, hi: u32) void {
     if (hi >= 0x100) high.* = true;
 }
 
+/// The literal fast path's search: the first occurrence of `needle` in
+/// `haystack` at `start` or after, with `std.mem.indexOfPos`'s contract.
+/// A needle of 2+ units runs a SIMD pairwise search (memchr::memmem's
+/// scheme, with the needle's first and last units as the pair): W units at
+/// a time are compared with both, the masks are ANDed and each candidate is
+/// verified. W is the target's suggested vector length, chosen at compile
+/// time; a target without one keeps `std.mem.indexOfPos` (scalar
+/// Boyer-Moore-Horspool, which it replaces: ~0.9 GB/s against ~15-20 GB/s
+/// on AVX2 for "hello" and "Darcy").
+pub fn findLiteral(comptime Unit: type, haystack: []const Unit, start: usize, needle: []const Unit) ?usize {
+    const w: ?usize = comptime if (std.simd.suggestVectorLength(Unit)) |v| v else null;
+    return findLiteralWith(Unit, w, haystack, start, needle);
+}
+
+/// `findLiteral` with the vector length given: null is the scalar path
+/// (`std.mem.indexOfPos`), for targets without SIMD and for its test.
+pub fn findLiteralWith(comptime Unit: type, comptime W: ?usize, haystack: []const Unit, start: usize, needle: []const Unit) ?usize {
+    const n = needle.len;
+    if (n == 0) return start; // as std.mem.indexOfPos, even past the end
+    if (n == 1) return std.mem.indexOfScalarPos(Unit, haystack, start, needle[0]);
+    const w = W orelse return std.mem.indexOfPos(Unit, haystack, start, needle);
+    const len = haystack.len;
+    if (start > len or n > len - start) return null;
+    const V = @Vector(w, Unit);
+    const Mask = std.meta.Int(.unsigned, w);
+    const first: V = @splat(needle[0]);
+    const last: V = @splat(needle[n - 1]);
+    var i = start;
+    // Candidates i..i+w-1: their first units at i.., their last at i+n-1..;
+    // both loads fit while i + (w + n - 2) < len.
+    while (i + (w + n - 2) < len) : (i += w) {
+        const a: V = haystack[i..][0..w].*;
+        const b: V = haystack[i + n - 1 ..][0..w].*;
+        var m: Mask = @bitCast((a == first) & (b == last));
+        while (m != 0) {
+            const at = i + @ctz(m);
+            if (std.mem.eql(Unit, haystack[at + 1 ..][0 .. n - 2], needle[1 .. n - 1])) return at;
+            m &= m - 1;
+        }
+    }
+    // The tail, fewer than w candidates: scalar.
+    while (i + n <= len) : (i += 1) {
+        if (haystack[i] == needle[0] and haystack[i + n - 1] == needle[n - 1] and
+            std.mem.eql(Unit, haystack[i + 1 ..][0 .. n - 2], needle[1 .. n - 1])) return i;
+    }
+    return null;
+}
+
 // ------------------------------------------------------------------ tests
 
 const testing = std.testing;
@@ -357,4 +405,111 @@ test "firstOf: the DFS stack holds a closure n + 1 deep (regression, F4b(1))" {
     const f = firstOfWith(&p, scan).?;
     try testing.expectEqual(@as(?u8, null), f.single8);
     for (f.utf8) |on| try testing.expect(!on);
+}
+
+// findLiteral: every result checked against std.mem.indexOfPos, for the
+// vector lengths of the targets (8-64 units) and the scalar path (null).
+
+const widths = [_]?usize{ null, 8, 16, 32, 64 };
+
+fn expectSame(comptime Unit: type, h: []const Unit, start: usize, n: []const Unit) !void {
+    const want = std.mem.indexOfPos(Unit, h, start, n);
+    inline for (widths) |w| {
+        const got = findLiteralWith(Unit, w, h, start, n);
+        testing.expectEqual(want, got) catch |err| {
+            std.debug.print("W={any} len={d} start={d} needle.len={d}\n", .{ w, h.len, start, n.len });
+            return err;
+        };
+    }
+    try testing.expectEqual(want, findLiteral(Unit, h, start, n));
+}
+
+test "findLiteral: fixed edge cases, against std.mem.indexOfPos" {
+    // Empty needle: `start`, even past the end (std's contract).
+    try expectSame(u8, "abc", 0, "");
+    try expectSame(u8, "abc", 3, "");
+    try expectSame(u8, "abc", 5, "");
+    try testing.expectEqual(@as(?usize, 5), findLiteral(u8, "abc", 5, ""));
+    // One unit: std's SIMD scalar search.
+    try expectSame(u8, "abcabc", 1, "a");
+    try expectSame(u8, "abc", 4, "a");
+    // Overlapping repeats: the first occurrence.
+    try expectSame(u8, "aaaa", 0, "aa");
+    try expectSame(u8, "aaaa", 1, "aa");
+    try expectSame(u8, "aaaa", 3, "aa");
+    // Needle equal to, and longer than, the haystack; start at and past the end.
+    try expectSame(u8, "hello", 0, "hello");
+    try expectSame(u8, "hell", 0, "hello");
+    try expectSame(u8, "hello", 5, "lo");
+    try expectSame(u8, "hello", 6, "lo");
+    // Multibyte literals in WTF-8, and the same text in UTF-16.
+    const text = "x\u{E9}\u{20AC}y\u{E9}\u{20AC}" ** 20;
+    try expectSame(u8, text, 0, "\u{E9}\u{20AC}");
+    try expectSame(u8, text, 4, "\u{E9}\u{20AC}");
+    const t16 = std.unicode.utf8ToUtf16LeStringLiteral(text);
+    const n16 = std.unicode.utf8ToUtf16LeStringLiteral("\u{E9}\u{20AC}");
+    for (0..t16.len + 1) |start| try expectSame(u16, t16, start, n16);
+}
+
+test "findLiteral: a needle as long as the vector or longer" {
+    // n >= W: both loads (at i and i + n - 1) still fit while the haystack
+    // is long enough; the rest is the scalar tail.
+    var h: [100]u8 = undefined;
+    for (&h, 0..) |*c, k| c.* = "abcdefgh"[k % 8];
+    const needle = h[40..72]; // 32 units
+    for (0..h.len + 1) |start| try expectSame(u8, &h, start, needle);
+    try expectSame(u8, &h, 0, h[0..70]);
+    try expectSame(u8, &h, 0, h[30..100]);
+}
+
+test "findLiteral: random, small alphabet, across vector boundaries" {
+    var prng = std.Random.DefaultPrng.init(0xF1AD);
+    const r = prng.random();
+    var buf8: [300]u8 = undefined;
+    var buf16: [300]u16 = undefined;
+    // Haystack lengths around multiples of 8, 16, 32 and 64, and others.
+    const lens = [_]usize{ 0, 1, 2, 7, 8, 9, 15, 16, 17, 31, 32, 33, 47, 63, 64, 65, 95, 127, 128, 129, 191, 255, 256, 257, 300 };
+    var checks: usize = 0;
+    for (lens) |len| {
+        for (0..12) |_| {
+            // {a, b}: many false candidates (both pair units often match).
+            for (buf8[0..len], buf16[0..len]) |*c8, *c16| {
+                c8.* = if (r.boolean()) 'a' else 'b';
+                c16.* = c8.*;
+            }
+            const n = 2 + r.uintLessThan(usize, 69); // 2..70
+            if (n > len) continue;
+            // The needle: a slice of the haystack (so it occurs), sometimes
+            // with its last unit changed (so it may not).
+            const from = r.uintLessThan(usize, len - n + 1);
+            var needle8: [70]u8 = undefined;
+            var needle16: [70]u16 = undefined;
+            @memcpy(needle8[0..n], buf8[from..][0..n]);
+            if (r.uintLessThan(u8, 4) == 0) needle8[n - 1] = 'c';
+            for (needle8[0..n], needle16[0..n]) |c8, *c16| c16.* = c8;
+            // Every start: the beginning, mid-vector, the end, past it.
+            var start: usize = 0;
+            while (start <= len + 1) : (start += 1 + r.uintLessThan(usize, 5)) {
+                try expectSame(u8, buf8[0..len], start, needle8[0..n]);
+                try expectSame(u16, buf16[0..len], start, needle16[0..n]);
+                checks += 2;
+            }
+        }
+    }
+    try testing.expect(checks > 2000);
+}
+
+test "findLiteral: the needle planted at the start, the end, and across a vector edge" {
+    var h: [200]u8 = undefined;
+    @memset(&h, 'x');
+    const needle = "Darcy";
+    for ([_]usize{ 0, 1, 14, 15, 16, 28, 29, 30, 31, 32, 60, 61, 62, 63, 64, 195 }) |at| {
+        @memset(&h, 'x');
+        @memcpy(h[at..][0..needle.len], needle);
+        try expectSame(u8, &h, 0, needle);
+        try expectSame(u8, &h, at, needle);
+        if (at > 0) try expectSame(u8, &h, at - 1, needle);
+        try expectSame(u8, &h, at + 1, needle);
+        try testing.expectEqual(@as(?usize, at), findLiteral(u8, &h, 0, needle));
+    }
 }
