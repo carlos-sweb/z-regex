@@ -393,6 +393,15 @@ pub fn build(b: *std.Build) void {
     const differential_step = b.step("differential-v8", "Compare zregex with V8 on generated patterns (needs Node + koffi)");
     differential_step.dependOn(&run_differential.step);
 
+    // F0c (docs/REGEX_TIERS_PLAN.md §5.6): tier histogram of a regex corpus
+    // built by scripts/f0c/extract.mjs. `zig build f0c -- corpus.tsv`.
+    const f0c_module = b.createModule(.{ .root_source_file = b.path("tools/f0c.zig"), .target = target, .optimize = .ReleaseSafe });
+    f0c_module.addImport("zregex", addModules(b, target, .ReleaseSafe, false).get("zregex"));
+    const run_f0c = b.addRunArtifact(b.addExecutable(.{ .name = "f0c", .root_module = f0c_module }));
+    if (b.args) |a| run_f0c.addArgs(a);
+    const f0c_step = b.step("f0c", "Tier histogram of a regex corpus (scripts/f0c/extract.mjs output)");
+    f0c_step.dependOn(&run_f0c.step);
+
     // Performance baseline (bench/bench.zig, docs/REGEX_TIERS_PLAN.md F0d).
     // Always ReleaseFast, whatever -Doptimize says, so numbers are comparable.
     const bench_zregex = addModules(b, target, .ReleaseFast, false).get("zregex");

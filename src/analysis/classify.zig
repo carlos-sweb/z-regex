@@ -200,6 +200,12 @@ pub const UNROLL_BUDGET: u64 = 1000;
 /// Classify `pattern` under `flags`. Only allocation failure is an error;
 /// parse failures and known deviations are reported in the result.
 pub fn analyze(gpa: Allocator, pattern: []const u8, flags: Flags) Allocator.Error!Analysis {
+    return analyzeWithBudget(gpa, pattern, flags, UNROLL_BUDGET);
+}
+
+/// `analyze` with another unroll budget in place of `UNROLL_BUDGET`, to
+/// measure how sensitive the classification is to it (F0c).
+pub fn analyzeWithBudget(gpa: Allocator, pattern: []const u8, flags: Flags, unroll_budget: u64) Allocator.Error!Analysis {
     // The same front end and lexer modes `src/compile.zig::compile`
     // uses, so this classifies exactly the HIR compile generates from.
     const fe = lower_mod.Frontend.init(gpa, pattern, .{ .unicode = flags.u, .v = flags.v }, .{
@@ -208,14 +214,18 @@ pub fn analyze(gpa: Allocator, pattern: []const u8, flags: Flags) Allocator.Erro
         .dot_all = flags.s,
     }) catch |err| return parseFailure(err);
     defer fe.deinit();
-    return analyzeFrontend(fe, flags);
+    return classifyFrontend(fe, flags, unroll_budget);
 }
 
 /// `analyze` over a front end already built, so the dispatcher classifies
 /// the HIR `compile` generates from without parsing twice (F4a). `flags`
 /// must be the ones `fe` was built with.
 pub fn analyzeFrontend(fe: *const lower_mod.Frontend, flags: Flags) Analysis {
-    var walker: Walker = .{ .flags = flags };
+    return classifyFrontend(fe, flags, UNROLL_BUDGET);
+}
+
+fn classifyFrontend(fe: *const lower_mod.Frontend, flags: Flags, unroll_budget: u64) Analysis {
+    var walker: Walker = .{ .flags = flags, .unroll_budget = unroll_budget };
     walker.visit(fe.root, 1);
 
     var features = walker.features;
@@ -271,6 +281,7 @@ const Walker = struct {
     non_ascii: bool = false,
     /// A possessive quantifier: only from `compile`'s opt-in (D8).
     possessive: bool = false,
+    unroll_budget: u64 = UNROLL_BUDGET,
 
     /// `copies`: how many times this node gets unrolled by enclosing
     /// counted repeats (saturating).
@@ -306,7 +317,7 @@ const Walker = struct {
                         // An open-ended `{n,}` unrolls `n` copies plus one loop body.
                         const count: u64 = if (r.max) |max| max else @as(u64, r.min) + 1;
                         child_copies = std.math.mul(u64, copies, @max(count, 1)) catch std.math.maxInt(u64);
-                        if (child_copies > UNROLL_BUDGET) self.features.insert(.large_counted_repeat);
+                        if (child_copies > self.unroll_budget) self.features.insert(.large_counted_repeat);
                     },
                 }
                 self.visit(r.body, child_copies);
@@ -569,4 +580,12 @@ test "analyze does not leak on any allocation failure" {
             _ = try analyze(gpa, "(?<y>\\d{4})-(a|b)*\\1(?=c)", .{ .g = true });
         }
     }.run, .{});
+}
+
+test "analyzeWithBudget: the unroll budget moves a large counted repeat to T1" {
+    const a = try analyzeWithBudget(testing.allocator, "a{600}", .{}, 500);
+    try testing.expectEqual(@as(?Tier, .unicode), a.min_tier);
+    const b = try analyzeWithBudget(testing.allocator, "a{600}", .{}, 1000);
+    try testing.expectEqual(@as(?Tier, .regular), b.min_tier);
+    try testing.expectEqual(b.min_tier, (try analyze(testing.allocator, "a{600}", .{})).min_tier);
 }
