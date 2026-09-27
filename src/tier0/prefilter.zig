@@ -152,11 +152,16 @@ fn classRunOf(root: *const hir.Node) ?ClassRun {
 /// The units a match can start with, or null when a match can be empty
 /// (the closure from pc 0 reaches `match`) or can start anywhere.
 fn firstOf(prog: *const Program) ?First {
-    var f: First = .{ .utf8 = @splat(false), .utf16 = @splat(false), .high = false, .single8 = null, .single16 = null };
-    var counts: Counts = .{};
+    // Built as bit sets (whole ranges per word, popcount to count), turned
+    // into the lookup tables at the end.
+    var utf8 = Bits.initEmpty();
+    var utf16 = Bits.initEmpty();
+    var high = false;
     // Depth-first over the epsilon closure of pc 0, asserts passed over.
     var seen = std.StaticBitSet(max_scan).initEmpty();
-    var stack: [max_scan]u32 = undefined;
+    // Each visited pc pops one entry and pushes at most two: the depth
+    // stays within n + 1 (it was `max_scan`, one short at n = max_scan).
+    var stack: [2 * max_scan + 1]u32 = undefined;
     var sp: usize = 0;
     if (prog.insts.len > max_scan) return null;
     stack[0] = 0;
@@ -177,56 +182,42 @@ fn firstOf(prog: *const Program) ?First {
                 stack[sp + 1] = s.y;
                 sp += 2;
             },
-            .assert => {
+            .assert, .save, .clear => {
                 stack[sp] = pc + 1;
                 sp += 1;
             },
-            .char => |c| mark(&f, &counts, c, c),
-            .set => |i| for (prog.sets[i].set.ranges) |r| mark(&f, &counts, r.lo, r.hi),
+            .fail => {},
+            .char => |c| mark(&utf8, &utf16, &high, c, c),
+            .set => |i| for (prog.sets[i].set.ranges) |r| mark(&utf8, &utf16, &high, r.lo, r.hi),
         }
+        // Every byte possible: nothing to skip, whatever else follows.
+        if (utf8.count() == 256) return null;
     }
-    // `mark` counted the units as it set them.
-    const n8 = counts.ascii8 + @as(usize, if (counts.high8) 128 else 0);
-    if (n8 == 1) f.single8 = counts.last8;
-    if (counts.n16 == 1 and !f.high) f.single16 = counts.last16;
-    // Everything possible: nothing to skip.
-    if (n8 == 256) return null;
+    var f: First = .{ .utf8 = undefined, .utf16 = undefined, .high = high, .single8 = null, .single16 = null };
+    for (&f.utf8, &f.utf16, 0..) |*a, *b, i| {
+        a.* = utf8.isSet(i);
+        b.* = utf16.isSet(i);
+    }
+    if (utf8.count() == 1) f.single8 = @intCast(utf8.findFirstSet().?);
+    if (utf16.count() == 1 and !high) f.single16 = @intCast(utf16.findFirstSet().?);
     return f;
 }
+
+const Bits = std.StaticBitSet(256);
 
 /// Programs above this size get no `first` table (the scan's stack and
 /// visited set are fixed-size); they still run, on the plain VM.
 const max_scan = 4096;
 
-/// How many units `mark` has set, so `firstOf` needn't scan the tables.
-const Counts = struct {
-    ascii8: usize = 0,
-    last8: u8 = 0,
-    /// Every byte from 0x80 up is set.
-    high8: bool = false,
-    n16: usize = 0,
-    last16: u8 = 0,
-};
-
-fn mark(f: *First, n: *Counts, lo: u32, hi: u32) void {
-    var c = lo;
-    while (c <= @min(hi, 0x7F)) : (c += 1) if (!f.utf8[c]) {
-        f.utf8[c] = true;
-        n.ascii8 += 1;
-        n.last8 = @intCast(c);
-    };
-    if (hi >= 0x80 and !n.high8) {
-        @memset(f.utf8[0x80..], true);
-        n.high8 = true;
-        n.last8 = 0x80;
-    }
-    c = lo;
-    while (c <= @min(hi, 0xFF)) : (c += 1) if (!f.utf16[c]) {
-        f.utf16[c] = true;
-        n.n16 += 1;
-        n.last16 = @intCast(c);
-    };
-    if (hi >= 0x100) f.high = true;
+/// Marks the units a character in `lo..hi` can start with: ASCII members
+/// one by one; any member from U+0080 up, every byte from 0x80 up (see
+/// `First`); in UTF-16, the units below 256 and `high` for the rest.
+fn mark(utf8: *Bits, utf16: *Bits, high: *bool, lo: u32, hi: u32) void {
+    // (`@min` with a constant narrows the type: widen before adding.)
+    if (lo <= 0x7F) utf8.setRangeValue(.{ .start = lo, .end = @as(usize, @min(hi, 0x7F)) + 1 }, true);
+    if (hi >= 0x80) utf8.setRangeValue(.{ .start = 0x80, .end = 256 }, true);
+    if (lo <= 0xFF) utf16.setRangeValue(.{ .start = lo, .end = @as(usize, @min(hi, 0xFF)) + 1 }, true);
+    if (hi >= 0x100) high.* = true;
 }
 
 // ------------------------------------------------------------------ tests

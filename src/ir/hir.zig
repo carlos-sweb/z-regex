@@ -196,6 +196,32 @@ pub fn nullable(node: *const Node) bool {
     };
 }
 
+/// The lowest and highest capture index in `node`'s subtree (the node
+/// included), or null if it has none. Indices are given in order of the
+/// opening parenthesis, so a subtree's groups are exactly `lo..hi` (F4b's
+/// `clear`).
+pub fn captureRange(node: *const Node) ?struct { lo: u16, hi: u16 } {
+    var lo: u16 = std.math.maxInt(u16);
+    var hi: u16 = 0;
+    rangeOf(node, &lo, &hi);
+    return if (lo > hi) null else .{ .lo = lo, .hi = hi };
+}
+
+fn rangeOf(node: *const Node, lo: *u16, hi: *u16) void {
+    switch (node.*) {
+        .empty, .literal, .char_set, .backref, .assert => {},
+        .seq, .alt => |items| for (items) |item| rangeOf(item, lo, hi),
+        .repeat => |r| rangeOf(r.body, lo, hi),
+        .capture => |c| {
+            lo.* = @min(lo.*, c.index);
+            hi.* = @max(hi.*, c.index);
+            rangeOf(c.body, lo, hi);
+        },
+        .look => |l| rangeOf(l.body, lo, hi),
+        .modifier_scope => |m| rangeOf(m.body, lo, hi),
+    }
+}
+
 /// Append the capture indices in `node`'s subtree (the node included), in
 /// pre-order: the groups a skipped optional atom must clear.
 pub fn collectCaptures(node: *const Node, list: *std.ArrayListUnmanaged(u16), allocator: std.mem.Allocator) !void {
@@ -334,4 +360,16 @@ test "nullable" {
     try std.testing.expect(!nullable(&seq));
     try std.testing.expect(nullable(&alt));
     try std.testing.expect(nullable(&caret));
+}
+
+test "captureRange: a subtree's groups, contiguous" {
+    const a: Node = .{ .literal = .{ .units = &.{.{ .value = 'a' }} } };
+    const g2: Node = .{ .capture = .{ .index = 2, .name = null, .body = &a } };
+    const g3: Node = .{ .capture = .{ .index = 3, .name = null, .body = &a } };
+    const seq: Node = .{ .seq = &.{ &g2, &g3 } };
+    const g1: Node = .{ .capture = .{ .index = 1, .name = null, .body = &seq } };
+    try std.testing.expectEqual(@as(u16, 1), captureRange(&g1).?.lo);
+    try std.testing.expectEqual(@as(u16, 3), captureRange(&g1).?.hi);
+    try std.testing.expectEqual(@as(u16, 2), captureRange(&seq).?.lo);
+    try std.testing.expect(captureRange(&a) == null);
 }

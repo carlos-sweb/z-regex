@@ -266,7 +266,7 @@ fn Vm(comptime Unit: type) type {
                                 found = .{ start, pos };
                                 break;
                             },
-                            .split, .jmp, .assert => {},
+                            .split, .jmp, .assert, .save, .clear, .fail => {},
                         }
                     }
                 }
@@ -315,7 +315,7 @@ fn Vm(comptime Unit: type) type {
                             if (self.prog.sets[i].contains(x.value)) self.addThread(nlist, scratch.stack, pc + 1, pos0, next);
                         },
                         .match => return true,
-                        .split, .jmp, .assert => {},
+                        .split, .jmp, .assert, .save, .clear, .fail => {},
                     }
                 }
                 if (d == null) break;
@@ -362,7 +362,10 @@ fn Vm(comptime Unit: type) type {
                             if (!self.holds(a, pos)) break;
                             pc += 1;
                         },
-                        .char, .set, .match => break,
+                        // Captures don't change what matches: this VM (the
+                        // first pass, F4b D5) passes over them.
+                        .save, .clear => pc += 1,
+                        .char, .set, .match, .fail => break,
                     }
                 }
             }

@@ -524,6 +524,94 @@ Un consumidor que solo necesite T0 puede importar `zregex-t0` y no enlaza las ~3
 
 ---
 
+### 6.5 Diseño de F4b (aprobado)
+
+**Qué cierra F4b:** T0 completo en la VM. Entran los grupos de captura, las repeticiones iteradas sobre cuerpos anulables y el reset de capturas por iteración. Solo quedan en el backtracker los patrones con un byte crudo del patrón.
+
+**D1. Estado de capturas por hilo: array completo.**
+- Instrucciones nuevas: `save(slot)` (inicio o fin de un grupo), `clear(lo, hi)` (pone a nulo un rango de slots) y `fail` (camino muerto).
+- Cada lista de hilos tiene una fila de `nslots` por pc (el esquema del PikeVM de Rust `regex`). Al insertar un hilo en un pc se copia su vector: O(k) por transición.
+- Se descarta copy-on-write con conteo de referencias: añade gestión de refcounts en el bucle caliente, y con k pequeño copiar es más barato y más simple.
+- **Límite:** si `insts × nslots` supera 2²⁰, el patrón no es elegible (`too_large`) y va al backtracker.
+- **Clausura:** DFS con una pila de marcos de deshacer (`restore(slot, valor)` y `restore_range`); `save` y `clear` modifican el vector en curso y se restauran al volver. Las clausuras precalculadas de F4a solo se usan en tramos sin `save` ni `clear`.
+
+**D2. Deduplicación por pc.**
+- **Regla:** gana el primer hilo que llega a un pc, que es el de mayor prioridad, sean cuales sean sus capturas. El resto se descarta.
+- **Por qué es correcta:** en T0 el futuro de un hilo depende solo de (pc, pos): las capturas no afectan a qué iguala, porque no hay backreferences, y la iteración vacía no usa registros por hilo (D3). Dos hilos en el mismo (pc, pos) tienen los mismos futuros. El backtracker agota antes el de mayor prioridad, así que cualquier match que alcance el de menor prioridad lo alcanza antes el de mayor, con las capturas de este.
+- **Contrapositivo (vale para toda extensión futura):** esta regla se rompe si
+  - (a) hay backreferences;
+  - (b) hay iteración vacía con registros por hilo (una posición de entrada al bucle guardada en el hilo);
+  - (c) hay lookarounds con capturas que afectan a backreferences posteriores.
+
+  F4b asume que no se da ninguna. **Cualquier extensión que introduzca alguna (F6a, con backreferences y lookarounds delegados) invalida D2 y tiene que deduplicar por (pc, pos, estado de capturas)**, o limitar la VM a los tramos donde el estado no importa.
+
+**D3. Iteración vacía (RepeatMatcher: "si min = 0 y y.endIndex = x.endIndex, fallo"), por construcción producto, sin registros por hilo.**
+- **Qué copias se duplican:** cada copia **opcional** de un cuerpo anulable (las de `{n,m}` por encima de `n`, la de `?` y el bucle de `*` y `+`) se emite dos veces:
+  - **B0 (fase 0, nada consumido aún):** un clon de B1 en el que cada instrucción que consume salta a la sucesora de su original en B1, y cuyo final lleva a `fail`;
+  - **B1 (fase 1):** el cuerpo normal, cuyo final cierra la iteración.
+- **Entrada y reset:** la iteración entra por B0, después de `clear` de los grupos del cuerpo.
+- **Por qué es correcta:** el orden DFS de los caminos no cambia; solo se cortan los caminos que completan una iteración sin consumir. El backtracker hace lo mismo: la iteración vacía falla, se prueban las demás alternativas del cuerpo en orden y, al final, salir. Las capturas escritas en un camino cortado nunca llegan a `match`.
+- **Copias obligatorias** (por debajo de `min`): cuerpo normal. Ahí la iteración vacía está permitida, como en el spec.
+- **Anidamiento:** B0 es un clon de B1 entero, con sus propios bucles internos ya construidos. Consumir en la fase 0 del bucle exterior y en la fase 0 del interior lleva a la copia (1,1). El tamaño crece 2^d con d cuerpos anulables iterados anidados; el tope es `max_insts` y, si se pasa, `too_large` y backtracker.
+- **Corrección de F4a:** F4a permitía `{0,1}` sobre un cuerpo anulable sin el producto, argumentando que "no hay siguiente iteración". Para los límites del match daba igual, pero con capturas no: la iteración de `?` que iguala vacío también se rechaza. `(?:[^a]?(\x62?)?)` sobre `"\nab"` da `[0,1]` con el grupo 1 **sin definir** en V8, y `[1,1]` en el backtracker. Es una de las 44 divergencias T0 de `diff-F3d.json`.
+
+**Ejemplos trabajados (D3):**
+
+1. **`/(a*)*/` sobre `""`.** El bucle exterior es opcional y su cuerpo `(a*)` es anulable, así que lleva producto.
+   - En la posición 0, la rama de iterar hace `clear` de g1, entra en B0, guarda g1.inicio = 0, y el `a*` interior no puede consumir.
+   - Llegar al final de B0 sin consumir es `fail`: la iteración vacía se rechaza.
+   - La rama de salir (menor prioridad) iguala en 0 con g1 intacto, es decir, sin definir.
+   - **Resultado `["", undefined]`**, como V8. El backtracker actual da `["", ""]`.
+2. **`/(a*)+/` sobre `"aa"`.** `+` es una copia obligatoria más el bucle opcional.
+   - La obligatoria no lleva producto: g1 = [0,2].
+   - En la posición 2, el bucle intenta otra iteración: `clear` de g1, B0, g1.inicio = 2, nada que consumir, `fail`.
+   - La salida conserva g1 = [0,2], porque el `clear` era de la rama que murió y se deshizo.
+   - **Resultado `["aa", "aa"]`**, como V8. El backtracker actual da `["aa", ""]`: acepta la iteración vacía en la posición 2.
+   - Sobre `""`, la obligatoria iguala vacío (permitido) y la opcional se rechaza: **`["", ""]`**, como V8.
+3. **`/((a*)*)*/` (tres niveles; g1 el de fuera, g2 el de dentro), sobre `"a"` y sobre `""`.**
+   - Tanto el cuerpo de fuera como el del medio son anulables e iterados: el de fuera tiene B0/B1, y cada uno contiene el bucle del medio con su propio B0/B1. Salen 4 copias del `a*` de dentro, las fases (fuera, medio) = (0,0), (0,1), (1,0) y (1,1).
+   - **Sobre `"a"`:** en la posición 0, iterar fuera (`clear` g1 y g2, B0 de fuera, g1.inicio = 0) e iterar el medio (`clear` g2, B0 del medio, g2.inicio = 0). La `a` se consume desde la copia (0,0) y salta a (1,1).
+   - En la posición 1, dentro de (1,1):
+     - la iteración del medio termina (g2 = [0,1]);
+     - otra iteración del medio entra en su B0 y muere (vacía);
+     - la salida del medio cierra g1 = [0,1];
+     - la iteración de fuera termina;
+     - otra de fuera muere (vacía);
+     - la salida iguala.
+   - **Resultado sobre `"a"`: `["a", "a", "a"]`**, como V8.
+   - **Sobre `""`:** todas las iteraciones son vacías y se rechazan: **`["", undefined, undefined]`**, como V8. El backtracker actual da `["", "", ""]`.
+   - Los seis resultados atribuidos a V8 en estos ejemplos se comprobaron con Node al escribirlos, y los del backtracker con `Regex.find`.
+
+**D4. Reset por iteración.** `clear(lo, hi)` al entrar en **cada** iteración, obligatoria u opcional, sobre los grupos del cuerpo; son un rango contiguo, porque los índices se asignan en orden de apertura (RepeatMatcher, paso 4). La VM sigue el spec y no lee `syntax_form`: `a?` y `a{0,1}` se comportan igual.
+
+**D5. Dos pasadas, con este contrato:**
+1. La VM de F4a (sin capturas, con prefiltros) encuentra `[s, e]`.
+2. Solo si hay grupos, la tagged VM corre anclada en `s`. Usa **exactamente la misma lógica de prioridad y corte** que la primera; **los prefiltros solo se aplican en la primera**; se detiene cuando el hilo de mayor prioridad alcanza `e`.
+
+**Si la segunda pasada encuentra un fin distinto de `e`, es un bug de la VM y bloquea.** Test: las dos pasadas coinciden en `[s, e]` sobre el corpus entero (F4b(3)).
+
+**D6. Verificación.**
+- Diferencial interno VM contra backtracker con **todos los slots**, en todo el corpus (el de F2c más el de npm de F0c).
+- **Árbitro V8** para cada discrepancia: si V8 da la razón a la VM, es una mejora clasificada; si se la da al backtracker, es un bug de la VM y bloquea.
+- **Mutaciones:** orden del `split` en la clausura con capturas, sin `clear`, sin la fase 0.
+- **`differential-v8`:** las 44 divergencias T0 de `diff-F3d.json` deberían desaparecer; cualquier divergencia nueva o cambiada es un bug. Al cerrar se genera `diff-F4b.json`.
+- test262 y `test262-wtf8`.
+
+**D7. Bench.**
+- Casos T0 con capturas: `(\d{3})-(\d{4})` (disperso y denso), `(\w+)@(\w+)\.com` y `(?:(a)|b)*c`.
+- **Objetivos:**
+  - con captura, ≥ 50 % del throughput de `execAt` del mismo patrón sin grupos;
+  - overhead contra el backtracker dentro de §7.2;
+  - compilación ≤ 2×.
+- **Coste de compilación del producto (cierre 5):** se mide en F4b(1) sobre los patrones T0 con capturas del corpus; los que pasen de 2× se marcan `too_large` y van al backtracker, y se reporta cuántos son.
+
+**Sub-fases** (reporte y parada al final de cada una):
+- **F4b(1):** `save`, `clear` y `fail`; captura y reset en el compilador; producto; elegibilidad y límite de slots. Sin ejecución.
+- **F4b(2):** tagged VM y diferencial con árbitro V8.
+- **F4b(3):** dos pasadas y enrutado, fuzz y gate.
+- **F4b(4):** bench.
+- **F4b(5):** documentación y `diff-F4b.json`.
+
 ## 7. Plan de pruebas, fuzzing y benchmarks
 
 ### 7.1 Tipos de prueba

@@ -24,6 +24,16 @@ pub const Assert = enum {
 pub const Inst = union(enum) {
     /// One character whose decoded value is exactly this.
     char: u32,
+    /// Record the position in capture slot `n` (F4b). The VM without
+    /// captures passes over it.
+    save: u32,
+    /// Set capture slots `lo..hi` (exclusive) to "no match": the groups of
+    /// a repeat's body, at the start of each iteration (F4b; RepeatMatcher
+    /// step 4). The VM without captures passes over it.
+    clear: struct { lo: u32, hi: u32 },
+    /// A dead end: the end of an iteration that consumed nothing, where
+    /// ECMA-262 rejects it (F4b, `compile.zig`'s phase-0 copies).
+    fail,
     /// One character in `Program.sets[i]`.
     set: u32,
     /// Continue at `x` and at `y`, `x` first in priority.
@@ -40,12 +50,12 @@ pub const Set = struct {
     ascii: [2]u64,
 
     pub fn init(gpa: Allocator, set: CharSet) Allocator.Error!Set {
-        var ascii: [2]u64 = .{ 0, 0 };
+        var bits = std.bit_set.IntegerBitSet(128).initEmpty();
         for (set.ranges) |r| {
             if (r.lo >= 128) break;
-            var c = r.lo;
-            while (c <= @min(r.hi, 127)) : (c += 1) ascii[c / 64] |= @as(u64, 1) << @intCast(c % 64);
+            bits.setRangeValue(.{ .start = r.lo, .end = @as(usize, @min(r.hi, 127)) + 1 }, true);
         }
+        const ascii: [2]u64 = .{ @truncate(bits.mask), @truncate(bits.mask >> 64) };
         return .{ .set = try set.clone(gpa), .ascii = ascii };
     }
 
@@ -75,6 +85,9 @@ pub const Program = struct {
     sets: []const Set,
     /// One per pc (the VM's `addThread`); empty for a program built by hand.
     closures: []const Closure = &.{},
+    /// Capture slots: 2 per group, group 0 (the match) included. Programs
+    /// compiled without captures have just group 0.
+    nslots: u32 = 2,
     follow: []const u32 = &.{},
     /// Fast paths and the start-position skip (`prefilter.zig`); empty when
     /// compiled without them.
@@ -106,6 +119,9 @@ pub const Program = struct {
                 .jmp => |t| try w.print("jmp {d}\n", .{t}),
                 .assert => |a| try w.print("assert {s}\n", .{@tagName(a)}),
                 .match => try w.writeAll("match\n"),
+                .save => |n| try w.print("save {d}\n", .{n}),
+                .clear => |c| try w.print("clear {d}..{d}\n", .{ c.lo, c.hi }),
+                .fail => try w.writeAll("fail\n"),
             }
         }
     }
