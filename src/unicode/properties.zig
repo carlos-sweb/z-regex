@@ -123,6 +123,8 @@ pub const UnicodeProperty = enum(u8) {
     // DerivedNormalizationProps.txt.
     LC,
     Changes_When_NFKC_Casefolded,
+    // F5a(2): General_Category Cn (Unassigned), also part of C.
+    Cn,
 };
 
 /// Resolve a `\p{Name}` property name to a `UnicodeProperty`. Accepts a
@@ -351,6 +353,7 @@ fn rangesFor(cat: UnicodeProperty) []const CodepointRange {
         .Assigned => tables.RANGES_Assigned,
         .LC => tables.RANGES_LC,
         .Changes_When_NFKC_Casefolded => tables.RANGES_Changes_When_NFKC_Casefolded,
+        .Cn => tables.RANGES_Cn,
         // ASCII/Any are handled directly in isInCategory (no table needed).
         .ASCII, .Any => unreachable,
     };
@@ -445,6 +448,22 @@ test "properties: every UCD name resolves (F5a)" {
     try std.testing.expect(resolveUnicodeProperty("alpha") == null);
     try expect(resolveScript("Coptic").?, resolveScript("Qaac").?);
     try expect(resolveScript("Inherited").?, resolveScript("Qaai").?);
+}
+
+test "properties: Cn, C with Cn, Script=Unknown (F5a(2))" {
+    // U+038B is unassigned; U+0378 too; 'a' and U+E000 (Co) are assigned.
+    for ([_]u32{ 0x378, 0x38B, 0x10FFFF }) |cp| {
+        try std.testing.expect(isInCategory(cp, .Cn));
+        try std.testing.expect(isInCategory(cp, .C));
+        try std.testing.expect(isInScript(cp, resolveScript("Unknown").?));
+        try std.testing.expect(isInScriptExtensions(cp, resolveScript("Zzzz").?));
+    }
+    try std.testing.expect(!isInCategory('a', .Cn));
+    try std.testing.expect(isInCategory(0xE000, .C) and !isInCategory(0xE000, .Cn));
+    try std.testing.expect(!isInScript('a', resolveScript("Unknown").?));
+    try std.testing.expectEqual(UnicodeProperty.Cn, resolveUnicodeProperty("Unassigned").?);
+    // Katakana_Or_Hiragana (Hrkt) is a valid Script value with no code point.
+    try std.testing.expectEqual(@as(usize, 0), scriptRanges(resolveScript("Hrkt").?).len);
 }
 
 test "properties: LC is Lu | Ll | Lt" {

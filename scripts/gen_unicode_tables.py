@@ -316,6 +316,20 @@ def merge_range_tuples(ranges):
     return merged
 
 
+def complement_ranges(ranges):
+    """ranges: minimal sorted, merged (start, end) tuples. Returns the
+    code points of 0..0x10FFFF not in them, as the same kind of list."""
+    result = []
+    next_cp = 0
+    for start, end in ranges:
+        if start > next_cp:
+            result.append((next_cp, start - 1))
+        next_cp = end + 1
+    if next_cp <= 0x10FFFF:
+        result.append((next_cp, 0x10FFFF))
+    return result
+
+
 def subtract_codepoint(ranges, cp):
     """ranges: minimal sorted, merged (start, end) tuples. Returns a new list
     with a single codepoint `cp` removed, splitting a range in two if `cp`
@@ -421,10 +435,17 @@ def main():
         print("};")
         print()
 
+    # Cn (Unassigned): every code point UnicodeData.txt doesn't list. It is
+    # part of C (Other = Cc | Cf | Cn | Co | Cs), so it goes into `C` too.
+    unassigned = complement_ranges(merge_ranges(sorted(set(assigned_codepoints))))
+    by_category.setdefault("C", [])
     all_categories = MAJOR_CATEGORIES + minor_categories
     for cat in all_categories:
-        codepoints = sorted(set(by_category.get(cat, [])))
-        emit_range_table(cat, merge_ranges(codepoints))
+        ranges = merge_ranges(sorted(set(by_category.get(cat, []))))
+        if cat == "C":
+            ranges = merge_range_tuples(ranges + unassigned)
+        emit_range_table(cat, ranges)
+    emit_range_table("Cn", unassigned)
     # LC (Cased_Letter) is a General_Category value of its own: Lu | Ll | Lt.
     cased_letter = merge_ranges(sorted(set(by_category.get("Lu", []) + by_category.get("Ll", []) + by_category.get("Lt", []))))
     emit_range_table("LC", cased_letter)
@@ -487,6 +508,15 @@ def main():
     print()
 
     scripts = parse_all_scripts(scripts_path)
+    # Every Script value PropertyValueAliases.txt names is valid in
+    # `\\p{sc=...}`, including those Scripts.txt assigns no code point:
+    # `Unknown` (Zzzz) is every code point no other script has, and
+    # `Katakana_Or_Hiragana` (Hrkt) is empty.
+    for fields in parse_value_alias_lines(property_value_aliases_path, "sc"):
+        scripts.setdefault(fields[1], [])
+    scripts["Unknown"] = complement_ranges(
+        merge_range_tuples([r for name, rs in scripts.items() if name != "Unknown" for r in rs])
+    )
     script_names = sorted(scripts.keys())
     script_merged_ranges = {name: merge_range_tuples(scripts[name]) for name in script_names}
     print("pub const SCRIPT_NAMES: []const []const u8 = &.{")

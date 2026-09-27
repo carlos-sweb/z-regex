@@ -1154,11 +1154,11 @@ the code space), which dominate run time:
   `DerivedNormalizationProps.txt`): 110 entries of `property-escapes/generated` went
   from `zregex_compile_error` to pass. The group's run time stayed short (the whole
   UTF-16 run took 67 s), not the long first run the per-symbol loop suggested.
-  Still missing until F5a(2): `Cn`/`Unassigned` and `Script=Unknown`/`Zzzz`
-  (`sc` and `scx`), 6 entries.
-- **`\p{General_Category=Other}` doesn't include unassigned code points
-  (Cn)** (e.g. U+038B): a bug in the generated Unicode tables, not in the
-  `\p{}` logic (tracked in F5 with pinning the Unicode version).
+- **Fixed in F5a(2): unassigned code points.** `\p{General_Category=Other}` now
+  includes Cn (e.g. U+038B), `\p{Cn}`/`\p{Unassigned}` exist, and
+  `\p{Script=Unknown}`/`Zzzz` (`sc` and `scx`) is every code point no script has;
+  `Katakana_Or_Hiragana` (Hrkt) is a valid, empty Script value. The last 8 entries
+  of `property-escapes/generated` pass.
 - Known ECMA-262 deviations of the parser/matcher show up as expected:
   non-`u` `.` consuming a whole supplementary character and lone surrogate
   halves (D6) and lookbehind (D7). The rest of what this baseline showed

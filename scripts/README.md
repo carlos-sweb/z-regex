@@ -46,10 +46,10 @@ current list, 50 properties total), `Scripts.txt` (174 scripts, emitted as the
 constants -- see `src/unicode/README.md` for why), `PropertyValueAliases.txt`
 (`sc ; <short> ; <long>` lines, e.g. `sc ; Grek ; Greek`, resolved at generation time
 against `SCRIPT_NAMES` and emitted as `SCRIPT_ALIAS_NAMES`/`SCRIPT_ALIAS_INDICES` so
-`\p{Script=Grek}` works the same as `\p{Script=Greek}`; two aliases are always skipped
-and printed as `script_aliases_skipped=2` on stderr --
-`Zzzz -> Unknown` and `Hrkt -> Katakana_Or_Hiragana`, neither of which `Scripts.txt`
-actually assigns to any codepoint, so there's no `SCRIPT_NAMES` entry to point at), and
+`\p{Script=Grek}` works the same as `\p{Script=Greek}`; since F5a every Script value
+the file names has a `SCRIPT_NAMES` entry, including `Unknown` (Zzzz: every code point
+no other script has) and `Katakana_Or_Hiragana` (Hrkt: empty), so stderr prints
+`script_aliases_skipped=0`), and
 `ScriptExtensions.txt` (a few hundred codepoints, per UAX24, whose Script_Extensions
 set differs from their single-valued Script -- e.g. combining accents that are
 `Script=Inherited` but `scx` includes every script they're actually combined with;

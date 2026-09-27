@@ -2816,6 +2816,10 @@ test "Regex: \\p{...} by any UCD name: binary property short names and General_C
         .{ .pattern = "^\\p{scx=Qaai}$", .yes = "\u{200C}", .no = "a" }, // Inherited (U+0300 has other scx)
         .{ .pattern = "^\\p{CWKCF}$", .yes = "A", .no = "a" },
         .{ .pattern = "^\\p{Changes_When_NFKC_Casefolded}$", .yes = "\u{A0}", .no = "b" },
+        .{ .pattern = "^\\p{gc=Other}$", .yes = "\u{38B}", .no = "a" }, // F5a(2): C includes Cn
+        .{ .pattern = "^\\p{Cn}$", .yes = "\u{38B}", .no = "\u{E000}" },
+        .{ .pattern = "^\\p{sc=Unknown}$", .yes = "\u{38B}", .no = "a" },
+        .{ .pattern = "^\\p{scx=Zzzz}$", .yes = "\u{378}", .no = "a" },
     }) |c| {
         var re = try Regex.compileWithOptions(allocator, c.pattern, .{ .unicode = true });
         defer re.deinit();
