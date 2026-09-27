@@ -152,18 +152,23 @@ fn classRunOf(root: *const hir.Node) ?ClassRun {
 /// The units a match can start with, or null when a match can be empty
 /// (the closure from pc 0 reaches `match`) or can start anywhere.
 fn firstOf(prog: *const Program) ?First {
+    return firstOfWith(prog, max_scan);
+}
+
+/// `firstOf` with the scan's bound as a parameter (tests use a small one).
+fn firstOfWith(prog: *const Program, comptime scan: usize) ?First {
     // Built as bit sets (whole ranges per word, popcount to count), turned
     // into the lookup tables at the end.
     var utf8 = Bits.initEmpty();
     var utf16 = Bits.initEmpty();
     var high = false;
     // Depth-first over the epsilon closure of pc 0, asserts passed over.
-    var seen = std.StaticBitSet(max_scan).initEmpty();
+    var seen = std.StaticBitSet(scan).initEmpty();
     // Each visited pc pops one entry and pushes at most two: the depth
-    // stays within n + 1 (it was `max_scan`, one short at n = max_scan).
-    var stack: [2 * max_scan + 1]u32 = undefined;
+    // stays within n + 1 (it was `scan`, one short at n = scan; F4b(1)).
+    var stack: [2 * scan + 1]u32 = undefined;
     var sp: usize = 0;
-    if (prog.insts.len > max_scan) return null;
+    if (prog.insts.len > scan) return null;
     stack[0] = 0;
     sp = 1;
     while (sp != 0) {
@@ -331,4 +336,22 @@ test "anchored: ^ without m, not with m or in one alternative" {
     const x = try compile(testing.allocator, &scope(.{}, &alt));
     defer x.deinit(testing.allocator);
     try testing.expect(!x.prefilter.anchored);
+}
+
+test "firstOf: the DFS stack holds a closure n + 1 deep (regression, F4b(1))" {
+    // n splits, each `x` and `y` the next one, the last one pointing back
+    // to pc 0: visiting pc k pops one entry and pushes two, so the last
+    // split (k = n - 1) writes entries n - 1 and n: n + 1 entries. With the
+    // stack sized `scan` this indexed past its end at n = scan (a safety
+    // panic). Nothing consumes, so the table comes out empty.
+    const scan = 64;
+    var insts: [scan]program.Inst = undefined;
+    for (&insts, 0..) |*inst, k| {
+        const next: u32 = if (k + 1 < scan) @intCast(k + 1) else 0;
+        inst.* = .{ .split = .{ .x = next, .y = next } };
+    }
+    const p: Program = .{ .insts = &insts, .sets = &.{} };
+    const f = firstOfWith(&p, scan).?;
+    try testing.expectEqual(@as(?u8, null), f.single8);
+    for (f.utf8) |on| try testing.expect(!on);
 }
