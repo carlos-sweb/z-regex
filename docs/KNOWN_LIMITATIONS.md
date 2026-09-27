@@ -1239,8 +1239,20 @@ incorrect examples in this repository's own README and doc comments.
 
 ## Confirmed bugs (still open)
 
-*(none currently tracked here — see "Genuinely unimplemented" below for known gaps, all
-of which are scoped-out features, not bugs in what's implemented)*
+- **`\u{H+}` without `u`/`v` is read as a code point escape (D17)** *(found in F4b(2) by
+  the V8 arbiter; fix planned with the `u` grammar work of F5)*:
+
+  ```zig
+  Regex.compile(a, "\\u{1F600}"); // matches U+1F600; V8: `u` then the text "{1F600}"
+  Regex.compile(a, "\\u{2}");     // matches U+0002;  V8: "uu" (`u` quantified {2})
+  ```
+
+  Annex B reads `\u` not followed by 4 hex digits as the identity escape `u`, and the
+  `{...}` after it as a quantifier when it is one, literal text otherwise.
+  `parseUnicodeEscape` (`lexer.zig`) takes the `{H+}` branch whatever `unicode_mode`
+  says. Inside a group name, `\u{...}` is valid without `u` (ES2020) and works. No
+  test262 test depends on it (its `\u{` without `u` are group names or early errors),
+  and `differential-v8`'s generator never writes `\u{` without `u`, so neither gate saw it.
 
 ### Fixed in F2b
 

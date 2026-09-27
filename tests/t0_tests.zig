@@ -547,3 +547,54 @@ test "tagged VM gives V8's captures where the backtracker doesn't (empty iterati
         };
     }
 }
+
+test "tagged VM on the iteration corpus: V8's captures (F4b, D3 and D4)" {
+    // tests/corpus/iter_v8.tsv: one pattern in 8 of the iteration corpus
+    // (scripts/iter_corpus/gen.mjs), with V8's slots on each subject from
+    // index 0. The random corpora never exercise the per-iteration reset;
+    // this one does (a VM ignoring `clear` fails here).
+    const gpa = testing.allocator;
+    const subjects_iter = [_][]const u8{ "", "a", "ab", "abab", "aab c", "ba1b", "xabx", "1a2b3c" };
+    var vs: tier0.VmScratch = .init(gpa);
+    defer vs.deinit();
+    var lines = std.mem.splitScalar(u8, @embedFile("corpus/iter_v8.tsv"), '\n');
+    var checked: usize = 0;
+    while (lines.next()) |line| {
+        if (line.len == 0 or line[0] == '#') continue;
+        var cols = std.mem.splitScalar(u8, line, '\t');
+        const pattern = cols.next().?;
+        const prog = try tagged(gpa, pattern, .{});
+        defer prog.deinit(gpa);
+        const n = prog.nslots;
+        for (subjects_iter) |s| {
+            const want_col = cols.next().?;
+            var want: [8]?usize = undefined;
+            const found = !std.mem.eql(u8, want_col, "null");
+            if (found) {
+                var it = std.mem.splitScalar(u8, want_col, ',');
+                var k: usize = 0;
+                while (it.next()) |v| : (k += 1) want[k] = if (v[0] == '-') null else try std.fmt.parseInt(usize, v, 10);
+                try testing.expectEqual(n, k);
+            }
+            const s16 = try zregex.subject.utf16FromWtf8(gpa, s);
+            defer gpa.free(s16);
+            var got8: [8]?usize = undefined;
+            var got16: [8]?usize = undefined;
+            const found8 = try tier0.execCaptures(&prog, u8, s, .code_unit, 0, false, &vs, got8[0..n]);
+            const found16 = try tier0.execCaptures(&prog, u16, s16, .code_unit, 0, false, &vs, got16[0..n]);
+            testing.expectEqual(found, found8) catch |err| {
+                std.debug.print("/{s}/ on \"{s}\"\n", .{ pattern, s });
+                return err;
+            };
+            try testing.expectEqual(found, found16);
+            if (!found) continue;
+            testing.expectEqualSlices(?usize, want[0..n], got8[0..n]) catch |err| {
+                std.debug.print("/{s}/ on \"{s}\"\n", .{ pattern, s });
+                return err;
+            };
+            try testing.expectEqualSlices(?usize, want[0..n], got16[0..n]);
+            checked += 1;
+        }
+    }
+    try testing.expect(checked > 1000);
+}
