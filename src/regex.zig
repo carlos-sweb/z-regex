@@ -84,6 +84,13 @@ pub const ExecLimits = matcher_mod.ExecOptions;
 /// What `Regex.execAt` can fail with.
 pub const ExecError = matcher_mod.ExecError;
 
+/// How many executions broke D5's contract (the tagged VM's second pass
+/// didn't end where the first did) and were answered by the backtracker.
+/// Only builds without runtime safety get here (safe builds panic): a VM
+/// bug either way, never an error for the caller. The bench reports it;
+/// it must stay 0.
+pub var two_pass_fallbacks: std.atomic.Value(u64) = .init(0);
+
 /// Where `Regex.execAt` writes a match: `slots[2g]` and `slots[2g + 1]` are
 /// the start and end of group `g` in the subject's units (group 0 is the
 /// match), null for a group that didn't take part. At least
@@ -278,10 +285,27 @@ pub const Regex = struct {
     fn exec(self: *const Self, subject: Subject, index: usize, sticky: bool, scratch: *Scratch, slots: []?usize, limits: ExecLimits) ExecError!bool {
         scratch.acquire();
         defer scratch.release();
-        if (self.t0) |*p| return switch (subject) {
-            .wtf8 => |s| tier0.exec(p, u8, s, self.compiled.mode, index, sticky, &scratch.vm, slots),
-            .utf16 => |s| tier0.exec(p, u16, s, self.compiled.mode, index, sticky, &scratch.vm, slots),
-        };
+        if (self.t0) |*p| {
+            if (p.nslots == 2) return switch (subject) {
+                .wtf8 => |s| tier0.exec(p, u8, s, self.compiled.mode, index, sticky, &scratch.vm, slots),
+                .utf16 => |s| tier0.exec(p, u16, s, self.compiled.mode, index, sticky, &scratch.vm, slots),
+            };
+            // Groups: D5's two passes on the tagged VM (F4b).
+            const r = switch (subject) {
+                .wtf8 => |s| tier0.execCaptures(p, u8, s, self.compiled.mode, index, sticky, &scratch.vm, slots),
+                .utf16 => |s| tier0.execCaptures(p, u16, s, self.compiled.mode, index, sticky, &scratch.vm, slots),
+            };
+            if (r) |found| return found else |err| switch (err) {
+                // D5's contract broken: a VM bug. Never the caller's error:
+                // safe builds stop here; the others count it and answer
+                // with the backtracker.
+                error.TwoPassMismatch => {
+                    if (std.debug.runtime_safety) @panic("tier0: the tagged pass didn't end where the first one did (F4b D5)");
+                    _ = two_pass_fallbacks.fetchAdd(1, .monotonic);
+                },
+                else => |e| return e,
+            }
+        }
         const m = Matcher.initCompiled(self.allocator, self.compiled);
         return switch (subject) {
             .wtf8 => |s| m.exec(u8, s, index, sticky, &scratch.bt, slots, limits),

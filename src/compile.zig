@@ -108,15 +108,17 @@ pub const TierUnavailable = union(enum) {
     not_classifiable: classify.Unclassifiable,
     /// The pattern needs this tier (T1 or T2), above T0.
     tier_too_high: Tier,
-    /// T0, but not what the VM takes in F4a (captures, iterated nullable
-    /// bodies, raw pattern bytes).
+    /// T0, but not what the VM takes (F4b: a raw pattern byte, or a
+    /// tagged program over the slot bound).
     not_eligible: tier0.Ineligible,
     /// No executor for this tier exists yet (T1, F5).
     not_built: Tier,
 };
 
 /// Both programs of a pattern (F4a): the backtracker's, always, and T0's
-/// when the dispatcher routes the pattern to the VM.
+/// when the dispatcher routes the pattern to the VM: F4a's program when the
+/// pattern has no groups and no iterated nullable body, the tagged one
+/// (F4b, `nslots > 2` or phase products) otherwise.
 pub const Compiled = struct {
     bt: CompileResult,
     t0: ?tier0.Program,
@@ -134,18 +136,26 @@ pub fn compile(allocator: Allocator, pattern: []const u8, options: CompileOption
 
 /// Both programs, from one front end (F4a): the dispatcher classifies the
 /// HIR with `analyzeFrontend` (the same answer `analyze()` gives) and,
-/// when the pattern is T0 and the VM takes it (`tier0.check`), compiles
-/// T0's `Program` too. `force_tier` overrides the choice (see there).
+/// when the pattern is T0 and the VM takes it, compiles T0's `Program` too:
+/// F4a's when `tier0.check` accepts the HIR, the tagged one when only
+/// `checkTagged` does (F4b). `force_tier` overrides the choice (see there).
 pub fn compileTiers(allocator: Allocator, pattern: []const u8, options: CompileOptions) !Compiled {
     const fe = try frontend(allocator, pattern, options);
     defer fe.deinit();
-    const use_vm = try route(fe, options);
+    const program = try route(fe, options);
     const bt = try generate(allocator, fe, options);
     errdefer bt.deinit();
-    // `route` ran `tier0.check`.
-    const t0: ?tier0.Program = if (use_vm) try tier0.compileAccepted(allocator, fe.root, .{ .prefilters = options.t0_prefilters }) else null;
+    // `route` ran the check `compileAccepted` asserts.
+    const t0: ?tier0.Program = switch (program) {
+        .backtracker => null,
+        .plain => try tier0.compileAccepted(allocator, fe.root, .{ .prefilters = options.t0_prefilters }),
+        .tagged => try tier0.compileAccepted(allocator, fe.root, .{ .prefilters = options.t0_prefilters, .tagged = true }),
+    };
     return .{ .bt = bt, .t0 = t0 };
 }
+
+/// Where the dispatcher runs a pattern.
+const Route = enum { backtracker, plain, tagged };
 
 fn frontend(allocator: Allocator, pattern: []const u8, options: CompileOptions) !*lower_mod.Frontend {
     // ECMA-262: `u` and `v` together are a SyntaxError (the same check as
@@ -162,13 +172,13 @@ fn frontend(allocator: Allocator, pattern: []const u8, options: CompileOptions) 
     });
 }
 
-/// Whether the pattern runs on T0's VM, or `error.TierUnavailable` when
-/// `force_tier` asks for what it can't have.
-fn route(fe: *const lower_mod.Frontend, options: CompileOptions) error{TierUnavailable}!bool {
+/// Where the pattern runs, or `error.TierUnavailable` when `force_tier`
+/// asks for what it can't have.
+fn route(fe: *const lower_mod.Frontend, options: CompileOptions) error{TierUnavailable}!Route {
     // The build's `force_backtracker` (the second integration test run,
     // F4a(5)) makes `.expert` the default; an explicit `force_tier` wins.
     const force = options.force_tier orelse if (build_options.force_backtracker) Tier.expert else null;
-    if (force == .expert) return false;
+    if (force == .expert) return .backtracker;
     if (force == .unicode) return unavailable(options, .{ .not_built = .unicode });
     const analysis = classify.analyzeFrontend(fe, .{
         .i = options.case_insensitive,
@@ -178,13 +188,16 @@ fn route(fe: *const lower_mod.Frontend, options: CompileOptions) error{TierUnava
         .v = options.v,
         .y = options.sticky,
     });
-    const why: ?TierUnavailable = if (analysis.min_tier) |tier|
-        (if (tier != .regular) .{ .tier_too_high = tier } else if (tier0.check(fe.root)) |r| .{ .not_eligible = r } else null)
-    else
-        .{ .not_classifiable = analysis.unclassifiable.? };
-    const reason = why orelse return true;
-    if (force == .regular) return unavailable(options, reason);
-    return false;
+    const why: TierUnavailable = if (analysis.min_tier) |tier| blk: {
+        if (tier != .regular) break :blk .{ .tier_too_high = tier };
+        // F4a's program when it takes the pattern (no groups, no iterated
+        // nullable body): the same as the tagged one then, and cheaper.
+        if (tier0.check(fe.root) == null) return .plain;
+        const r = tier0.compile_mod.checkTagged(fe.root) orelse return .tagged;
+        break :blk .{ .not_eligible = r };
+    } else .{ .not_classifiable = analysis.unclassifiable.? };
+    if (force == .regular) return unavailable(options, why);
+    return .backtracker;
 }
 
 fn unavailable(options: CompileOptions, reason: TierUnavailable) error{TierUnavailable} {

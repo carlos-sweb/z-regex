@@ -106,6 +106,8 @@ pub const Scratch = @import("regex.zig").Scratch;
 pub const MatchSlots = @import("regex.zig").MatchSlots;
 pub const ExecLimits = @import("regex.zig").ExecLimits;
 pub const ExecError = @import("regex.zig").ExecError;
+/// D5 fallbacks of the tagged VM (F4b): must stay 0 (see there).
+pub const two_pass_fallbacks = &@import("regex.zig").two_pass_fallbacks;
 pub const test_ = @import("regex.zig").test_;
 pub const find = @import("regex.zig").find;
 pub const findAll = @import("regex.zig").findAll;

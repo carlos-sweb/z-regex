@@ -149,8 +149,18 @@ test "dispatcher: eligible T0 patterns go to the VM, the rest to the backtracker
     // Routing to the VM: not in the forced-backtracker run (F4a(5)).
     if (zregex.force_backtracker) return error.SkipZigTest;
     for (cases) |c| try testing.expect(try routedToVm(c[0], .{ .case_insensitive = c[1].i, .multiline = c[1].m, .dot_all = c[1].s }));
-    // Captures (F4b), T2, T1, a raw pattern byte.
-    for ([_][]const u8{ "(a)", "(?<n>a)b", "a(?=b)", "(a)\\1", "(?<=a)b", "\xE9", "(?:a?)*" }) |p|
+    // Groups and iterated nullable bodies: the tagged program (F4b).
+    for ([_]struct { []const u8, u32 }{ .{ "(a)", 4 }, .{ "(?<n>a)b", 4 }, .{ "(?:a?)*", 2 }, .{ "((a)|b)+", 6 } }) |c| {
+        const re = try zregex.Regex.compileWithOptions(testing.allocator, c[0], .{});
+        defer re.deinit();
+        try testing.expectEqual(c[1], re.t0.?.nslots);
+    }
+    // No groups, no nullable loop: F4a's program (no phase product).
+    const plain = try zregex.Regex.compileWithOptions(testing.allocator, "(?:ab)+", .{});
+    defer plain.deinit();
+    for (plain.t0.?.insts) |inst| try testing.expect(inst != .fail and inst != .clear);
+    // T2, T1, a raw pattern byte.
+    for ([_][]const u8{ "a(?=b)", "(a)\\1", "(?<=a)b", "\xE9" }) |p|
         try testing.expect(!try routedToVm(p, .{}));
     try testing.expect(!try routedToVm("a", .{ .unicode = true }));
     try testing.expect(!try routedToVm("a", .{ .v = true }));
@@ -196,10 +206,19 @@ test "force_tier .regular: the three reasons it can't be honored" {
     try expectUnavailable("\\p{L}", .{ .unicode = true }, .{ .tier_too_high = .unicode });
     try expectUnavailable("a(?=b)", .{}, .{ .tier_too_high = .expert });
     try expectUnavailable("(a)\\1", .{}, .{ .tier_too_high = .expert });
-    // T0, but not what the VM takes in F4a.
-    try expectUnavailable("(a)b", .{}, .{ .not_eligible = .capture });
-    try expectUnavailable("(?:a?)*", .{}, .{ .not_eligible = .nullable_repeat });
+    // T0, but not what the VM takes: a raw pattern byte, and a tagged
+    // program over the slot bound (1,200 groups: ~3,600 instructions x
+    // 2,402 slots > 2^20).
     try expectUnavailable("\xE9", .{}, .{ .not_eligible = .raw_byte });
+    const many = try std.mem.concat(testing.allocator, u8, &(.{"(a)"} ** 1200));
+    defer testing.allocator.free(many);
+    try expectUnavailable(many, .{}, .{ .not_eligible = .too_large });
+    // Groups and nullable loops compile onto the VM since F4b.
+    for ([_][]const u8{ "(a)b", "(?:a?)*" }) |p| {
+        const re = try zregex.Regex.compileWithOptions(testing.allocator, p, .{ .force_tier = .regular });
+        defer re.deinit();
+        try testing.expect(re.t0 != null);
+    }
     // An eligible pattern compiles onto the VM.
     const re = try zregex.Regex.compileWithOptions(testing.allocator, "a+b", .{ .force_tier = .regular });
     defer re.deinit();
@@ -288,6 +307,35 @@ test "execAt on the VM: a warm composite scratch allocates nothing" {
         _ = try re.execAt(.{ .utf16 = &s16 }, i, &scratch, &out, .{});
     }
     try testing.expectEqual(warm, failing.allocations);
+    try testing.expect(!scratch.in_use);
+}
+
+test "execAt on the tagged VM (F4b): a warm composite scratch allocates nothing" {
+    if (zregex.force_backtracker) return error.SkipZigTest;
+    const a = testing.allocator;
+    var failing: std.testing.FailingAllocator = .init(a, .{});
+    var scratch = zregex.Scratch.init(failing.allocator());
+    defer scratch.deinit();
+    for ([_][]const u8{ "(\\d{3})-(\\d{4})", "((a)|b)+c", "(?:x?)*y" }) |pattern| {
+        var re = try zregex.Regex.compile(a, pattern);
+        defer re.deinit();
+        try testing.expect(re.t0 != null);
+        var buf: [6]?usize = undefined;
+        var out: zregex.MatchSlots = .{ .slots = buf[0..re.slotCount()] };
+        const subject = "x555-1234 abac y";
+        _ = try re.execAt(.{ .wtf8 = subject }, 0, &scratch, &out, .{});
+        const warm = failing.allocations;
+        const s16 = try zregex.subject.utf16FromWtf8(a, subject);
+        defer a.free(s16);
+        _ = try re.execAt(.{ .utf16 = s16 }, 0, &scratch, &out, .{});
+        const warm16 = failing.allocations;
+        try testing.expectEqual(warm, warm16);
+        for (0..subject.len) |i| {
+            _ = try re.execAt(.{ .wtf8 = subject }, i, &scratch, &out, .{});
+            _ = try re.execAt(.{ .utf16 = s16 }, i, &scratch, &out, .{});
+        }
+        try testing.expectEqual(warm, failing.allocations);
+    }
     try testing.expect(!scratch.in_use);
 }
 

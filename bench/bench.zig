@@ -566,12 +566,16 @@ pub fn main(init: std.process.Init) !void {
     for (overhead) |r| try w.print("| {s} | {s} | {d:.1} | {d:.1} | {d:.1} | {d:.2} |\n", .{ r.name, r.engine, r.ns[0], r.ns[1], r.ns[2], r.ns[0] / r.ns[2] });
     try w.print("\n| Compile case | Routed to | Dispatcher (µs) | Backtracker only (µs) | Ratio |\n|---|---|---|---|---|\n", .{});
     for (compiles) |r| try w.print("| {s} | {s} | {d:.2} | {d:.2} | {d:.2} |\n", .{ r.name, r.engine, r.us, r.expert_us, r.us / r.expert_us });
+    // F4b: executions where the tagged VM's two passes disagreed (a VM bug,
+    // answered by the backtracker in unsafe builds); must be 0.
+    const fallbacks = zregex.two_pass_fallbacks.load(.monotonic);
+    try w.print("\nTagged VM, D5 two-pass fallbacks to the backtracker (must be 0): {d}\n", .{fallbacks});
     try std.Io.File.stdout().writeStreamingAll(io, buf.written());
 
     // JSON file.
     var json: std.Io.Writer.Allocating = .init(gpa);
     defer json.deinit();
-    try json.writer.print("{f}\n", .{std.json.fmt(.{ .input_bytes = INPUT_SIZE, .throughput = rows, .adversarial = adv, .exec_at = exec_rows, .overhead = overhead, .compile = compiles }, .{ .whitespace = .indent_1 })});
+    try json.writer.print("{f}\n", .{std.json.fmt(.{ .input_bytes = INPUT_SIZE, .throughput = rows, .adversarial = adv, .exec_at = exec_rows, .overhead = overhead, .compile = compiles, .two_pass_fallbacks = fallbacks }, .{ .whitespace = .indent_1 })});
     if (std.fs.path.dirname(out_path)) |dir| try std.Io.Dir.cwd().createDirPath(io, dir);
     try std.Io.Dir.cwd().writeFile(io, .{ .sub_path = out_path, .data = json.written() });
 }

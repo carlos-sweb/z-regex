@@ -37,6 +37,9 @@ pub const Stats = struct {
     executed: usize = 0,
     /// Executed patterns that ran on T0's VM, compared with the backtracker.
     engines_compared: usize = 0,
+    /// F4b: of `engines_compared`, the ones compared on the match bounds
+    /// only (a group inside a repeat: the backtracker's iteration bugs).
+    engines_bounds_only: usize = 0,
     /// Pattern×mode pairs that also went through the path audit (sampled).
     audited: usize = 0,
     skipped_expert: usize = 0,
@@ -143,19 +146,29 @@ fn sampled(pattern: []const u8) bool {
 }
 
 /// F4a audit: the dispatcher routes to T0's VM exactly the patterns
-/// `analyze()` puts in T0 and `tier0.check` accepts, and `force_tier`
-/// agrees with that routing.
+/// `analyze()` puts in T0 and `tier0.check` or (F4b) `checkTagged`
+/// accepts, with F4a's program (no `save`/`clear`/`fail`) when `check`
+/// does, and `force_tier` agrees with that routing.
 fn checkRouting(gpa: std.mem.Allocator, re: zregex.Regex, pattern: []const u8, options: zregex.CompileOptions, analysis: zregex.analysis.Analysis, mode: Mode) !void {
     stats.audited += 1;
     // The forced-backtracker run (F4a(5)) routes nothing to the VM.
     if (zregex.force_backtracker) return;
+    var plain = false;
     const eligible = blk: {
         if (analysis.min_tier != .regular) break :blk false;
         const fe = try zregex.lower.Frontend.init(gpa, pattern, .{ .unicode = options.unicode, .v = options.v }, .{});
         defer fe.deinit();
-        break :blk zregex.tier0.check(fe.root) == null;
+        plain = zregex.tier0.check(fe.root) == null;
+        break :blk plain or zregex.tier0.compile_mod.checkTagged(fe.root) == null;
     };
-    if (eligible != (re.t0 != null)) return reportDisagreement(pattern, mode, "analyze()+tier0.check and the dispatcher route differently");
+    if (eligible != (re.t0 != null)) return reportDisagreement(pattern, mode, "analyze()+tier0.check/checkTagged and the dispatcher route differently");
+    if (re.t0) |p| {
+        const tagged = for (p.insts) |inst| switch (inst) {
+            .save, .clear, .fail => break true,
+            else => {},
+        } else false;
+        if (plain and tagged) return reportDisagreement(pattern, mode, "tier0.check accepts it, but the dispatcher compiled a tagged program");
+    }
     var o = options;
     o.force_tier = .regular;
     if (zregex.Regex.compileWithOptions(gpa, pattern, o)) |forced| {
@@ -192,12 +205,40 @@ fn findMatchesExecAt(gpa: std.mem.Allocator, re: zregex.Regex, subject: []const 
 }
 
 /// F4a: T0's VM (`re`) and the backtracker give the same result.
+/// Whether a group sits inside a repeat other than `{1,1}`: there the
+/// backtracker neither resets it per iteration (D4) nor rejects an empty
+/// iteration (D3), and V8 sides with the VM (F4b(2)'s arbiter), so the
+/// engines are compared on the match bounds only.
+fn groupInRepeat(node: *const zregex.tier0.hir.Node, in_repeat: bool) bool {
+    return switch (node.*) {
+        .empty, .literal, .char_set, .backref, .assert => false,
+        .seq, .alt => |items| for (items) |item| {
+            if (groupInRepeat(item, in_repeat)) break true;
+        } else false,
+        .repeat => |r| groupInRepeat(r.body, in_repeat or !(r.min == 1 and r.max == 1)),
+        .capture => |c| in_repeat or groupInRepeat(c.body, in_repeat),
+        .look => |l| groupInRepeat(l.body, in_repeat),
+        .modifier_scope => |m| groupInRepeat(m.body, in_repeat),
+    };
+}
+
 fn compareEngines(gpa: std.mem.Allocator, re: zregex.Regex, pattern: []const u8, options: zregex.CompileOptions, audit: bool) !void {
     stats.engines_compared += 1;
     var o = options;
     o.force_tier = .expert;
     var bt = try zregex.Regex.compileWithOptions(gpa, pattern, o);
     defer bt.deinit();
+    const n = bt.slotCount();
+    const bounds_only = blk: {
+        const fe = try zregex.lower.Frontend.init(gpa, pattern, .{ .unicode = options.unicode, .v = options.v }, .{});
+        defer fe.deinit();
+        break :blk groupInRepeat(fe.root, false);
+    };
+    if (bounds_only) stats.engines_bounds_only += 1;
+    const b1 = try gpa.alloc(?usize, n);
+    defer gpa.free(b1);
+    const b2 = try gpa.alloc(?usize, n);
+    defer gpa.free(b2);
     var vm = re;
     var scratch = zregex.Scratch.init(gpa);
     defer scratch.deinit();
@@ -210,10 +251,8 @@ fn compareEngines(gpa: std.mem.Allocator, re: zregex.Regex, pattern: []const u8,
                 vm.sticky = sticky;
                 bt.sticky = sticky;
                 for (0..subj.len() + 1) |i| {
-                    var b1: [2]?usize = undefined;
-                    var b2: [2]?usize = undefined;
-                    var o1: zregex.MatchSlots = .{ .slots = &b1 };
-                    var o2: zregex.MatchSlots = .{ .slots = &b2 };
+                    var o1: zregex.MatchSlots = .{ .slots = b1 };
+                    var o2: zregex.MatchSlots = .{ .slots = b2 };
                     const expected = bt.execAt(subj, i, &scratch, &o2, .{}) catch |err| switch (err) {
                         error.OutOfMemory => return err,
                         // The backtracker's limits; the VM has none.
@@ -225,7 +264,8 @@ fn compareEngines(gpa: std.mem.Allocator, re: zregex.Regex, pattern: []const u8,
                         else => return err,
                     };
                     const got = try vm.execAt(subj, i, &scratch, &o1, .{});
-                    if (got != expected or (got and (b1[0] != b2[0] or b1[1] != b2[1]))) {
+                    const same = if (bounds_only) b1[0] == b2[0] and b1[1] == b2[1] else std.mem.eql(?usize, b1, b2);
+                    if (got != expected or (got and !same)) {
                         std.debug.print("\n/{s}/ on {x} ({s}) at {d}, sticky {}: the VM and the backtracker differ\n", .{ pattern, s8, @tagName(subj), i, sticky });
                         return error.EnginesDisagree;
                     }
