@@ -228,7 +228,7 @@ fn literalSearch(comptime Unit: type, input: []const Unit, needle: []const Unit,
         if (!std.mem.startsWith(Unit, input[index..], needle)) return null;
         return .{ index, index + needle.len };
     }
-    const at = std.mem.indexOfPos(Unit, input, index, needle) orelse return null;
+    const at = prefilter.findLiteral(Unit, input, index, needle) orelse return null;
     return .{ at, at + needle.len };
 }
 

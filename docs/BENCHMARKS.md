@@ -67,11 +67,17 @@ feature it lacks).
 
 Rounds: 10 interleaved; each cell: median (min–max) over the rounds.
 
+† z-regex literal cells re-measured after the SIMD literal search (`prefilter.findLiteral`):
+10 interleaved rounds of z-regex alone, new code against the previous one, same machine and
+harness; the other engines' cells are from the original run and `bench/results.json` still
+holds the original z-regex numbers. Before: execAt 926.3 (`hello`) and 886.5 (`Darcy`) MB/s.
+Measured on Xeon with SSE2 + AVX2 + AVX-512BW; other CPUs will see less.
+
 #### T0: findAll MB/s (allocating wrapper; V8 cold: new RegExp + first pass)
 
 | Case | z-regex | V8 (warm) | V8 (cold) | Rust regex | zig-regex |
 |---|---|---|---|---|---|
-| literal hello <sub>(z-regex: VM)</sub> | 927.0 (741.9–937.1) | 1689.8 (1584.7–1760.6) | 1439.8 (1308.0–1549.9) | 20505.7 (13435.3–20918.3) | — |
+| literal hello <sub>(z-regex: VM)</sub> | 12777.7 (10426.2–13342.6) † | 1689.8 (1584.7–1760.6) | 1439.8 (1308.0–1549.9) | 20505.7 (13435.3–20918.3) | — |
 | [a-z]+ <sub>(z-regex: VM)</sub> | 76.4 (67.2–82.9) | 103.6 (63.0–108.8) | 70.1 (57.7–73.5) | 71.8 (64.2–74.0) | — |
 | [a-z]+ (z-regex: generic VM, no fast path) <sub>(z-regex: VM)</sub> | 35.3 (26.5–36.5) | n/a | n/a | n/a | n/a |
 | [a-z]+ (z-regex: backtracker) <sub>(z-regex: backtracker)</sub> | 27.4 (24.9–28.5) | n/a | n/a | n/a | n/a |
@@ -81,7 +87,7 @@ Rounds: 10 interleaved; each cell: median (min–max) over the rounds.
 | (\d{3})-(\d{4}) (sparse) <sub>(z-regex: tagged VM)</sub> | 305.8 (179.9–319.1) | 1447.1 (1358.9–1522.9) | 412.6 (282.7–455.5) | 1121.1 (1025.4–1141.8) | — |
 | (\d{3})-(\d{4}) (dense) <sub>(z-regex: tagged VM)</sub> | 29.9 (18.2–32.4) | 172.8 (124.1–178.4) | 112.8 (79.0–117.6) | 67.2 (60.1–69.2) | — |
 | (?:(a)\|b)*c <sub>(z-regex: tagged VM)</sub> | 14.2 (12.3–14.6) | 36.6 (34.0–37.3) | 30.3 (22.4–31.5) | 48.3 (38.4–50.3) | — |
-| book: Darcy <sub>(z-regex: VM)</sub> | 828.7 (821.8–848.3) | 13344.8 (11562.6–14372.6) | 2700.9 (2275.3–3228.4) | 17748.2 (15611.5–18063.2) | — |
+| book: Darcy <sub>(z-regex: VM)</sub> | 9068.7 (6785.8–9879.5) † | 13344.8 (11562.6–14372.6) | 2700.9 (2275.3–3228.4) | 17748.2 (15611.5–18063.2) | — |
 | book: [A-Z][a-z]+ <sub>(z-regex: VM)</sub> | 283.2 (192.7–289.7) | 611.6 (561.1–638.9) | 172.8 (150.5–189.9) | 284.1 (259.2–288.7) | — |
 | book: (Mr\|Mrs\|Miss)\.? ([A-Z][a-z]+) <sub>(z-regex: tagged VM)</sub> | 606.6 (535.8–639.1) | 524.3 (498.0–536.9) | 394.7 (330.3–407.8) | 2111.0 (1273.6–2226.6) | — |
 
@@ -89,7 +95,7 @@ Rounds: 10 interleaved; each cell: median (min–max) over the rounds.
 
 | Case | z-regex | V8 (warm) | Rust regex | zig-regex |
 |---|---|---|---|---|
-| literal hello <sub>(z-regex: VM)</sub> | 943.1 (898.2–950.0) | 1791.8 (1501.9–1831.4) | 20999.1 (14847.4–21438.5) | — |
+| literal hello <sub>(z-regex: VM)</sub> | 16925.1 (15043.9–17551.6) † | 1791.8 (1501.9–1831.4) | 20999.1 (14847.4–21438.5) | — |
 | [a-z]+ <sub>(z-regex: VM)</sub> | 214.8 (154.0–222.5) | 116.7 (73.3–118.1) | 75.0 (71.9–76.4) | — |
 | [a-z]+ (z-regex: generic VM, no fast path) <sub>(z-regex: VM)</sub> | 53.1 (50.9–53.9) | n/a | n/a | n/a |
 | [a-z]+ (z-regex: backtracker) <sub>(z-regex: backtracker)</sub> | 40.3 (37.5–41.4) | n/a | n/a | n/a |
@@ -99,7 +105,7 @@ Rounds: 10 interleaved; each cell: median (min–max) over the rounds.
 | (\d{3})-(\d{4}) (sparse) <sub>(z-regex: tagged VM)</sub> | 358.9 (205.9–369.4) | 1629.6 (1558.0–1662.2) | 1493.7 (1326.7–1522.8) | — |
 | (\d{3})-(\d{4}) (dense) <sub>(z-regex: tagged VM)</sub> | 33.6 (29.9–34.4) | 198.5 (142.0–203.9) | 76.5 (52.7–79.0) | — |
 | (?:(a)\|b)*c <sub>(z-regex: tagged VM)</sub> | 15.5 (14.8–15.9) | 37.2 (34.1–38.1) | 58.4 (56.0–60.1) | — |
-| book: Darcy <sub>(z-regex: VM)</sub> | 885.5 (865.6–899.0) | 15514.4 (13534.5–15943.5) | 19231.8 (18352.9–19347.0) | — |
+| book: Darcy <sub>(z-regex: VM)</sub> | 15925.0 (14503.5–16229.5) † | 15514.4 (13534.5–15943.5) | 19231.8 (18352.9–19347.0) | — |
 | book: [A-Z][a-z]+ <sub>(z-regex: VM)</sub> | 400.7 (377.7–407.0) | 622.9 (380.5–647.4) | 290.1 (264.2–294.0) | — |
 | book: (Mr\|Mrs\|Miss)\.? ([A-Z][a-z]+) <sub>(z-regex: tagged VM)</sub> | 681.5 (511.0–730.7) | 532.0 (382.0–541.8) | 2662.5 (1712.1–2750.9) | — |
 
@@ -107,7 +113,7 @@ Rounds: 10 interleaved; each cell: median (min–max) over the rounds.
 
 | Case | z-regex | V8 (warm) | Rust regex | zig-regex |
 |---|---|---|---|---|
-| literal hello <sub>(z-regex: VM)</sub> | 27 (25–50) | 48 (46–60) | 19 (18–25) | 317 (305–353) |
+| literal hello <sub>(z-regex: VM)</sub> | 18 (18–19) † | 48 (46–60) | 19 (18–25) | 317 (305–353) |
 | [a-z]+ <sub>(z-regex: VM)</sub> | 15 (14–26) | 43 (41–49) | 52 (50–53) | 501 (484–606) |
 | [a-z]+ (z-regex: generic VM, no fast path) <sub>(z-regex: VM)</sub> | 85 (83–99) | n/a | n/a | n/a |
 | [a-z]+ (z-regex: backtracker) <sub>(z-regex: backtracker)</sub> | 107 (102–121) | n/a | n/a | n/a |
@@ -117,7 +123,7 @@ Rounds: 10 interleaved; each cell: median (min–max) over the rounds.
 | (\d{3})-(\d{4}) (sparse) <sub>(z-regex: tagged VM)</sub> | 425 (410–516) | 68 (66–76) | 102 (98–123) | 2986 (2884–3059) |
 | (\d{3})-(\d{4}) (dense) <sub>(z-regex: tagged VM)</sub> | 410 (398–445) | 66 (63–72) | 101 (98–160) | 3015 (2889–3450) |
 | (?:(a)\|b)*c <sub>(z-regex: tagged VM)</sub> | 463 (444–508) | 47 (44–78) | 95 (91–101) | 3174 (3053–3384) |
-| book: Darcy <sub>(z-regex: VM)</sub> | 26 (25–26) | 44 (41–44) | 18 (17–19) | 311 (304–348) |
+| book: Darcy <sub>(z-regex: VM)</sub> | 18 (18–20) † | 44 (41–44) | 18 (17–19) | 311 (304–348) |
 | book: [A-Z][a-z]+ <sub>(z-regex: VM)</sub> | 135 (131–227) | 47 (45–70) | 62 (59–68) | 1478 (1434–1503) |
 | book: (Mr\|Mrs\|Miss)\.? ([A-Z][a-z]+) <sub>(z-regex: tagged VM)</sub> | 633 (607–656) | 62 (60–65) | 119 (114–128) | 7338 (7234–7427) |
 
@@ -290,8 +296,9 @@ Reference: V8 warm, `execAt` column, unless said otherwise. Factors are ratios o
   (findAll).
 - `[A-Z][a-z]+` on the book: 1.38× Rust regex (execAt); in findAll, 1.64× V8 cold (and 1.54×
   V8 cold for the title pattern).
-- Short inputs where a fast path applies: literal 27 ns (V8 48, 1.76×), `[a-z]+` 15 ns (V8
-  43, 2.87×; Rust 52, 3.45×).
+- Literal `hello` (SIMD pair search, †): 9.4× V8 in execAt, 7.6× V8 in findAll.
+- Short inputs where a fast path applies: literal 18 ns (V8 48, 2.7×; Rust 19), `[a-z]+`
+  15 ns (V8 43, 2.87×; Rust 52, 3.45×).
 - Memory per compiled pattern: 185–880 bytes on T0, against 1–9 KB for zig-regex and
   0.7–1.3 KB for PCRE2 with JIT.
 - Compile time against Rust regex: 1.6–70× less on T0 and 80–450× less on T1 (Rust builds
@@ -305,11 +312,16 @@ Reference: V8 warm, `execAt` column, unless said otherwise. Factors are ratios o
 - `[a-z]+` findAll against Rust regex (1.06×) and against V8 cold (1.09×).
 - `[A-Z][a-z]+` findAll against Rust regex (1.00×).
 - `\d{3}-\d{4}` sparse findAll against V8 cold (0.99×).
+- Literal `Darcy` execAt against V8 (1.03×, †).
 
 **Where it's behind, and why**
-- **Literals**: 1.9× behind V8 on `hello`, 17× on `Darcy`; ~22× behind Rust on both. V8 uses
-  Boyer-Moore-Horspool for literal atoms and Rust uses a SIMD `memmem`; z-regex's literal fast
-  path is `std.mem.indexOfPos`, without SIMD.
+- **Literals** (†): 1.24× (`hello`) and 1.21× (`Darcy`) behind Rust in execAt; in findAll,
+  1.6× / 2.0× behind Rust and 1.47× behind V8 on `Darcy` (the allocating wrapper's cost per
+  call). z-regex searches the first and last bytes of the literal in pairs of vectors whose
+  width is fixed at compile time (scalar search when the target has no vectors), without
+  Rust's per-case selection: Rust's `memchr` picks the two rarest bytes of each needle,
+  chooses AVX2 or SSE2 at run time, and falls back to Two-Way. Measured on Xeon with SSE2 +
+  AVX2 + AVX-512BW; other CPUs will see less.
 - **`\d{3}-\d{4}`**: 2.1× (sparse) and 5.2× (dense) behind V8. V8 compiles the regexp to
   machine code (JIT); z-regex interprets a Pike VM that steps every live thread per input
   position, with no DFA. Rust regex's lazy DFA is 3.6× / 2× ahead.

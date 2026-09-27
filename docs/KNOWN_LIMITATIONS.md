@@ -5,7 +5,7 @@ zregex regex engine. Every claim below was checked by direct execution against t
 current source tree (compiling small probe programs against the `zregex` module and
 observing the actual result), not inferred from design docs or past status reports.
 
-## Version: 0.3.0 (T0 closed: F4a and F4b, test262 2856/3017; see "F4a" and "F4b" below). v0.2.0 was F1 (test262 2846/3017, see "F1 closed" below). The rest of this
+## Version: 0.3.1 (0.3.0 plus the SIMD pairwise literal search in the literal fast path). 0.3.0 closed T0: F4a and F4b, test262 2856/3017; see "F4a" and "F4b" below. v0.2.0 was F1 (test262 2846/3017, see "F1 closed" below). The rest of this
 header describes the earlier state: 402/402 unit/integration tests passing, 168/168 (100%) on a test262-derived
 conformance sample (Phases 0, 1, 2 (now including duplicate named groups across
 mutually exclusive alternation branches, e.g. `(?<x>a)|(?<x>b)`, matching JS exactly),
@@ -889,7 +889,7 @@ time, used in code-unit mode (all of T0):
 | Prefilter | When | What |
 |---|---|---|
 | `anchored` | `^` without `m` leads every path | from an index above 0, no match; from 0, only at 0 |
-| `literal` | the whole pattern is one literal, without `i` on a letter, surrogates, astral or raw bytes | `std.mem.indexOfPos`, no VM |
+| `literal` | the whole pattern is one literal, without `i` on a letter, surrogates, astral or raw bytes | `prefilter.findLiteral` (SIMD first/last-byte pair search; scalar without vectors), no VM |
 | `class_run` | greedy `C+`/`C*` over an ASCII class | the first member, then the longest run, no VM |
 | `first` | anything non-nullable | skips positions where no match can start, while no thread is alive |
 
