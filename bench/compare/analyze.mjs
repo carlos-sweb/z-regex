@@ -47,7 +47,7 @@ for (const r of rounds) {
     for (const c of out.cases) {
       const engine = c.engine ?? name;
       if (c.error) { notes[`${engine}/${c.id}`] = c.error; continue; }
-      for (const m of ['findall_mbps', 'execat_mbps', 'short_ns', 'compile_us', 'bytes', 'mbps', 'ms']) put(engine, c.id, m, c[m]);
+      for (const m of ['findall_mbps', 'execat_mbps', 'iter_mbps', 'short_ns', 'compile_us', 'bytes', 'mbps', 'ms']) put(engine, c.id, m, c[m]);
       if (c.route) notes[`${engine}/${c.id}/route`] = c.route;
       if (c.matches !== undefined) notes[`${engine}/${c.id}/matches`] = c.matches;
     }
@@ -93,6 +93,7 @@ const label = { zregex: 'z-regex', v8: 'V8 (warm)', v8_cold: 'V8 (cold)', rust: 
 const metrics = [
   ['findall_mbps', 'findAll MB/s (allocating wrapper; V8 cold: new RegExp + first pass)', 1],
   ['execat_mbps', 'execAt MB/s (engine loop, no per-match allocation where the API allows)', 1],
+  ['iter_mbps', 'z-regex iterator MB/s (Regex.iterator: every match, warm Scratch, no allocation)', 1],
   ['short_ns', 'ns per exec on a short input (< 64 B)', 0],
   ['compile_us', 'µs per compile', 2],
   ['bytes', 'bytes per compiled pattern', 0],
@@ -101,7 +102,7 @@ let md = `Rounds: ${rounds.length} interleaved; each cell: median (min–max) ov
 for (const [tier, engines] of Object.entries(tiers)) {
   const tc = cases.filter((c) => c.tier === tier);
   for (const [m, title, d] of metrics) {
-    const cols = engines.filter((e) => tc.some((c) => summary[e]?.[c.id]?.[m === 'findall_mbps' && e === 'v8_cold' ? 'mbps' : m] || notes[`${e}/${c.id}`]));
+    const cols = engines.filter((e) => (m !== 'iter_mbps' || e === 'zregex') && tc.some((c) => summary[e]?.[c.id]?.[m === 'findall_mbps' && e === 'v8_cold' ? 'mbps' : m] || notes[`${e}/${c.id}`]));
     if (!cols.length) continue;
     md += `\n#### ${tier}: ${title}\n\n| Case | ${cols.map((e) => label[e]).join(' | ')} |\n|---|${cols.map(() => '---').join('|')}|\n`;
     for (const c of tc) {

@@ -5,8 +5,9 @@
 //!
 //! Per case: findAll MB/s (`Regex.findAll`, the allocating facade), execAt
 //! MB/s (a loop of `execAt` + `advanceIndex` with a warm `Scratch`: 0
-//! allocations), ns per `execAt` on the case's short input, µs per compile
-//! and the bytes the compiled `Regex` keeps (live allocations after
+//! allocations), iter MB/s (`Regex.iterator` with a warm `Scratch`: 0
+//! allocations, the same matches as findAll), ns per `execAt` on the
+//! case's short input, µs per compile and the bytes the compiled `Regex` keeps (live allocations after
 //! `compileWithOptions`). Throughput: one warm-up pass, then the median of up
 //! to 5 timed passes (5 s budget).
 
@@ -120,6 +121,15 @@ fn findAllPass(c: FindAllCtx) anyerror!usize {
     return n;
 }
 
+fn iterPass(c: ExecCtx) anyerror!usize {
+    var buf: [64]?usize = undefined;
+    var out: zregex.MatchSlots = .{ .slots = buf[0..c.re.slotCount()] };
+    var it = c.re.iterator(.{ .wtf8 = c.input }, c.scratch, &out, .{});
+    var n: usize = 0;
+    while (try it.next()) |_| n += 1;
+    return n;
+}
+
 const ExecCtx = struct { re: *const zregex.Regex, input: []const u8, scratch: *zregex.Scratch };
 fn execPass(c: ExecCtx) anyerror!usize {
     var buf: [64]?usize = undefined;
@@ -208,6 +218,8 @@ pub fn main(init: std.process.Init) !void {
         defer scratch.deinit();
         const fa = try timed(io, input.len, FindAllCtx{ .re = &re, .input = input, .gpa = gpa }, findAllPass);
         const ex = try timed(io, input.len, ExecCtx{ .re = &re, .input = input, .scratch = &scratch }, execPass);
+        const it = try timed(io, input.len, ExecCtx{ .re = &re, .input = input, .scratch = &scratch }, iterPass);
+        if (it.matches != fa.matches) return error.IteratorCountMismatch;
 
         // Short input: ns per execAt from 0 (search), warm scratch.
         var buf: [64]?usize = undefined;
@@ -225,8 +237,8 @@ pub fn main(init: std.process.Init) !void {
 
         if (!first) try w.writeAll(",");
         first = false;
-        try w.print("{{\"id\":\"{s}\",\"route\":\"{s}\",\"findall_mbps\":{d:.3},\"execat_mbps\":{d:.3},\"matches\":{d},\"exec_matches\":{d},\"short_ns\":{d:.2},\"compile_us\":{d:.3},\"bytes\":{d}}}", .{
-            c.id, engineName(re), fa.mbps, ex.mbps, fa.matches, ex.matches, samples[5], @as(f64, @floatFromInt(cs[10])) / 1e3, bytes,
+        try w.print("{{\"id\":\"{s}\",\"route\":\"{s}\",\"findall_mbps\":{d:.3},\"execat_mbps\":{d:.3},\"iter_mbps\":{d:.3},\"matches\":{d},\"exec_matches\":{d},\"short_ns\":{d:.2},\"compile_us\":{d:.3},\"bytes\":{d}}}", .{
+            c.id, engineName(re), fa.mbps, ex.mbps, it.mbps, fa.matches, ex.matches, samples[5], @as(f64, @floatFromInt(cs[10])) / 1e3, bytes,
         });
     }
     try w.writeAll("]}\n");
