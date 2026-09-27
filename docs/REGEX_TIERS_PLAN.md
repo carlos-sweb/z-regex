@@ -513,7 +513,7 @@ Un consumidor que solo necesite T0 puede importar `zregex-t0` y no enlaza las ~3
 | **F6b — Lookbehind** | Matching hacia atrás (D7): IR invertido, instrucciones de consumo en dirección −1 para ambos encodings, cambio de dirección lookahead↔lookbehind anidados, backrefs hacia atrás, `LookLinear` backward con programas invertidos. | test262 `lookBehind` en verde; diferencial contra V8 en lookbehind sin discrepancias; `recursive_matcher.zig` sin usos.  **Aviso (F3d):** F6b reescribe el lookbehind por completo, así que el número del bench de `(?<=\$)\d+` va a cambiar. No tomar la referencia de F3d (0,59 MB/s) como objetivo de F6b. |
 | **F6b — Plan B** | Si F6b no cierra dentro de su timebox (se fija al iniciar F6b; **no hay datos de velocidad para proponer una cifra**): se publica **sin lookbehind**. Los patrones con `(?<=…)`/`(?<!…)` fallan en `compile` con `error.UnsupportedFeature` (no `SyntaxError`, porque el patrón es válido) y se documenta en `docs/KNOWN_LIMITATIONS.md` como limitación conocida. **No** se conserva la implementación actual con ventana de 100 bytes, porque da resultados incorrectos en silencio. | Limitación documentada; tests que verifican el error explícito. **Impacto:** hoy el repo acepta lookbehind (con D7), así que el plan B es una regresión funcional para los consumidores actuales; se acepta a cambio de no dar resultados incorrectos (ver P10). |
 | **F6b — Nota de F0d** | Dado el throughput medido en F0d (`(?<=\$)\d+` a 0,27–0,34 MB/s, ~74× por debajo del objetivo de ≥ 20 MB/s), **el plan B (publicar sin lookbehind) no es solo una defensa: es una opción razonable si el timebox se agota.** La decisión de intentar F6b completo debe justificarse contra el uso real del feature (F0c), no contra la completitud del spec. | — |
-| **F7 — Endurecimiento** | Enforcement final de dependencias en el build; suite de benchmarks; retirar `recursive_matcher.zig`; telemetría opcional de Tiers para el host. Actualizar `docs/ARCHITECTURE.md` y `docs/PROJECT_STRUCTURE.md` (movido desde F0d). | Conformidad test262 medida y publicada en `docs/KNOWN_LIMITATIONS.md`. |
+| **F7 — Endurecimiento** | **Backlog (F5a):** reducir el coste fijo de `tier0.compile` (tablas de clausuras, `follow`); afecta a T0 desde F4a y a T1 desde F5a; no bloqueante, los tiempos absolutos son µs. Enforcement final de dependencias en el build; suite de benchmarks; retirar `recursive_matcher.zig`; telemetría opcional de Tiers para el host. Actualizar `docs/ARCHITECTURE.md` y `docs/PROJECT_STRUCTURE.md` (movido desde F0d). | Conformidad test262 medida y publicada en `docs/KNOWN_LIMITATIONS.md`. |
 
 ### 6.4 Agnosticismo e integración con un motor JS
 
@@ -692,7 +692,7 @@ Este objetivo **no bloquea F4a**: el throughput de literal no es un límite de c
 **Overhead aceptado frente al backtracker actual.** En patrones triviales con entradas cortas, la Pike VM puede ser más lenta que el backtracker, que tiene un solo cursor y no gestiona hilos. Se acepta:
 - hasta **1,5×** el tiempo por `exec` con entradas < 64 B;
 - hasta **1,2×** con entradas ≥ 1 KB;
-- hasta **2×** en tiempo de compilación.
+- hasta **2×** en tiempo de compilación frente a `.expert`, **o ≤ +2 µs absoluto, lo que se cumpla antes** (ajustado en F5a: el `Program` de la VM tiene un coste fijo de ~0,4–0,9 µs que en patrones mínimos pasa de 2×; ya pasaba en T0 desde F4a, `\d` 2,72×, sin que el gate lo midiera; ver `KNOWN_LIMITATIONS.md` § F5a).
 
 El costo se justifica por la garantía de tiempo lineal. Los porcentajes son una política propuesta, no un dato.
 

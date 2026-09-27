@@ -89,7 +89,9 @@ pub const CompileOptions = struct {
     /// pattern. Null: the dispatcher decides (T0's VM when the pattern is
     /// eligible, the backtracker otherwise). `.regular`: T0's VM, or
     /// `error.TierUnavailable` when the pattern can't run on it. `.expert`:
-    /// the backtracker. `.unicode`: `error.TierUnavailable` until F5.
+    /// the backtracker. `.unicode`: T0's VM for a T0 pattern or a T1 one
+    /// the VM takes (F5a: `u` and `\p` without Unicode case folding),
+    /// `error.TierUnavailable` otherwise.
     force_tier: ?Tier = null,
 
     /// Where `compile` writes why it failed with `error.TierUnavailable`.
@@ -111,7 +113,8 @@ pub const TierUnavailable = union(enum) {
     /// T0, but not what the VM takes (F4b: a raw pattern byte, or a
     /// tagged program over the slot bound).
     not_eligible: tier0.Ineligible,
-    /// No executor for this tier exists yet (T1, F5).
+    /// What this tier needs isn't built yet: T1's Unicode case folding
+    /// (F5b), `v` (F5c) and large counted repeats stay on the backtracker.
     not_built: Tier,
 };
 
@@ -145,11 +148,14 @@ pub fn compileTiers(allocator: Allocator, pattern: []const u8, options: CompileO
     const program = try route(fe, options);
     const bt = try generate(allocator, fe, options);
     errdefer bt.deinit();
-    // `route` ran the check `compileAccepted` asserts.
+    // `route` ran the check `compileAccepted` asserts. The VM uses the
+    // prefilters in code-unit mode only (`tier0.exec`), so a `u`/`v` pattern
+    // (code-point mode, F5a) doesn't pay for their analysis.
+    const prefilters = options.t0_prefilters and !options.unicode and !options.v;
     const t0: ?tier0.Program = switch (program) {
         .backtracker => null,
-        .plain => try tier0.compileAccepted(allocator, fe.root, .{ .prefilters = options.t0_prefilters }),
-        .tagged => try tier0.compileAccepted(allocator, fe.root, .{ .prefilters = options.t0_prefilters, .tagged = true }),
+        .plain => try tier0.compileAccepted(allocator, fe.root, .{ .prefilters = prefilters }),
+        .tagged => try tier0.compileAccepted(allocator, fe.root, .{ .prefilters = prefilters, .tagged = true }),
     };
     return .{ .bt = bt, .t0 = t0 };
 }
@@ -179,7 +185,6 @@ fn route(fe: *const lower_mod.Frontend, options: CompileOptions) error{TierUnava
     // F4a(5)) makes `.expert` the default; an explicit `force_tier` wins.
     const force = options.force_tier orelse if (build_options.force_backtracker) Tier.expert else null;
     if (force == .expert) return .backtracker;
-    if (force == .unicode) return unavailable(options, .{ .not_built = .unicode });
     const analysis = classify.analyzeFrontend(fe, .{
         .i = options.case_insensitive,
         .m = options.multiline,
@@ -189,15 +194,34 @@ fn route(fe: *const lower_mod.Frontend, options: CompileOptions) error{TierUnava
         .y = options.sticky,
     });
     const why: TierUnavailable = if (analysis.min_tier) |tier| blk: {
-        if (tier != .regular) break :blk .{ .tier_too_high = tier };
+        switch (tier) {
+            .regular => {},
+            // F5a: T1 without folding runs on T0's VM, in code-point mode;
+            // `.regular` still asks for T0 itself.
+            .unicode => if (force == .regular) break :blk .{ .tier_too_high = tier } else if (!vmTakesUnicode(analysis)) break :blk .{ .not_built = tier },
+            .expert => break :blk .{ .tier_too_high = tier },
+        }
         // F4a's program when it takes the pattern (no groups, no iterated
         // nullable body): the same as the tagged one then, and cheaper.
         if (tier0.check(fe.root) == null) return .plain;
         const r = tier0.compile_mod.checkTagged(fe.root) orelse return .tagged;
         break :blk .{ .not_eligible = r };
     } else .{ .not_classifiable = analysis.unclassifiable.? };
-    if (force == .regular) return unavailable(options, why);
+    if (force == .regular or force == .unicode) return unavailable(options, why);
     return .backtracker;
+}
+
+/// Whether T0's VM takes a T1 pattern (F5a): its T1 features are only `u`
+/// mode and `\p{...}`, which are HIR sets the VM already matches in
+/// code-point mode. Unicode case folding (F5b), `v` (F5c, its test262 part
+/// is still skipped) and large counted repeats stay on the backtracker.
+fn vmTakesUnicode(analysis: classify.Analysis) bool {
+    var it = analysis.reasons().iterator();
+    while (it.next()) |f| switch (f) {
+        .unicode_mode, .property_escape => {},
+        else => return false,
+    };
+    return true;
 }
 
 fn unavailable(options: CompileOptions, reason: TierUnavailable) error{TierUnavailable} {

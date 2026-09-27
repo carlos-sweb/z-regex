@@ -95,19 +95,18 @@ round, a harness bug.
 `zig build differential-v8` (`differential.mjs`) is compared against a committed
 reference run, not against zero:
 
-- **Current reference:** `tests/differential/reference/diff-F4b.json` (F4b closed), generated
-  with UTF-16 subjects. It has 477 different results and 17 `StepLimitExceeded`, all on
-  the backtracker: 470 T2 patterns and 7 T1 (by `analyze()`), with the backtracker's
-  iteration semantics (captures not reset per iteration, empty iterations accepted) and
-  backreferences, for F5/F6a; no T0 pattern is left. Against `diff-F3d.json` (536 + 17,
-  now in `archive/`), the 59 T0 divergences are gone since F4b(3) routes groups and
-  nullable loops to the tagged VM; none appeared, none changed.
+- **Current reference:** `tests/differential/reference/diff-F5a.json` (F5a), generated
+  with UTF-16 subjects. It has 471 different results and 17 `StepLimitExceeded`, all on
+  the backtracker: 470 T2 patterns and 1 T1 (by `analyze()`). Against `diff-F4b.json`
+  (now in `archive/`), 6 divergences on T1 patterns with `u` and no case folding are
+  gone, since F5a(3) routes those patterns to T0's VM; none appeared, none changed.
 - **Lifecycle:**
   - The current reference is the entry reference of the next phase. `diff-F3d.json` was
     F4a's, and F4a closed identical to it (0 gone, 0 appeared, 0 changed, in both
     encodings), so no `diff-F4a.json` was generated: `diff-F3d.json` was also F4b's
     entry reference. F4b changed results (the 59 T0 divergences), so it closed with
-    `diff-F4b.json`, the entry reference of F5.
+    `diff-F4b.json`, the entry reference of F5. F5a changed results (6 T1
+    divergences gone), so it closed with `diff-F5a.json`.
   - A phase that changes the executor but not the semantics (F4a) must not add any
     divergence against it. That is its gate.
   - When the phase closes, a new reference (`diff-F4a.json`, ...) is generated only if

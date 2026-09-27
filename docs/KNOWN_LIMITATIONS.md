@@ -1052,6 +1052,64 @@ phase product). D5 fallbacks to the backtracker (`two_pass_fallbacks`): 0 in eve
   F4a(4)A's prefilter). After T0, decide how to measure without depending on LLVM's
   layout: separate binaries, more runs, or `-fno-llvm` for the bench.
 
+### F5a: `u` and `\p{...}` on T0's VM, every UCD property name
+
+**Property names (F5a(1), F5a(2)).** Tables regenerated from UCD 17.0.0 (pinned; the
+Unicode Consortium's `unicodetools` copy of `Public/17.0.0/ucd`), now also from
+`PropertyAliases.txt` and `DerivedNormalizationProps.txt`: binary property short names
+(`\p{Alpha}`, `\p{space}`, ...), every General_Category value alias (`LC`, `cntrl`,
+`digit`, `punct`, `Combining_Mark`, ...), every Script alias (`Qaac`, `Qaai`),
+`Changes_When_NFKC_Casefolded`, `Cn`/`Unassigned`, `C` with Cn, and `Script=Unknown`
+(`sc`/`scx`). test262: the 118 non-passing entries of `property-escapes/generated` pass,
+2856 -> 2974/3017, the same in UTF-16 and WTF-8.
+
+**Routing (F5a(3)).** A T1 pattern whose T1 features are only `u` mode and `\p{...}`
+runs on T0's VM (plain or tagged), in code-point mode; `force_tier = .unicode` asks for
+that route. Still on the backtracker: Unicode case folding (`i` with `u`/`v` or non-ASCII
+content, F5b), `v` (F5c; its 275 test262 entries are still skipped by
+`scripts/test262/features.json`), and large counted repeats. Corpus coverage: 6,716 of
+the 14,061 T1 patterns of the F2c and F0c (npm) corpora move to the VM.
+
+**Differential.** VM against the backtracker on those 6,716 patterns, every slot, every
+index, sticky and not, UTF-16 and WTF-8 (5.5 M runs): 29 patterns differ, in 3,260 runs
+per encoding. V8, as the arbiter, sides with the VM in every case it can judge (2,698
+directly, and the 1,643 runs of `\p` without `u` it can re-judge with `u`; 627 have
+astral subjects or aren't valid with `u`) and never with the
+backtracker: the backtracker's known iteration semantics (captures not reset per
+iteration, empty iterations accepted), as on T0 in F4b. The rest are artifacts of the
+arbitration, identical in both zregex engines: `\p{...}` without `u` (below) and an
+index in the middle of a surrogate pair with `u` (V8 moves it back to the pair's start).
+`differential-v8`: 6 divergences gone (T1 patterns with `u`), none new: `diff-F5a.json`
+(471 + 17 `StepLimitExceeded`: 470 T2, 1 T1).
+
+**Throughput** (10 interleaved rounds of `zregex_xbench` against F5a(2), execAt MB/s):
+`\p{L}+` 29.8 -> 49.6 (+67%), `\p{Script=Greek}+` 31.6 -> 66.8 (+111%),
+`\p{General_Category=Lu}` 26.2 -> 56.7 (+117%), book `\p{L}+` 24.2 -> 48.0 (+98%); ns
+per short exec -28% to -51%. `[\p{L}--[a-z]]` (`v`) stays on the backtracker, unchanged.
+No other case moved more than 5.2% (the worst: the book title pattern, -5.2% execAt).
+
+**Compile time: accepted above 2x.** The VM's `Program` has a fixed cost of ~0.4-0.9 us;
+on a minimal pattern that is more than the backtracker's whole compile. Median of 31 x
+200 compiles against `.expert`: `\p{L}` 0.81 vs 0.37 us (2.2x), `\p{L}+` 1.50 vs 0.58
+(2.6x), `\p{General_Category=Lu}` 0.86 vs 0.41 (2.1x); larger patterns 1.2-1.9x
+(`[\p{L}\p{N}_]+` 1.2x, `\p{Script=Greek}+` 1.6-1.9x). Not the property table: cloning
+a 684-range set costs 0.05 us. Patterns in `u`/`v` mode skip the prefilter analysis (the
+VM uses prefilters in code-unit mode only), which took `\p{L}` from 2.93 to 0.81 us. The
+same excess existed on T0 since F4a, unmeasured by its gate (three cases): `\d` 1.15 vs
+0.42 us (2.72x), `[^a]` 1.85x. Decision: accept the fixed cost for +67-117% execAt; the
+limit in `REGEX_TIERS_PLAN.md` §7.2 is now "<= 2x against `.expert`, or <= +2 us
+absolute". Reducing `tier0.compile`'s fixed cost (closure tables, `follow`) is in F7's
+backlog.
+
+**Bugs found, not fixed (pre-existing, both engines):**
+- `\p{...}` without `u` is read as a property escape; ECMA-262 (Annex B) and V8 read
+  `\p` as the letter `p` (`/\p{L}/.test("p{L}")` is true in V8). Such patterns are T1 by
+  `analyze()` and, since F5a, run on the VM with the same (wrong) reading.
+- With `v`, `[\p{L}--a]` (a single character as a subtraction operand) is
+  `InvalidClassSetOperand`; V8 accepts it. For F5c.
+- A binary property's full name is accepted after `gc=` (`\p{gc=Alphabetic}`), which
+  ECMA-262 rejects.
+
 ### test262 baseline (F0b)
 
 The real test262 measurement that replaces the sample above as the semantic

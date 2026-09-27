@@ -154,8 +154,14 @@ fn checkRouting(gpa: std.mem.Allocator, re: zregex.Regex, pattern: []const u8, o
     // The forced-backtracker run (F4a(5)) routes nothing to the VM.
     if (zregex.force_backtracker) return;
     var plain = false;
+    // T0, or T1 with only `u` and `\p` (F5a), when the VM takes the HIR.
+    const t1_vm = analysis.min_tier == .unicode and blk: {
+        var it = analysis.reasons().iterator();
+        while (it.next()) |f| if (f != .unicode_mode and f != .property_escape) break :blk false;
+        break :blk true;
+    };
     const eligible = blk: {
-        if (analysis.min_tier != .regular) break :blk false;
+        if (analysis.min_tier != .regular and !t1_vm) break :blk false;
         const fe = try zregex.lower.Frontend.init(gpa, pattern, .{ .unicode = options.unicode, .v = options.v }, .{});
         defer fe.deinit();
         plain = zregex.tier0.check(fe.root) == null;
@@ -170,14 +176,19 @@ fn checkRouting(gpa: std.mem.Allocator, re: zregex.Regex, pattern: []const u8, o
         if (plain and tagged) return reportDisagreement(pattern, mode, "tier0.check accepts it, but the dispatcher compiled a tagged program");
     }
     var o = options;
-    o.force_tier = .regular;
-    if (zregex.Regex.compileWithOptions(gpa, pattern, o)) |forced| {
-        defer forced.deinit();
-        if (re.t0 == null or forced.t0 == null) return reportDisagreement(pattern, mode, "force_tier .regular compiled a pattern the dispatcher keeps off the VM");
-    } else |err| switch (err) {
-        error.OutOfMemory => return err,
-        error.TierUnavailable => if (re.t0 != null) return reportDisagreement(pattern, mode, "force_tier .regular refused a pattern the dispatcher routes to the VM"),
-        else => return err,
+    // `.unicode` takes whatever the dispatcher routes to the VM; `.regular`
+    // only the T0 part of it.
+    for ([_]zregex.analysis.Tier{ .regular, .unicode }) |tier| {
+        o.force_tier = tier;
+        const want = re.t0 != null and (tier == .unicode or analysis.min_tier == .regular);
+        if (zregex.Regex.compileWithOptions(gpa, pattern, o)) |forced| {
+            defer forced.deinit();
+            if (!want or forced.t0 == null) return reportDisagreement(pattern, mode, "force_tier compiled a pattern onto the VM the dispatcher keeps off it");
+        } else |err| switch (err) {
+            error.OutOfMemory => return err,
+            error.TierUnavailable => if (want) return reportDisagreement(pattern, mode, "force_tier refused a pattern the dispatcher routes to the VM"),
+            else => return err,
+        }
     }
     o.force_tier = .expert;
     const bt = try zregex.Regex.compileWithOptions(gpa, pattern, o);

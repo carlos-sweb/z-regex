@@ -162,7 +162,7 @@ test "dispatcher: eligible T0 patterns go to the VM, the rest to the backtracker
     // T2, T1, a raw pattern byte.
     for ([_][]const u8{ "a(?=b)", "(a)\\1", "(?<=a)b", "\xE9" }) |p|
         try testing.expect(!try routedToVm(p, .{}));
-    try testing.expect(!try routedToVm("a", .{ .unicode = true }));
+    // T1 without folding goes to the VM since F5a (see below); `v` doesn't.
     try testing.expect(!try routedToVm("a", .{ .v = true }));
     try testing.expect(!try routedToVm("\\u00e9", .{ .case_insensitive = true }));
 }
@@ -229,7 +229,25 @@ test "force_tier .expert and .unicode" {
     // Routing to the VM: not in the forced-backtracker run (F4a(5)).
     if (zregex.force_backtracker) return error.SkipZigTest;
     try testing.expect(!try routedToVm("abc", .{ .force_tier = .expert }));
-    try expectUnavailableTier("abc", .unicode, .{ .not_built = .unicode });
+    // `.unicode` (F5a): the VM for T0 and for T1 without folding.
+    try testing.expect(try routedToVm("abc", .{ .force_tier = .unicode }));
+    try testing.expect(try routedToVm("\\p{L}+", .{ .unicode = true, .force_tier = .unicode }));
+    var diag: zregex.TierUnavailable = undefined;
+    try testing.expectError(error.TierUnavailable, zregex.Regex.compileWithOptions(testing.allocator, "\u{E9}", .{ .unicode = true, .case_insensitive = true, .force_tier = .unicode, .tier_diagnostic = &diag }));
+    try testing.expectEqualDeep(zregex.TierUnavailable{ .not_built = .unicode }, diag);
+    try expectUnavailableTier("a(?=b)", .unicode, .{ .tier_too_high = .expert });
+}
+
+test "F5a: T1 without folding runs on T0's VM" {
+    if (zregex.force_backtracker) return error.SkipZigTest;
+    for ([_][]const u8{ "a", "\\p{L}+", "[\\p{Script=Greek}\\d]+", "(\\p{Lu})\\p{Ll}*", "\\P{L}", ".", "\\u{1F600}" }) |p|
+        testing.expect(try routedToVm(p, .{ .unicode = true })) catch |err| {
+            std.debug.print("/{s}/u stays off the VM\n", .{p});
+            return err;
+        };
+    // Still on the backtracker: Unicode case folding (F5b), `v` (F5c).
+    try testing.expect(!try routedToVm("\\p{L}", .{ .unicode = true, .case_insensitive = true }));
+    try testing.expect(!try routedToVm("[\\p{L}--[a]]", .{ .v = true }));
 }
 
 fn expectUnavailableTier(pattern: []const u8, tier: zregex.analysis.Tier, expected: zregex.TierUnavailable) !void {
@@ -645,4 +663,92 @@ test "tagged VM on the iteration corpus: V8's captures (F4b, D3 and D4)" {
         }
     }
     try testing.expect(checked > 1000);
+}
+
+// ---------------------------------------------------------------- F5a
+
+/// Every index of `subj` (and two past the end), sticky and not: the
+/// dispatcher's route (the VM for these) against the backtracker, all
+/// slots, errors included.
+fn compareRoutes(vm_re: *zregex.Regex, bt_re: *zregex.Regex, subj: zregex.Subject) !void {
+    var s1: zregex.Scratch = .init(testing.allocator);
+    defer s1.deinit();
+    var s2: zregex.Scratch = .init(testing.allocator);
+    defer s2.deinit();
+    var b1: [16]?usize = undefined;
+    var b2: [16]?usize = undefined;
+    const n = vm_re.slotCount();
+    var o1: zregex.MatchSlots = .{ .slots = b1[0..n] };
+    var o2: zregex.MatchSlots = .{ .slots = b2[0..n] };
+    for ([_]bool{ false, true }) |sticky| {
+        vm_re.sticky = sticky;
+        bt_re.sticky = sticky;
+        for (0..subj.len() + 2) |i| {
+            const a = bt_re.execAt(subj, i, &s2, &o2, .{}) catch |err| {
+                try testing.expectError(err, vm_re.execAt(subj, i, &s1, &o1, .{}));
+                continue;
+            };
+            const b = try vm_re.execAt(subj, i, &s1, &o1, .{});
+            const same = a == b and (!a or std.mem.eql(?usize, o1.slots, o2.slots));
+            if (!same) {
+                std.debug.print("/{s}/ index {d} sticky {}: vm {} {any}, backtracker {} {any}\n", .{ vm_re.pattern, i, sticky, b, o1.slots, a, o2.slots });
+                return error.TestUnexpectedResult;
+            }
+        }
+    }
+}
+
+test "F5a: the VM in code-point mode matches the backtracker on T1 patterns" {
+    if (zregex.force_backtracker) return error.SkipZigTest;
+    const gpa = testing.allocator;
+    const Case = struct { []const u8, zregex.CompileOptions };
+    const u: zregex.CompileOptions = .{ .unicode = true };
+    const t1_cases = [_]Case{
+        .{ ".", u },                                       .{ ".+", u },                       .{ "^.$", u },
+        .{ ".", .{ .unicode = true, .dot_all = true } },   .{ "[^a]", u },                     .{ "[^a]+", u },
+        .{ "\\p{L}+", u },                                 .{ "\\P{L}", u },                   .{ "\\P{L}+?x", u },
+        .{ "\\p{Script=Greek}+", u },                      .{ "(\\p{Lu})(\\p{Ll}*)", u },      .{ "[\\p{L}\\d]+", u },
+        .{ "\\u{1F600}", u },                              .{ "[\\u{1F600}-\\u{1F64F}]+", u }, .{ "\\uD83D", u },
+        .{ "\\b\\p{L}", u },                               .{ "\\B.", u },                     .{ "^\\p{N}", .{ .unicode = true, .multiline = true } },
+        .{ "$", .{ .unicode = true, .multiline = true } }, .{ "(?:)", u },                     .{ "a*", u },
+        .{ "(.)(?:\\p{L}|b)?", u },                        .{ "\\p{Any}", u },                 .{ "[\\0-\\u{10FFFF}]{2}", u },
+        .{ "(\\P{Any})?x", u },
+    };
+    const t1_subjects = subjects ++ [_][]const u8{ "\u{3B1}\u{3B2}\u{391}x", "\xED\xB8\x80\u{1F600}\xED\xA0\x80", "A\u{1F600}b\u{1F601}C" };
+    for (t1_cases) |c| {
+        const pattern, const options = c;
+        var vm_re = try zregex.Regex.compileWithOptions(gpa, pattern, options);
+        defer vm_re.deinit();
+        testing.expect(vm_re.t0 != null) catch |err| {
+            std.debug.print("/{s}/ isn't routed to the VM\n", .{pattern});
+            return err;
+        };
+        var o = options;
+        o.force_tier = .expert;
+        var bt_re = try zregex.Regex.compileWithOptions(gpa, pattern, o);
+        defer bt_re.deinit();
+        for (t1_subjects) |s| {
+            const s16 = try zregex.subject.utf16FromWtf8(gpa, s);
+            defer gpa.free(s16);
+            try compareRoutes(&vm_re, &bt_re, .{ .wtf8 = s });
+            try compareRoutes(&vm_re, &bt_re, .{ .utf16 = s16 });
+        }
+    }
+}
+
+test "F5a: a group reset per iteration, as V8 (the backtracker keeps the stale group)" {
+    if (zregex.force_backtracker) return error.SkipZigTest;
+    // `/(?:(\p{L})|\d)+/u` from 5 on "ab\nab xyz09": V8 gives [6, 11] with
+    // group 1 undefined (the last iteration took `\d`, and each iteration
+    // resets the group). The VM does; the backtracker keeps "z" (8, 9),
+    // the iteration-reset bug F4b found on T0 patterns.
+    var re = try zregex.Regex.compileWithOptions(testing.allocator, "(?:(\\p{L})|\\d)+", .{ .unicode = true });
+    defer re.deinit();
+    try testing.expect(re.t0 != null);
+    var scratch: zregex.Scratch = .init(testing.allocator);
+    defer scratch.deinit();
+    var buf: [4]?usize = undefined;
+    var out: zregex.MatchSlots = .{ .slots = &buf };
+    try testing.expect(try re.execAt(.{ .wtf8 = "ab\nab xyz09" }, 5, &scratch, &out, .{}));
+    try testing.expectEqualSlices(?usize, &.{ 6, 11, null, null }, &buf);
 }
