@@ -228,3 +228,117 @@ test "Scratch marks itself in use during an execution" {
     scratch.release();
     try testing.expect(!scratch.in_use);
 }
+
+/// Every match of the iterator, as a flat list of slots (all groups).
+fn iterSlots(re: *const zregex.Regex, s: Subject, scratch: *zregex.Scratch, out: *zregex.MatchSlots, list: *std.ArrayListUnmanaged(?usize)) !void {
+    var it = re.iterator(s, scratch, out, .{});
+    while (try it.next()) |m| {
+        try testing.expectEqual(m.slots[0].?, m.start);
+        try testing.expectEqual(m.slots[1].?, m.end);
+        try list.appendSlice(testing.allocator, m.slots);
+    }
+    try testing.expectEqual(null, try it.next());
+    try testing.expectEqual(null, try it.next());
+}
+
+test "MatchIterator: the same matches and groups as findAll" {
+    const Case = struct { pattern: []const u8, opts: zregex.CompileOptions = .{}, input: []const u8 };
+    const cases = [_]Case{
+        .{ .pattern = "hello", .input = "say hello to the world, hello again" },
+        .{ .pattern = "[a-z]+", .input = "some words here and there" },
+        .{ .pattern = "\\d{3}-\\d{4}", .input = "call 555-1234 or 12-34 and 999-0000" },
+        .{ .pattern = "(\\d{3})-(\\d{4})", .input = "call 555-1234 or 12-34 and 999-0000" },
+        .{ .pattern = "(a)|b", .input = "abba cab" },
+        .{ .pattern = "a*", .input = "baaacaa" },
+        .{ .pattern = "", .input = "abc" },
+        .{ .pattern = "", .opts = .{ .unicode = true }, .input = "a😀é" },
+        .{ .pattern = "\\p{L}*", .opts = .{ .unicode = true }, .input = "λόγος 😀 word" },
+        .{ .pattern = "<(\\w+)>.*?<\\/\\1>", .input = "<p>x</p> <b>y</b>" },
+        .{ .pattern = "(?<=\\$)\\d+", .input = "cost $12 and $345" },
+        .{ .pattern = "a", .opts = .{ .sticky = true }, .input = "aab" },
+        .{ .pattern = "a", .opts = .{ .sticky = true }, .input = "baa" },
+        .{ .pattern = "x", .input = "" },
+    };
+    for (cases) |c| for ([_]?zregex.analysis.Tier{ null, .expert }) |force| {
+        var opts = c.opts;
+        opts.force_tier = force;
+        var re = try zregex.Regex.compileWithOptions(testing.allocator, c.pattern, opts);
+        defer re.deinit();
+        const buf = try testing.allocator.alloc(?usize, re.slotCount());
+        defer testing.allocator.free(buf);
+        var out: zregex.MatchSlots = .{ .slots = buf };
+        var scratch = zregex.Scratch.init(testing.allocator);
+        defer scratch.deinit();
+
+        var got: std.ArrayListUnmanaged(?usize) = .empty;
+        defer got.deinit(testing.allocator);
+        try iterSlots(&re, .{ .wtf8 = c.input }, &scratch, &out, &got);
+
+        var want: std.ArrayListUnmanaged(?usize) = .empty;
+        defer want.deinit(testing.allocator);
+        var all = try re.findAll(c.input);
+        defer {
+            for (all.items) |m| m.deinit();
+            all.deinit(testing.allocator);
+        }
+        for (all.items) |m| {
+            try want.appendSlice(testing.allocator, &.{ m.start, m.end });
+            for (m.captures[1..]) |cap| try want.appendSlice(testing.allocator, &.{ cap.start, cap.end });
+        }
+        testing.expectEqualSlices(?usize, want.items, got.items) catch |err| {
+            std.debug.print("/{s}/ on \"{s}\" (force {?})\n", .{ c.pattern, c.input, force });
+            return err;
+        };
+
+        // UTF-16: the same matches, in UTF-16 units.
+        const s16 = try subject.utf16FromWtf8(testing.allocator, c.input);
+        defer testing.allocator.free(s16);
+        var got16: std.ArrayListUnmanaged(?usize) = .empty;
+        defer got16.deinit(testing.allocator);
+        try iterSlots(&re, .{ .utf16 = s16 }, &scratch, &out, &got16);
+        try testing.expectEqual(got.items.len, got16.items.len);
+        for (got.items, got16.items) |b, u| {
+            try testing.expectEqual(b == null, u == null);
+            if (b) |off| try testing.expectEqual(try std.unicode.calcUtf16LeLen(c.input[0..off]), u.?);
+        }
+    };
+}
+
+test "MatchIterator: a warm scratch doesn't allocate (the bench's cases)" {
+    const patterns = [_][]const u8{ "hello", "[a-z]+", "\\d{3}-\\d{4}", "(\\d{3})-(\\d{4})", "<(\\w+)>.*?<\\/\\1>" };
+    const input = "say hello, call 555-1234 or <b>999-0000</b> now";
+    for (patterns) |p| {
+        var re = try zregex.Regex.compile(testing.allocator, p);
+        defer re.deinit();
+        const buf = try testing.allocator.alloc(?usize, re.slotCount());
+        defer testing.allocator.free(buf);
+        var out: zregex.MatchSlots = .{ .slots = buf };
+        var counting: CountingAllocator = .{ .child = testing.allocator };
+        var scratch = zregex.Scratch.init(counting.allocator());
+        defer scratch.deinit();
+        var counts: [2]usize = .{ 0, 0 };
+        for (&counts) |*n| {
+            const before = counting.count;
+            var it = re.iterator(.{ .wtf8 = input }, &scratch, &out, .{});
+            while (try it.next()) |_| n.* += 1;
+            if (n == &counts[1] and counting.count != before) {
+                std.debug.print("/{s}/ allocated {d} times with a warm scratch\n", .{ p, counting.count - before });
+                return error.TestUnexpectedResult;
+            }
+        }
+        try testing.expect(counts[0] > 0);
+        try testing.expectEqual(counts[0], counts[1]);
+    }
+}
+
+test "MatchIterator: execAt's errors come through, then it's done" {
+    var re = try zregex.Regex.compileWithOptions(testing.allocator, "(a+)+b", .{ .force_tier = .expert });
+    defer re.deinit();
+    var buf: [4]?usize = undefined;
+    var out: zregex.MatchSlots = .{ .slots = &buf };
+    var scratch = zregex.Scratch.init(testing.allocator);
+    defer scratch.deinit();
+    var it = re.iterator(.{ .wtf8 = "aaaaaaaaaaaaaaaaaaaaX" }, &scratch, &out, .{ .max_steps = 1000 });
+    try testing.expectError(error.StepLimitExceeded, it.next());
+    try testing.expectEqual(null, try it.next());
+}
