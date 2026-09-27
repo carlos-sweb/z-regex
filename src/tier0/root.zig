@@ -11,6 +11,7 @@ pub const hir = ir.hir;
 pub const program = @import("program.zig");
 pub const compile_mod = @import("compile.zig");
 pub const pikevm = @import("pikevm.zig");
+pub const pikevm_tagged = @import("pikevm_tagged.zig");
 pub const prefilter = @import("prefilter.zig");
 
 pub const Program = program.Program;
@@ -21,13 +22,14 @@ pub const compileWith = compile_mod.compileWith;
 pub const compileAccepted = compile_mod.compileAccepted;
 pub const VmScratch = pikevm.VmScratch;
 pub const exec = pikevm.exec;
-pub const execTagged = pikevm.execTagged;
-pub const execCaptures = pikevm.execCaptures;
+pub const execTagged = pikevm_tagged.execTagged;
+pub const execCaptures = pikevm_tagged.execCaptures;
 pub const existsAnchoredMatch = pikevm.existsAnchoredMatch;
 
 test {
     _ = program;
     _ = compile_mod;
     _ = pikevm;
+    _ = pikevm_tagged;
     _ = prefilter;
 }
