@@ -803,9 +803,11 @@ starts inside a character. That also fixes captures that were silently wrong:
   condition (an astral subject without `u`), not by cause. Of the 248, 106 were pure D6
   and are gone with F3d; 142 also have a quantified group (F4b) and are reclassified there.
   The 7 of them whose result changed with F3d differ now only in captures: F4b alone.
-  Current numbers (`tests/differential/reference/diff-F3d.json`, UTF-16 and WTF-8
-  identical): 11,041 compared, 10,505 identical, **536 different, all quantifier
-  iteration semantics (F4b: 394 + 142)**, 17 `StepLimitExceeded`, 0 D6.
+  Numbers at F3d's close (`tests/differential/reference/archive/diff-F3d.json` since
+  F4b, UTF-16 and WTF-8 identical): 11,041 compared, 10,505 identical, **536 different,
+  all quantifier iteration semantics (394 + 142)**, 17 `StepLimitExceeded`, 0 D6. F4b
+  resolved the 59 on T0 patterns; the other 477 are T1/T2 patterns on the backtracker
+  (see the F4b section; `diff-F4b.json` is the current reference).
 - **2 new `StepLimitExceeded`:** without `u` an astral character is two characters, and
   two exponential patterns reach the per-start-position step budget (D11) sooner (worst
   start: 228,780 → 1,589,290 and 692,785 → 1,294,156 steps, over the 1,000,000 limit).
@@ -973,13 +975,37 @@ of 3), 12 s from the 150 s review trigger (F2e); in Debug it is 92.2 s (91.7 / 9
 | `u`/`v`, `i` over non-ASCII, `\p`, possessive (opt-in) | backtracker | F5 |
 | lookaround, backreferences | backtracker | F6a |
 
-### F4b: tagged VM, captures on T0 (in progress)
+### F4b: tagged VM, captures on T0 (F4b closed)
 
-This is the final F4b section, filled in as the sub-phases close. Written so far (F4b(1)):
-compile-time data. **F4b(5) completes it** with what runs where (routing lands in F4b(3)),
-the divergences of `differential-v8` that disappear (`diff-F4b.json`), the bench of F4b(4),
-and the section's status "(F4b closed)". Until F4b(3), every pattern with captures still
-runs on the backtracker.
+F4b runs the rest of T0 on a linear VM: patterns with groups and repeats over nullable
+bodies go to the **tagged VM** (`src/tier0/pikevm_tagged.zig`), with the spec's capture
+semantics (a row of slots per pc and thread, an epsilon closure that undoes `save`/`clear`
+on the way back, dedup by pc; plan §6.5). A search runs in two passes (D5): F4a's VM with
+its prefilters finds `[s, e]`, then the tagged VM runs anchored at `s` and stops at `e`. A
+second pass that ends elsewhere is a VM bug: builds with runtime safety panic, the others
+answer with the backtracker and count it in `zregex.two_pass_fallbacks` (0 in every
+measurement). Patterns `tier0.check` accepts (no groups, no nullable loop) keep F4a's
+program. **What stays on the backtracker from T0:** a raw pattern byte (WTF-8 only), and a
+tagged program over the slot bound (instructions x slots > 2^20).
+
+**The backtracker's iteration bugs, which the tagged VM doesn't have** (V8 sides with the
+VM on every case the arbiter could decide): it keeps a group from an earlier iteration
+instead of resetting it per iteration (`(?:(a)|b)*c` on `"abcd"`: V8 gives group 1
+undefined, the backtracker `"a"`), and it accepts the empty iteration of an optional or
+iterated nullable body (`(a*)*` on `""`: V8 `["", undefined]`, the backtracker `["", ""]`).
+They remain for T1/T2 patterns, which still run on the backtracker (F5, F6a): the 477
+divergences of `diff-F4b.json` are all T1 (7) or T2 (470).
+
+**Gate at F4b's close:** test262 2856 in UTF-16 and WTF-8 (the same status for all 3,996
+tests, 0 regressions); `differential-v8` identical to `diff-F4b.json` (the 59 T0 divergences
+of `diff-F3d.json` gone, 0 new, 0 changed); internal differential with every slot, real
+corpora (12.8 M runs) and the iteration corpus (14.2 M runs): `TwoPassMismatch` 0, two
+passes = one tagged pass, every discrepancy with the backtracker decided by V8 in the VM's
+favor except one pattern (D17, a parser bug); the iteration corpus's frozen V8 results in
+the suite (`tests/corpus/iter_v8.tsv`); fuzz stress in both modes (all slots compared
+where the backtracker is reliable); `zig build test` in Debug and ReleaseSafe (0
+allocations with a warm scratch on the tagged VM included); `check-layers`; conformance,
+examples, shared library (40 symbols, the C API unchanged).
 
 **Compile cost of the tagged program** (F4b(1), both corpora, the 3,924 T0 patterns F4b
 adds: captures and nullable loops). The ratio is (backtracker compile + the dispatcher's
