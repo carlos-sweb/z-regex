@@ -90,7 +90,7 @@ const Gen = struct {
     }
 };
 
-const InputKind = enum { prose, prose_hello, phones_sparse, digits_dense, emails, unicode_mixed, unicode_ascii, html, prices };
+const InputKind = enum { prose, prose_hello, phones_sparse, digits_dense, emails, unicode_mixed, unicode_ascii, html, prices, ab_runs };
 
 fn makeInput(gpa: Allocator, kind: InputKind) ![]u8 {
     var g = Gen.init(gpa, 0x5eed_0000 + @as(u64, @intFromEnum(kind)));
@@ -152,6 +152,12 @@ fn makeInput(gpa: Allocator, kind: InputKind) ![]u8 {
                 try g.put(t);
                 try g.put(">\n");
             },
+            .ab_runs => {
+                // F4b: runs of `a`/`b`, half of them closed by `c`
+                // (for `(?:(a)|b)*c`).
+                for (0..1 + g.r().uintLessThan(usize, 12)) |_| try g.put(if (g.r().boolean()) "a" else "b");
+                try g.put(if (g.r().boolean()) "c " else " ");
+            },
             .prices => {
                 if (g.r().uintLessThan(u8, 15) == 0) {
                     try g.put("$");
@@ -175,6 +181,9 @@ const Case = struct {
     pattern: []const u8,
     options: zregex.CompileOptions = .{},
     input: InputKind,
+    /// F4b: the same pattern without groups, for §7.2's target (with
+    /// captures, >= 50% of its `execAt` throughput).
+    no_groups: ?[]const u8 = null,
 };
 
 const throughput_cases = [_]Case{
@@ -188,6 +197,12 @@ const throughput_cases = [_]Case{
     .{ .name = "[\\p{L}--\\p{Lu}] /v", .pattern = "[\\p{L}--\\p{Lu}]", .options = .{ .v = true }, .input = .unicode_mixed },
     .{ .name = "<(\\w+)>.*?<\\/\\1>", .pattern = "<(\\w+)>.*?<\\/\\1>", .input = .html },
     .{ .name = "(?<=\\$)\\d+", .pattern = "(?<=\\$)\\d+", .input = .prices },
+    // F4b: groups, on the tagged VM (appended: the rows above keep their
+    // index for the comparison with earlier runs).
+    .{ .name = "(\\d{3})-(\\d{4}) (sparse)", .pattern = "(\\d{3})-(\\d{4})", .input = .phones_sparse, .no_groups = "\\d{3}-\\d{4}" },
+    .{ .name = "(\\d{3})-(\\d{4}) (dense)", .pattern = "(\\d{3})-(\\d{4})", .input = .digits_dense, .no_groups = "\\d{3}-\\d{4}" },
+    .{ .name = "(\\w+)@(\\w+)\\.com", .pattern = "(\\w+)@(\\w+)\\.com", .input = .emails, .no_groups = "\\w+@\\w+\\.com" },
+    .{ .name = "(?:(a)|b)*c", .pattern = "(?:(a)|b)*c", .input = .ab_runs, .no_groups = "(?:a|b)*c" },
 };
 
 // ------------------------------------------------------------- F4a cases
@@ -211,6 +226,10 @@ const overhead_cases = [_]struct { name: []const u8, pattern: []const u8, input:
     .{ .name = "/abc/ on 2 KB", .pattern = "abc", .input = "x" ** 1000 ++ "abc" ++ "y" ** 1000 },
     .{ .name = "/\\d{3}-\\d{4}/ on \"tel 555-1234\"", .pattern = "\\d{3}-\\d{4}", .input = "tel 555-1234" },
     .{ .name = "/[a-z]+@[a-z]+/ on 2 KB", .pattern = "[a-z]+@[a-z]+", .input = "1 " ** 500 ++ "ab@cd" ++ " 2" ** 500 },
+    // F4b: groups, on the tagged VM.
+    .{ .name = "/(\\d{3})-(\\d{4})/ on \"tel 555-1234\"", .pattern = "(\\d{3})-(\\d{4})", .input = "tel 555-1234" },
+    .{ .name = "/(\\w+)@(\\w+)\\.com/ on 2 KB", .pattern = "(\\w+)@(\\w+)\\.com", .input = "1 " ** 500 ++ "ab@cd.com" ++ " 2" ** 500 },
+    .{ .name = "/(?:(a)|b)*c/ on \"ababc\"", .pattern = "(?:(a)|b)*c", .input = "ababc" },
 };
 
 /// Compile cost of the dispatcher (reviewer's F4a(4) closure): eligible
@@ -219,7 +238,9 @@ const overhead_cases = [_]struct { name: []const u8, pattern: []const u8, input:
 const compile_cases = [_]struct { name: []const u8, pattern: []const u8 }{
     .{ .name = "eligible, literal: hello", .pattern = "hello" },
     .{ .name = "eligible, first: \\d{3}-\\d{4}", .pattern = "\\d{3}-\\d{4}" },
-    .{ .name = "T0, not eligible: (\\d{3})-(\\d{4})", .pattern = "(\\d{3})-(\\d{4})" },
+    .{ .name = "tagged: (\\d{3})-(\\d{4})", .pattern = "(\\d{3})-(\\d{4})" },
+    .{ .name = "tagged: (\\w+)@(\\w+)\\.com", .pattern = "(\\w+)@(\\w+)\\.com" },
+    .{ .name = "tagged, product: (?:(a)|b)*c", .pattern = "(?:(a)|b)*c" },
     .{ .name = "eligible, first: email", .pattern = "[\\w.+-]+@[\\w-]+\\.[\\w.]+" },
 };
 
@@ -281,6 +302,9 @@ const ExecRow = struct {
     /// Where the dispatcher sends the pattern, and T0's prefilter.
     engine: []const u8,
     mbps: [3]f64,
+    /// F4b: routed `execAt` of the same pattern without groups (0 when the
+    /// case has none).
+    no_groups_mbps: f64 = 0,
     matches: usize,
     compile_us: f64,
     compile_expert_us: f64,
@@ -390,11 +414,15 @@ fn execAtPass(re: zregex.Regex, input: []const u8, scratch: *zregex.Scratch) !us
 
 fn engineName(re: zregex.Regex) []const u8 {
     const p = re.t0 orelse return "backtracker";
+    // F4b: a tagged program has groups, or a phase product (`fail`).
+    const tagged = p.nslots > 2 or for (p.insts) |inst| {
+        if (inst == .fail) break true;
+    } else false;
     return switch (p.prefilter.kind) {
-        .none => "VM",
-        .literal => "VM, literal",
-        .class_run => "VM, class_run",
-        .first => "VM, first",
+        .none => if (tagged) "tagged VM" else "VM",
+        .literal => if (tagged) "tagged VM, literal" else "VM, literal",
+        .class_run => if (tagged) "tagged VM, class_run" else "VM, class_run",
+        .first => if (tagged) "tagged VM, first" else "VM, first",
     };
 }
 
@@ -409,41 +437,51 @@ fn compileMedianUs(gpa: Allocator, io: Io, pattern: []const u8, options: zregex.
     return @as(f64, @floatFromInt(median(&ns))) / 1e3;
 }
 
+/// Median MB/s of an `execAt` pass over `input` (one warm-up), and the
+/// warm-up's match count.
+fn measureExecAt(gpa: Allocator, io: Io, name: []const u8, pattern: []const u8, options: zregex.CompileOptions, input: []const u8, engine: ?*[]const u8) !struct { mbps: f64, matches: usize } {
+    var re = try zregex.Regex.compileWithOptions(gpa, pattern, options);
+    defer re.deinit();
+    if (engine) |e| e.* = engineName(re);
+    var scratch = zregex.Scratch.init(gpa);
+    defer scratch.deinit();
+    var times: [MAX_RUNS]i64 = undefined;
+    var runs: usize = 0;
+    var spent: i64 = 0;
+    var matches: usize = 0;
+    var i: usize = 0;
+    while (i < MAX_RUNS + 1) : (i += 1) {
+        arm(io, name);
+        const t0 = now(io);
+        const n = try execAtPass(re, input, &scratch);
+        const dt = now(io) - t0;
+        disarm();
+        if (i == 0) {
+            matches = n;
+            if (dt * @as(i64, MAX_RUNS) > @as(i64, @intCast(RUN_BUDGET_NS))) {
+                times[0] = dt;
+                runs = 1;
+                break;
+            }
+            continue;
+        }
+        times[runs] = dt;
+        runs += 1;
+        spent += dt;
+        if (spent > @as(i64, @intCast(RUN_BUDGET_NS))) break;
+    }
+    const secs = @as(f64, @floatFromInt(median(times[0..runs]))) / 1e9;
+    return .{ .mbps = @as(f64, @floatFromInt(input.len)) / (1024.0 * 1024.0) / secs, .matches = matches };
+}
+
 fn benchExecAt(gpa: Allocator, io: Io, c: Case, input: []const u8) !ExecRow {
     var row: ExecRow = .{ .name = c.name, .engine = "", .mbps = undefined, .matches = 0, .compile_us = 0, .compile_expert_us = 0 };
     for (std.enums.values(Engine), 0..) |e, k| {
-        var re = try zregex.Regex.compileWithOptions(gpa, c.pattern, engineOptions(c.options, e));
-        defer re.deinit();
-        if (e == .routed) row.engine = engineName(re);
-        var scratch = zregex.Scratch.init(gpa);
-        defer scratch.deinit();
-        var times: [MAX_RUNS]i64 = undefined;
-        var runs: usize = 0;
-        var spent: i64 = 0;
-        var i: usize = 0;
-        while (i < MAX_RUNS + 1) : (i += 1) {
-            arm(io, c.name);
-            const t0 = now(io);
-            const n = try execAtPass(re, input, &scratch);
-            const dt = now(io) - t0;
-            disarm();
-            if (i == 0) {
-                if (e == .routed) row.matches = n;
-                if (dt * @as(i64, MAX_RUNS) > @as(i64, @intCast(RUN_BUDGET_NS))) {
-                    times[0] = dt;
-                    runs = 1;
-                    break;
-                }
-                continue;
-            }
-            times[runs] = dt;
-            runs += 1;
-            spent += dt;
-            if (spent > @as(i64, @intCast(RUN_BUDGET_NS))) break;
-        }
-        const secs = @as(f64, @floatFromInt(median(times[0..runs]))) / 1e9;
-        row.mbps[k] = @as(f64, @floatFromInt(input.len)) / (1024.0 * 1024.0) / secs;
+        const r = try measureExecAt(gpa, io, c.name, c.pattern, engineOptions(c.options, e), input, if (e == .routed) &row.engine else null);
+        if (e == .routed) row.matches = r.matches;
+        row.mbps[k] = r.mbps;
     }
+    if (c.no_groups) |p| row.no_groups_mbps = (try measureExecAt(gpa, io, c.name, p, c.options, input, null)).mbps;
     row.compile_us = try compileMedianUs(gpa, io, c.pattern, c.options);
     row.compile_expert_us = try compileMedianUs(gpa, io, c.pattern, engineOptions(c.options, .backtracker));
     return row;
@@ -459,8 +497,8 @@ fn benchOverhead(gpa: Allocator, io: Io, name: []const u8, pattern: []const u8, 
         if (e == .routed) row.engine = engineName(re);
         var scratch = zregex.Scratch.init(gpa);
         defer scratch.deinit();
-        var buf: [2]?usize = undefined;
-        var out: zregex.MatchSlots = .{ .slots = &buf };
+        var buf: [64]?usize = undefined;
+        var out: zregex.MatchSlots = .{ .slots = buf[0..re.slotCount()] };
         _ = try re.execAt(.{ .wtf8 = input }, 0, &scratch, &out, .{});
         var samples: [11]i64 = undefined;
         for (&samples) |*slot| {
@@ -560,8 +598,8 @@ pub fn main(init: std.process.Init) !void {
     }
     try w.print("\n| Adversarial case (41-byte input) | Time (ms) | Outcome |\n|---|---|---|\n", .{});
     for (adv) |a| try w.print("| `{s}` | {d:.1} | {s} |\n", .{ a.name, a.ms, a.outcome });
-    try w.print("\n| execAt case | Routed to | Routed (MB/s) | VM, no prefilters (MB/s) | Backtracker (MB/s) | Compile (µs) | Compile, backtracker only (µs) |\n|---|---|---|---|---|---|---|\n", .{});
-    for (exec_rows) |r| try w.print("| {s} | {s} | {d:.2} | {d:.2} | {d:.2} | {d:.1} | {d:.1} |\n", .{ r.name, r.engine, r.mbps[0], r.mbps[1], r.mbps[2], r.compile_us, r.compile_expert_us });
+    try w.print("\n| execAt case | Routed to | Routed (MB/s) | VM, no prefilters (MB/s) | Backtracker (MB/s) | Without groups (MB/s) | Compile (µs) | Compile, backtracker only (µs) |\n|---|---|---|---|---|---|---|---|\n", .{});
+    for (exec_rows) |r| try w.print("| {s} | {s} | {d:.2} | {d:.2} | {d:.2} | {d:.2} | {d:.1} | {d:.1} |\n", .{ r.name, r.engine, r.mbps[0], r.mbps[1], r.mbps[2], r.no_groups_mbps, r.compile_us, r.compile_expert_us });
     try w.print("\n| Overhead case | Routed to | Routed (ns) | VM, no prefilters (ns) | Backtracker (ns) | Routed / backtracker |\n|---|---|---|---|---|---|\n", .{});
     for (overhead) |r| try w.print("| {s} | {s} | {d:.1} | {d:.1} | {d:.1} | {d:.2} |\n", .{ r.name, r.engine, r.ns[0], r.ns[1], r.ns[2], r.ns[0] / r.ns[2] });
     try w.print("\n| Compile case | Routed to | Dispatcher (µs) | Backtracker only (µs) | Ratio |\n|---|---|---|---|---|\n", .{});
