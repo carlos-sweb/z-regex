@@ -1000,6 +1000,32 @@ unique pattern/mode pairs on the VM, 711 with F4a's program and 126 tagged (F4a 
 714: see the correction in the F4a section). `differential-v8`: the 59 T0 divergences of
 `diff-F3d.json` are gone, none new (`diff-F4b.json`).
 
+**Bench with captures (F4b(4); median of 10 runs interleaved with `cc97066`, code of
+`090678e`).** `execAt` through the tagged VM against the same pattern without groups:
+`(\d{3})-(\d{4})` sparse 54% (333 / 616 MB/s), dense 73% (30.9 / 42.3), `(\w+)@(\w+)\.com`
+80% (36.8 / 46.0), `(?:(a)|b)*c` 46% (15.5 / 33.4). Overhead against the backtracker:
+1.26x on 12 B, 0.51x on 5 B, 0.16x on 2 KB. Compile: 1.70x, 1.37x, 1.77x (the last with a
+phase product). D5 fallbacks to the backtracker (`two_pass_fallbacks`): 0 in every run.
+
+- **Target for groups in an iterated body with dense matches: >= 40% of the pattern
+  without groups** (50% elsewhere). `(?:(a)|b)*c` matches every run closed by `c`, so the
+  second pass covers most of the input, and a tagged step costs about twice a plain one:
+  a dynamic closure (F4a's precomputed closures don't apply across `save`/`clear`), the
+  `clear` of the group at each iteration with its undo frame, and the copy of the thread's
+  slot row. The per-iteration reset is what the spec requires: the cost is structural.
+- **Layout regression, resolved.** With the tagged VM in `pikevm.zig`, the capture-less
+  path (F4a) lost 7-14% in `execAt` and up to 13% in `findAll` against `cc97066`, while the
+  backtracker's cases didn't move. Bisected to `a63e161`, which changes neither F4a's search
+  nor the literal path, and the literal fast path (`indexOfPos`, no VM) lost 11% too: code
+  layout, not algorithm. Moving `rows` out of `List` and force-inlining `tier0.exec` did
+  nothing. Moving the tagged VM to its own file (`src/tier0/pikevm_tagged.zig`, `090678e`,
+  no function changed) recovered it: `findAll` -4.4%..+1.0% and `execAt` -5.3%..+3.3%
+  against `cc97066`, every F4a target met. **Re-measure in F5: these numbers are not
+  permanent; LLVM changes.**
+- **Systemic note.** This is the third layout case in the project (F4a(4), F4b(4) and
+  F4a(4)A's prefilter). After T0, decide how to measure without depending on LLVM's
+  layout: separate binaries, more runs, or `-fno-llvm` for the bench.
+
 ### test262 baseline (F0b)
 
 The real test262 measurement that replaces the sample above as the semantic
