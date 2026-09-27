@@ -969,6 +969,26 @@ of 3), 12 s from the 150 s review trigger (F2e); in Debug it is 92.2 s (91.7 / 9
 | `u`/`v`, `i` over non-ASCII, `\p`, possessive (opt-in) | backtracker | F5 |
 | lookaround, backreferences | backtracker | F6a |
 
+### F4b: tagged VM, captures on T0 (in progress)
+
+This is the final F4b section, filled in as the sub-phases close. Written so far (F4b(1)):
+compile-time data. **F4b(5) completes it** with what runs where (routing lands in F4b(3)),
+the divergences of `differential-v8` that disappear (`diff-F4b.json`), the bench of F4b(4),
+and the section's status "(F4b closed)". Until F4b(3), every pattern with captures still
+runs on the backtracker.
+
+**Compile cost of the tagged program** (F4b(1), both corpora, the 3,924 T0 patterns F4b
+adds: captures and nullable loops). The ratio is (backtracker compile + the dispatcher's
+extra work: classify, `checkTagged`, compile the tagged `Program`) / backtracker compile.
+**Median 1.42** (p90 1.68). The count of patterns over 2x is not a stable figure: it moves
+between runs (34, 35, 43 in three) because those patterns compile in microseconds
+(backtracker 0.8-8.5 us) and their ratio sits on the threshold with timing noise. The
+`too_large` rule is an absolute one: over 1 ms of tagged compile, 0 patterns.
+
+**Worst case:** an IPv6-address pattern (a long alternation of counted groups), 123 us of
+extra compile time, the maximum over the 3,924. It doesn't block; if it grows in F5, this
+is the baseline to compare with.
+
 ### test262 baseline (F0b)
 
 The real test262 measurement that replaces the sample above as the semantic

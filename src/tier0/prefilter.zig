@@ -343,7 +343,10 @@ test "firstOf: the DFS stack holds a closure n + 1 deep (regression, F4b(1))" {
     // to pc 0: visiting pc k pops one entry and pushes two, so the last
     // split (k = n - 1) writes entries n - 1 and n: n + 1 entries. With the
     // stack sized `scan` this indexed past its end at n = scan (a safety
-    // panic). Nothing consumes, so the table comes out empty.
+    // panic). Nothing consumes, so the table comes out empty. Every
+    // instruction must be a split, hence the last one points back (pc 0,
+    // already seen) to stay in bounds: ending the chain in a `char` leaves
+    // n - 1 splits, a peak of n entries, and doesn't reproduce the bug.
     const scan = 64;
     var insts: [scan]program.Inst = undefined;
     for (&insts, 0..) |*inst, k| {
