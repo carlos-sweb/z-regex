@@ -423,3 +423,127 @@ test "forced-backtracker build: an eligible pattern stays on the backtracker" {
     defer forced.deinit();
     try testing.expect(forced.t0 != null);
 }
+
+// ---------------------------------------------------------------- F4b(2)
+
+/// Patterns with groups where the backtracker is right (no group inside an
+/// iterated body: it neither resets them per iteration nor rejects empty
+/// iterations): the two passes against it, all slots.
+const capture_cases = [_]struct { []const u8, Flags }{
+    .{ "(a)|b", .{} },
+    .{ "(a|ab)(c|bcd)(d*)", .{} },
+    .{ "(\\d{3})-(\\d{4})", .{} },
+    .{ "(\\w+)@(\\w+)\\.com", .{} },
+    .{ "(a+?)(a*)", .{} },
+    .{ "(?<x>a)(?<y>b)?", .{} },
+    .{ "^(a)|(b)$", .{ .m = true } },
+    .{ "(a)?b", .{} },
+    .{ "(\\b\\w+\\b)", .{} },
+    .{ "([^a]+)(a)", .{} },
+    .{ "(A)(b)", .{ .i = true } },
+    .{ "(.)(.)", .{ .s = true } },
+    .{ "((.)\\2?)", .{} },
+};
+
+fn tagged(gpa: std.mem.Allocator, pattern: []const u8, f: Flags) !tier0.Program {
+    const fe = try zregex.lower.Frontend.init(gpa, pattern, .{}, .{ .ignore_case = f.i, .multiline = f.m, .dot_all = f.s });
+    defer fe.deinit();
+    return tier0.compileWith(gpa, fe.root, .{ .tagged = true });
+}
+
+test "tagged VM (two passes) matches the backtracker, all slots" {
+    const gpa = testing.allocator;
+    var bt: zregex.Scratch = .init(gpa);
+    defer bt.deinit();
+    var vs: tier0.VmScratch = .init(gpa);
+    defer vs.deinit();
+    for (capture_cases) |c| {
+        const pattern, const f = c;
+        // `((.)\2?)` has a backreference: not T0, not tagged-eligible.
+        const prog = tagged(gpa, pattern, f) catch |err| {
+            try testing.expectEqual(error.Ineligible, err);
+            try testing.expectEqualStrings("((.)\\2?)", pattern);
+            continue;
+        };
+        defer prog.deinit(gpa);
+        var re = try zregex.Regex.compileWithOptions(gpa, pattern, .{ .case_insensitive = f.i, .multiline = f.m, .dot_all = f.s, .force_tier = .expert });
+        defer re.deinit();
+        const n = prog.nslots;
+        for (subjects) |s| {
+            const s16 = try zregex.subject.utf16FromWtf8(gpa, s);
+            defer gpa.free(s16);
+            for ([_]zregex.Subject{ .{ .wtf8 = s }, .{ .utf16 = s16 } }) |subj| {
+                for ([_]bool{ false, true }) |sticky| {
+                    re.sticky = sticky;
+                    for (0..subj.len() + 2) |i| {
+                        var want: [16]?usize = undefined;
+                        var out: zregex.MatchSlots = .{ .slots = want[0..n] };
+                        const b = re.execAt(subj, i, &bt, &out, .{});
+                        var got: [16]?usize = undefined;
+                        const a = switch (subj) {
+                            .wtf8 => |x| tier0.execCaptures(&prog, u8, x, .code_unit, i, sticky, &vs, got[0..n]),
+                            .utf16 => |x| tier0.execCaptures(&prog, u16, x, .code_unit, i, sticky, &vs, got[0..n]),
+                        };
+                        const bf = b catch |err| {
+                            try testing.expectError(err, a);
+                            continue;
+                        };
+                        const af = try a;
+                        testing.expectEqual(bf, af) catch |err| {
+                            std.debug.print("/{s}/ {s} i={d} sticky={}\n", .{ pattern, @tagName(subj), i, sticky });
+                            return err;
+                        };
+                        if (bf) testing.expectEqualSlices(?usize, want[0..n], got[0..n]) catch |err| {
+                            std.debug.print("/{s}/ {s} i={d} sticky={}\n", .{ pattern, @tagName(subj), i, sticky });
+                            return err;
+                        };
+                    }
+                }
+            }
+        }
+    }
+}
+
+test "tagged VM gives V8's captures where the backtracker doesn't (empty iterations)" {
+    // V8's results, checked with Node (`d` flag). The backtracker keeps a
+    // group from an earlier iteration (RepeatMatcher step 4: reset each
+    // iteration, D4) and accepts the empty iteration of an optional or
+    // iterated nullable body (D3); in UTF-16 indices.
+    const gpa = testing.allocator;
+    var vs: tier0.VmScratch = .init(gpa);
+    defer vs.deinit();
+    const n = null;
+    const v8 = [_]struct { []const u8, []const u8, []const ?usize }{
+        .{ "(a*)*", "", &.{ 0, 0, n, n } },
+        .{ "(a*)*", "b", &.{ 0, 0, n, n } },
+        .{ "(a*)+", "aa", &.{ 0, 2, 0, 2 } },
+        .{ "((a*)*)*", "", &.{ 0, 0, n, n, n, n } },
+        .{ "((a*)*)*", "a", &.{ 0, 1, 0, 1, 0, 1 } },
+        .{ "(?:[^a]?(\\x62?)?)", "\nab", &.{ 0, 1, n, n } },
+        .{ "(\u{E9}{0})?", "x", &.{ 0, 0, n, n } },
+        .{ "(a{0})*\\B", "", &.{ 0, 0, n, n } },
+        .{ "([^#/?]*)(.*)?", "ab", &.{ 0, 2, 0, 2, n, n } },
+        .{ "(\\W|){2,}\\.", ".", &.{ 0, 1, 0, 0 } },
+        .{ "(?:(a)|b)+", "ab", &.{ 0, 2, n, n } },
+        .{ "(\\*{0,1}?)?", "*", &.{ 0, 1, 0, 1 } },
+        .{ "(?<n0>0*?)?\u{3A3}", "\u{3A3}", &.{ 0, 1, n, n } },
+        .{ "\\s\\w|\\*(\\*|)*\\.*", "**.", &.{ 0, 3, 1, 2 } },
+        .{ "(k*?)+|", "kk", &.{ 0, 2, 1, 2 } },
+        .{ "(?:(a)|b)*c", "abcd", &.{ 0, 3, n, n } },
+        .{ "((a)|b)+", "ab", &.{ 0, 2, 1, 2, n, n } },
+        .{ "(?:(a)(b)?)+", "aba", &.{ 0, 3, 2, 3, n, n } },
+    };
+    for (v8) |c| {
+        const pattern, const s, const want = c;
+        const prog = try tagged(gpa, pattern, .{});
+        defer prog.deinit(gpa);
+        const s16 = try zregex.subject.utf16FromWtf8(gpa, s);
+        defer gpa.free(s16);
+        var got: [8]?usize = undefined;
+        try testing.expect(try tier0.execCaptures(&prog, u16, s16, .code_unit, 0, false, &vs, got[0..prog.nslots]));
+        testing.expectEqualSlices(?usize, want, got[0..prog.nslots]) catch |err| {
+            std.debug.print("/{s}/ on {f}\n", .{ pattern, std.zig.fmtString(s) });
+            return err;
+        };
+    }
+}
