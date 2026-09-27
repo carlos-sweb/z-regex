@@ -419,6 +419,19 @@ pub fn build(b: *std.Build) void {
     const bench_step = b.step("bench", "Run the performance baseline (ReleaseFast)");
     bench_step.dependOn(&run_bench.step);
 
+    // Cross-engine benchmark, z-regex's harness (bench/compare/,
+    // docs/BENCHMARKS.md). Always ReleaseFast, like `bench`.
+    const xbench_module = b.createModule(.{
+        .root_source_file = b.path("bench/compare/zregex_xbench.zig"),
+        .target = target,
+        .optimize = .ReleaseFast,
+    });
+    xbench_module.addImport("zregex", bench_zregex);
+    const xbench_exe = b.addExecutable(.{ .name = "zregex_xbench", .root_module = xbench_module });
+    const install_xbench = b.addInstallArtifact(xbench_exe, .{});
+    const xbench_step = b.step("xbench", "Build the cross-engine benchmark's z-regex harness (bench/compare/)");
+    xbench_step.dependOn(&install_xbench.step);
+
     // =============================================================================
     // Library-specific build steps
     // =============================================================================
