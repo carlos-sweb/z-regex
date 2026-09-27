@@ -1,0 +1,33 @@
+{
+  "comment": "Cases of the cross-engine benchmark (docs/BENCHMARKS.md). tier: T0/T1/T2 as z-regex's analyze() classifies them. engines: which engines run the case (a fair comparison only: no T2 against Rust regex, no v against Rust). zregex: 'routed' (the dispatcher), 'vm_plain' (T0's VM without prefilters), 'backtracker' (force_tier = .expert). short: a short input for ns per exec. adversarial: the input is 'a' x n + adv_suffix (default 'c'), timed until the engine answers or gives up; the 'cb' suffix keeps the input match-free but defeats the required-character shortcut (PCRE2's start-up optimization rejects a^n c without trying).",
+  "cases": [
+    { "id": "t0_literal", "tier": "T0", "name": "literal hello", "pattern": "hello", "flags": "", "corpus": "prose_hello", "short": "say hello", "engines": ["zregex", "v8", "rust", "zigregex"] },
+    { "id": "t0_az", "tier": "T0", "name": "[a-z]+", "pattern": "[a-z]+", "flags": "", "corpus": "prose", "short": "hello world", "engines": ["zregex", "v8", "rust", "zigregex"] },
+    { "id": "t0_az_vm", "tier": "T0", "name": "[a-z]+ (z-regex: generic VM, no fast path)", "pattern": "[a-z]+", "flags": "", "corpus": "prose", "short": "hello world", "engines": ["zregex"], "zregex": "vm_plain" },
+    { "id": "t0_az_bt", "tier": "T0", "name": "[a-z]+ (z-regex: backtracker)", "pattern": "[a-z]+", "flags": "", "corpus": "prose", "short": "hello world", "engines": ["zregex"], "zregex": "backtracker" },
+    { "id": "t0_phone_sparse", "tier": "T0", "name": "\\d{3}-\\d{4} (sparse)", "pattern": "\\d{3}-\\d{4}", "flags": "", "corpus": "phones_sparse", "short": "tel 555-1234", "engines": ["zregex", "v8", "rust", "zigregex"] },
+    { "id": "t0_phone_dense", "tier": "T0", "name": "\\d{3}-\\d{4} (dense)", "pattern": "\\d{3}-\\d{4}", "flags": "", "corpus": "digits_dense", "short": "tel 555-1234", "engines": ["zregex", "v8", "rust", "zigregex"] },
+    { "id": "t0_email", "tier": "T0", "name": "email", "pattern": "[\\w.+-]+@[\\w-]+\\.[\\w.]+", "flags": "", "corpus": "emails", "short": "mail joe@site.com", "engines": ["zregex", "v8", "rust", "zigregex"] },
+    { "id": "t0_cap_sparse", "tier": "T0", "name": "(\\d{3})-(\\d{4}) (sparse)", "pattern": "(\\d{3})-(\\d{4})", "flags": "", "corpus": "phones_sparse", "short": "tel 555-1234", "engines": ["zregex", "v8", "rust", "zigregex"] },
+    { "id": "t0_cap_dense", "tier": "T0", "name": "(\\d{3})-(\\d{4}) (dense)", "pattern": "(\\d{3})-(\\d{4})", "flags": "", "corpus": "digits_dense", "short": "tel 555-1234", "engines": ["zregex", "v8", "rust", "zigregex"] },
+    { "id": "t0_iter_cap", "tier": "T0", "name": "(?:(a)|b)*c", "pattern": "(?:(a)|b)*c", "flags": "", "corpus": "ab_runs", "short": "ababc", "engines": ["zregex", "v8", "rust", "zigregex"] },
+    { "id": "t0_book_name", "tier": "T0", "name": "book: Darcy", "pattern": "Darcy", "flags": "", "corpus": "book", "short": "Mr. Darcy", "engines": ["zregex", "v8", "rust", "zigregex"] },
+    { "id": "t0_book_word", "tier": "T0", "name": "book: [A-Z][a-z]+", "pattern": "[A-Z][a-z]+", "flags": "", "corpus": "book", "short": "said Elizabeth", "engines": ["zregex", "v8", "rust", "zigregex"] },
+    { "id": "t0_book_title", "tier": "T0", "name": "book: (Mr|Mrs|Miss)\\.? ([A-Z][a-z]+)", "pattern": "(Mr|Mrs|Miss)\\.? ([A-Z][a-z]+)", "flags": "", "corpus": "book", "short": "said Mr. Darcy", "engines": ["zregex", "v8", "rust", "zigregex"] },
+
+    { "id": "t1_pL", "tier": "T1", "name": "\\p{L}+ /u", "pattern": "\\p{L}+", "flags": "u", "corpus": "unicode_mixed", "short": "κόσμε hello", "engines": ["zregex", "v8", "rust"] },
+    { "id": "t1_greek", "tier": "T1", "name": "\\p{Script=Greek}+ /u", "pattern": "\\p{Script=Greek}+", "flags": "u", "corpus": "unicode_mixed", "short": "abc κόσμε", "engines": ["zregex", "v8", "rust"] },
+    { "id": "t1_lu", "tier": "T1", "name": "\\p{General_Category=Lu} /u", "pattern": "\\p{General_Category=Lu}", "flags": "u", "corpus": "unicode_mixed", "short": "abc Ωμέγα", "engines": ["zregex", "v8", "rust"] },
+    { "id": "t1_vset", "tier": "T1", "name": "[\\p{L}--[a-z]] /v", "pattern": "[\\p{L}--[a-z]]", "flags": "v", "corpus": "unicode_mixed", "short": "abc Ωμέγα", "engines": ["zregex", "v8"] },
+    { "id": "t1_book_pL", "tier": "T1", "name": "book: \\p{L}+ /u", "pattern": "\\p{L}+", "flags": "u", "corpus": "book", "short": "said Elizabeth", "engines": ["zregex", "v8", "rust"] },
+
+    { "id": "t2_backref", "tier": "T2", "name": "<(\\w+)>.*?<\\/\\1>", "pattern": "<(\\w+)>.*?<\\/\\1>", "flags": "", "corpus": "html", "short": "<b>bold</b>", "engines": ["zregex", "v8", "pcre2"] },
+    { "id": "t2_lookahead", "tier": "T2", "name": "(?=.*[a-z])(?=.*[A-Z]).{8,}", "pattern": "(?=.*[a-z])(?=.*[A-Z]).{8,}", "flags": "", "corpus": "passwords", "short": "Secret123x", "engines": ["zregex", "v8", "pcre2"] },
+    { "id": "t2_lookbehind", "tier": "T2", "name": "(?<=\\$)\\d+", "pattern": "(?<=\\$)\\d+", "flags": "", "corpus": "prices", "short": "cost $450", "engines": ["zregex", "v8", "pcre2"] },
+    { "id": "t2_book_backref", "tier": "T2", "name": "book: \\b(\\w+) \\1\\b", "pattern": "\\b(\\w+) \\1\\b", "flags": "", "corpus": "book", "short": "that that is", "engines": ["zregex", "v8", "pcre2"] },
+
+    { "id": "adv_nested", "tier": "adversarial", "name": "(a+)+b on a^n c", "pattern": "(a+)+b", "flags": "", "adversarial": [20, 25, 30, 40], "engines": ["zregex", "v8", "pcre2"] },
+    { "id": "adv_nested_cb", "tier": "adversarial", "name": "(a+)+b on a^n cb", "pattern": "(a+)+b", "flags": "", "adversarial": [20, 25, 30, 40], "adv_suffix": "cb", "engines": ["zregex", "v8", "pcre2"] },
+    { "id": "adv_lookahead", "tier": "adversarial", "name": "(?=(a+)+b) on a^n c", "pattern": "(?=(a+)+b)", "flags": "", "adversarial": [20, 25, 30, 40], "engines": ["zregex", "v8", "pcre2"] }
+  ]
+}
