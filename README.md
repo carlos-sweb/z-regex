@@ -199,24 +199,9 @@ zig build -Dtarget=aarch64-linux
 
 ## ⚡ Performance
 
-zregex uses a bytecode-based virtual machine for efficient pattern matching:
-
-- **Fast Compilation**: Patterns are compiled to optimized bytecode
-- **Efficient Execution**: Direct bytecode interpretation with minimal overhead
-- **ReDoS Protection**: Configurable limits prevent catastrophic backtracking
-- **Memory Efficient**: Careful memory management with arena allocators
-
-### Benchmarks
-
-```
-Pattern: \d{3}-\d{3}-\d{4}
-Input: "Call me at 555-123-4567"
-Time: ~150ns per match
-
-Pattern: (?<=\$)\d+
-Input: "Price: $100, $200, $300"
-Time: ~200ns per match
-```
+T0 runs in O(n·m), without ReDoS. See [docs/BENCHMARKS.md](docs/BENCHMARKS.md) for numbers
+against V8, Rust regex, PCRE2 and zig-regex, tier by tier, with the method, the machine and
+where z-regex is ahead or behind and why.
 
 ## 🛡️ Security
 

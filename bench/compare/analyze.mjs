@@ -30,6 +30,7 @@ const machine = {
   rust_regex: '1.13.1',
   pcre2: sh('pcre2-config --version'),
   zig_regex: '0.1.1 (zig-utils/zig-regex, 173b298)',
+  zregex: rounds[0]?.engines?.zregex?.version ?? null,
   cc: sh('cc --version | head -1'),
 };
 
@@ -106,7 +107,7 @@ for (const [tier, engines] of Object.entries(tiers)) {
     for (const c of tc) {
       const row = cols.map((e) => (c.engines.includes(e.replace(/_cold|_jit|_interp/, '')) || (e === 'zregex' && c.engines.includes('zregex')) ? cell(e, c.id, m === 'findall_mbps' && e === 'v8_cold' ? 'mbps' : m, d) : 'n/a'));
       const route = notes[`zregex/${c.id}/route`];
-      md += `| ${c.name}${route ? ` <sub>(z-regex: ${route})</sub>` : ''} | ${row.join(' | ')} |\n`;
+      md += `| ${c.name.replaceAll('|', '\\|')}${route ? ` <sub>(z-regex: ${route})</sub>` : ''} | ${row.join(' | ')} |\n`;
     }
   }
 }
@@ -116,7 +117,7 @@ for (const c of cases.filter((x) => x.adversarial)) for (const n of c.adversaria
     const a = advSummary.find((x) => x.engine === e && x.id === c.id && x.n === n);
     return a ? `${a.ms.median.toFixed(3)} (${a.outcomes.join(', ')})` : '—';
   });
-  md += `| ${c.name} | ${n} | ${row.join(' | ')} |\n`;
+  md += `| ${c.name.replaceAll('|', '\\|')} | ${n} | ${row.join(' | ')} |\n`;
 }
 if (mismatches.length) md += `\n**Match-count mismatches:** ${JSON.stringify(mismatches)}\n`;
 else md += `\nMatch counts: identical across every engine that runs a case.\n`;
