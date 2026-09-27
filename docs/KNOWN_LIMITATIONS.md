@@ -953,10 +953,11 @@ now also builds `test-integration-backtracker`: the same `tests/integration_test
 over a module graph built with `build_options.force_backtracker = true`, where a pattern
 compiled without an explicit `CompileOptions.force_tier` goes to the backtracker (an
 explicit one still wins). The 7 tests about routing itself skip there
-(`zregex.force_backtracker`); 139 pass, and the 8th skip is the one every run has. Cost: `zig build test` in ReleaseSafe,
-cold, median of 3: 137.9 s (117.3 / 137.9 / 143.2), from 93.3 s at F4a(3); the second
-binary recompiles the whole module graph with its own `build_options`. That is under the
-150 s review trigger (F2e) with little margin.
+(`zregex.force_backtracker`); 139 pass, and the 8th skip is the one every run has. It is always
+built in Debug (a coverage run, with every safety check): as ReleaseSafe the second
+module graph took `zig build test` in ReleaseSafe, cold, from 93.3 s to 137.9 s (median
+of 3), 12 s from the 150 s review trigger (F2e); in Debug it is 92.2 s (91.7 / 92.2 /
+113.1).
 
 **What F4a leaves to later phases:**
 

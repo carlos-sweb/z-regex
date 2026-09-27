@@ -284,13 +284,16 @@ pub fn build(b: *std.Build) void {
     // The same integration tests with every pattern on the backtracker
     // (F4a(5)): since F4a(3) T0 patterns run on the VM, and without this run
     // the backtracker would lose their coverage until F6a rewrites it. Tests
-    // about routing itself skip here (`zregex.force_backtracker`).
+    // about routing itself skip here (`zregex.force_backtracker`). Always
+    // Debug, whatever -Doptimize says: it is a coverage run (with every
+    // safety check), and a second ReleaseSafe graph cost ~45 s of LLVM in
+    // `zig build test` (93 -> 138 s, against the 150 s trigger).
     const bt_module = b.createModule(.{
         .root_source_file = b.path("tests/integration_tests.zig"),
         .target = target,
-        .optimize = optimize,
+        .optimize = .Debug,
     });
-    bt_module.addImport("zregex", addModulesWith(b, target, optimize, false, true).get("zregex"));
+    bt_module.addImport("zregex", addModulesWith(b, target, .Debug, false, true).get("zregex"));
     const bt_tests = b.addTest(.{ .name = "test-integration-backtracker", .root_module = bt_module });
     const run_bt_tests = b.addRunArtifact(bt_tests);
     test_step.dependOn(&run_bt_tests.step);

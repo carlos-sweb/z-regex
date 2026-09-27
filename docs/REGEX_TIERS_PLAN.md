@@ -491,7 +491,7 @@ Un consumidor que solo necesite T0 puede importar `zregex-t0` y no enlaza las ~3
 - **Efecto de layout en el backtracker:** sus casos del bench pierden un 11–19 % desde F4a(3), sin cambio algorítmico (ver `KNOWN_LIMITATIONS.md` § F4a); no es objetivo de F4a ni de F4b.
 
 **F4a(5), cierre:**
-- **Segunda corrida de los tests de integración:** `test-integration-backtracker`, con `build_options.force_backtracker`, mantiene la cobertura del backtracker para los patrones T0. Coste: `zig build test` en ReleaseSafe en frío pasa a 137,9 s (mediana de 3), bajo el trigger de 150 s.
+- **Segunda corrida de los tests de integración:** `test-integration-backtracker`, con `build_options.force_backtracker`, mantiene la cobertura del backtracker para los patrones T0. Se compila siempre en Debug: en ReleaseSafe llevaba `zig build test` (en frío, mediana de 3) de 93,3 a 137,9 s, a 12 s del trigger de 150 s; en Debug queda en 92,2 s.
 - **Gate de cierre:**
   - `zig build test` (Debug y ReleaseSafe) y `check-layers` pasan.
   - test262: 2856 y 0 regresiones; `test262-wtf8`, con estados idénticos.
