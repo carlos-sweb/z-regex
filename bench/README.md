@@ -60,6 +60,9 @@ the analysis are in **[docs/BENCHMARKS.md](../docs/BENCHMARKS.md)**.
 Summary: `execAt` MB/s, median of 10 interleaved rounds (min–max bands and the
 other metrics — findAll, V8 cold, ns per short exec, compile, bytes — in docs/BENCHMARKS.md).
 zig-regex has no execAt API and a quadratic findAll: it isn't in these tables.
+`zregex_xbench` also reports `iter_mbps` (`Regex.iterator`: every match, warm `Scratch`, no
+allocation); analyze.mjs prints it as z-regex-only tables. It runs at the execAt loop's speed;
+findAll against it: docs/BENCHMARKS.md, "findAll against the iterator".
 
 | T0 case | z-regex | V8 (warm) | Rust regex |
 |---|---|---|---|

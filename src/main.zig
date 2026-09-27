@@ -104,6 +104,7 @@ pub const analyze = analysis.analyze;
 pub const Regex = @import("regex.zig").Regex;
 pub const Scratch = @import("regex.zig").Scratch;
 pub const MatchSlots = @import("regex.zig").MatchSlots;
+pub const MatchIterator = @import("regex.zig").MatchIterator;
 pub const ExecLimits = @import("regex.zig").ExecLimits;
 pub const ExecError = @import("regex.zig").ExecError;
 /// D5 fallbacks of the tagged VM (F4b): must stay 0 (see there).

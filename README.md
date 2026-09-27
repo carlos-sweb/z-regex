@@ -18,7 +18,7 @@ An ECMA-262 regular expression engine in Zig, independent of the JavaScript engi
   `Symbol.replace` stay in the host.
 - Engine-agnostic: no dependency on a JS engine's values, objects or garbage collector.
 - A convenience facade for plain Zig use: `find`, `findAll`, `test_`, `replace`,
-  `replaceAll`. A C ABI is exported (`src/c_api.zig`, `zig build shared`) for the project's
+  `replaceAll`, and `Regex.iterator` (every match without allocating). A C ABI is exported (`src/c_api.zig`, `zig build shared`) for the project's
   own FFI tooling; there are no maintained C headers.
 
 ## Status
@@ -125,6 +125,35 @@ pub fn main() !void {
     const units = std.unicode.utf8ToUtf16LeStringLiteral("tel 555-1234");
     if (try re.execAt(.{ .utf16 = units }, 0, &scratch, &out, .{})) {
         std.debug.print("utf16: [{d}, {d})\n", .{ buf[0].?, buf[1].? });
+    }
+}
+```
+
+Every match without allocating, as `findAll` finds them: `Regex.iterator` runs the same
+`execAt` loop over your `Scratch` and `MatchSlots`.
+
+```zig
+const std = @import("std");
+const zregex = @import("zregex");
+
+pub fn main() !void {
+    var gpa = std.heap.DebugAllocator(.{}){};
+    defer _ = gpa.deinit();
+    const allocator = gpa.allocator();
+
+    const re = try zregex.Regex.compile(allocator, "(\\d{3})-(\\d{4})");
+    defer re.deinit();
+    var scratch = zregex.Scratch.init(allocator);
+    defer scratch.deinit();
+    var buf: [6]?usize = undefined;
+    var out: zregex.MatchSlots = .{ .slots = buf[0..re.slotCount()] };
+
+    // Every match, as findAll finds them, without allocating: `m.slots`
+    // is `out`, overwritten by the next call.
+    const text = "Call 555-1234 or 555-9876";
+    var it = re.iterator(.{ .wtf8 = text }, &scratch, &out, .{});
+    while (try it.next()) |m| {
+        std.debug.print("{s} (group 1: {s})\n", .{ text[m.start..m.end], text[m.slots[2].?..m.slots[3].?] });
     }
 }
 ```

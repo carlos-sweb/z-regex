@@ -97,6 +97,51 @@ pub var two_pass_fallbacks: std.atomic.Value(u64) = .init(0);
 /// `Regex.slotCount()` long.
 pub const MatchSlots = struct { slots: []?usize };
 
+/// Every match of a `Regex` over one subject, one per `next`, without
+/// allocating: a loop of `execAt` + `advanceIndex` with the caller's
+/// `Scratch` and `MatchSlots` (see `Regex.iterator`). The same matches as
+/// `findAll`, which materializes them instead: past each match, over one
+/// character after an empty one, never a match starting at the end, and
+/// with `sticky` it stops at the first position that doesn't match.
+pub const MatchIterator = struct {
+    re: *const Regex,
+    subject: Subject,
+    scratch: *Scratch,
+    out: *MatchSlots,
+    limits: ExecLimits,
+    index: usize = 0,
+    done: bool = false,
+
+    /// One match, in the subject's units. `slots` is the iterator's
+    /// `MatchSlots` (`slots[2g]`, `slots[2g + 1]` for group `g`): the next
+    /// call to `next` overwrites it.
+    pub const Match = struct { start: usize, end: usize, slots: []const ?usize };
+
+    /// The next match, or null once there are no more (and on every call
+    /// after that). Fails as `execAt` does; the indices it passes are always
+    /// at a character boundary.
+    pub fn next(self: *MatchIterator) ExecError!?Match {
+        if (self.done or self.index >= self.subject.len()) {
+            self.done = true;
+            return null;
+        }
+        errdefer self.done = true;
+        if (!try self.re.execAt(self.subject, self.index, self.scratch, self.out, self.limits)) {
+            self.done = true;
+            return null;
+        }
+        const start = self.out.slots[0].?;
+        const end = self.out.slots[1].?;
+        // Never a match that starts at the end of the input (as `findAll`).
+        if (start >= self.subject.len()) {
+            self.done = true;
+            return null;
+        }
+        self.index = if (end == start) self.re.advanceIndex(self.subject, end) else end;
+        return .{ .start = start, .end = end, .slots = self.out.slots[0..self.re.slotCount()] };
+    }
+};
+
 /// Error set for regex operations (includes all possible compilation and execution errors)
 pub const RegexError = parser_mod.ParseError || generator_mod.CodegenError || Allocator.Error || error{
     UnexpectedEndOfBytecode,
@@ -278,6 +323,14 @@ pub const Regex = struct {
     /// allocate.
     pub fn execAt(self: *const Self, subject: Subject, index: usize, scratch: *Scratch, out: *MatchSlots, limits: ExecLimits) ExecError!bool {
         return self.exec(subject, index, self.sticky, scratch, out.slots, limits);
+    }
+
+    /// Every match over `subject`, one per `next` (`MatchIterator`), with no
+    /// allocation once `scratch` is warm. `out` must hold at least
+    /// `slotCount()` slots; the caller owns `scratch` and `out`, as with
+    /// `execAt`, and neither may be used elsewhere while iterating.
+    pub fn iterator(self: *const Self, subject: Subject, scratch: *Scratch, out: *MatchSlots, limits: ExecLimits) MatchIterator {
+        return .{ .re = self, .subject = subject, .scratch = scratch, .out = out, .limits = limits };
     }
 
     /// The dispatcher (F4a): T0's VM when the pattern has a `t0` program,

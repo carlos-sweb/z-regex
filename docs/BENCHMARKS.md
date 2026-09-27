@@ -286,6 +286,36 @@ literal `hello` 0.014 / 0.007 / 0.003; `[a-z]+` 0.046 / 0.022 / 0.011. Each doub
 halves the throughput. zig-regex also rejects `\w` inside a class (`InvalidCharacterClass`),
 so the e-mail pattern doesn't compile.
 
+### z-regex: findAll against the iterator
+
+`Regex.iterator` (0.3.1+) gives every match `findAll` gives, one at a time, over the caller's
+`Scratch` and `MatchSlots`: no allocation once the scratch is warm. Measured on its own run
+(z-regex alone, 10 runs of `zregex_xbench`, same machine; median (min–max), MB/s):
+
+| Case | matches | findAll | execAt loop | iterator |
+|---|---|---|---|---|
+| literal hello | 87 | 13425.4 (12363.1–14161.9) | 16511.8 (12163.2–17493.2) | 16853.4 (15149.9–17340.3) |
+| book: Darcy | 417 | 8480.3 (6701.4–9561.1) | 15620.1 (10443.2–16042.7) | 15689.5 (15205.2–16092.0) |
+| [a-z]+ | 158,795 | 75.1 (68.5–82.0) | 213.2 (164.0–217.3) | 214.8 (163.0–219.5) |
+| book: [A-Z][a-z]+ | 11,031 | 280.5 (178.3–288.8) | 384.8 (233.2–390.4) | 388.7 (233.6–396.2) |
+| \d{3}-\d{4} (dense) | 30,810 | 39.3 (24.3–41.0) | 42.5 (41.4–43.8) | 43.2 (25.8–44.7) |
+| [\p{L}--[a-z]] /v | 309,431 | 16.7 (14.3–17.0) | 25.7 (22.6–26.2) | 25.5 (24.4–26.3) |
+
+On all 22 cases the iterator is within 0.98–1.03× of the execAt loop; against findAll it's
+1.00–2.86× (the most where matches are many or the search is fast).
+
+Where findAll's time goes (a separate probe, µs per call, `smp_allocator` as in the bench):
+findAll allocates one `captures` slice per match and grows its list of 72-byte `MatchResult`s.
+On Darcy (417 matches) that's 426 allocations and 8 page faults per call; on `[a-z]+` (158,795
+matches), 158,804 allocations and ~2,800 page faults. About 43% of findAll's time on Darcy and
+63% on `[a-z]+` is outside the search. Most of it is fresh memory (the large list goes back to
+the OS on free, so every call faults its pages in again): run over reused memory, findAll on
+Darcy drops from ~79 to ~55 µs (execAt: ~44). The rest, ~25–30 ns per match, is building and
+freeing the results. Putting every `captures` slice in one block (an arena) measured no faster.
+In the `literal hello` row the findAll/execAt gap (1.2–1.3× in these tables) is mostly noise:
+a pass takes ~60 µs and each timed sample is one pass; timed over ≥ 150 ms per sample the gap
+is ~1.05×.
+
 ## Analysis
 
 Reference: V8 warm, `execAt` column, unless said otherwise. Factors are ratios of medians.
@@ -333,8 +363,10 @@ Reference: V8 warm, `execAt` column, unless said otherwise. Factors are ratios o
 - **Short inputs with classes or groups**: 2.9–10× behind V8 (e.g. `\d{3}-\d{4}` 194 ns
   against 53). The Pike VM has a fixed cost per search (thread lists, closure), and groups
   pay two passes.
-- **findAll in general**: z-regex's facade allocates a `MatchResult` and two buffers per match,
-  which weighs on dense cases (`[a-z]+`: 214 MB/s execAt, 76 findAll).
+- **findAll in general**: z-regex's facade allocates one `captures` slice per match and a
+  growing list of `MatchResult`s, and pays fresh pages for it on every call; it weighs on dense
+  cases (`[a-z]+`: 214 MB/s execAt, 76 findAll). `Regex.iterator` gives the same matches at the
+  execAt loop's speed (see "findAll against the iterator" above).
 - **T1** (`u`/`v`): 1.4–3.1× behind V8 and 2.7–7.7× behind Rust regex. z-regex has no T1
   executor yet (F5): these patterns run on the backtracker.
 - **T2** (the backtracker, unchanged since before T0): 7.8× (`<(\w+)>.*?<\/\1>`), 14×
