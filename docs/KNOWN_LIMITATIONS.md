@@ -877,6 +877,76 @@ execution, under one `in_use` flag.
   2,868 of 8,533 executed patterns, no difference. `differential-v8` is identical to
   `diff-F3d.json` in both encodings.
 
+**Prefilters and fast paths (F4a(4)).** `tier0/prefilter.zig`, computed at compile
+time, used in code-unit mode (all of T0):
+
+| Prefilter | When | What |
+|---|---|---|
+| `anchored` | `^` without `m` leads every path | from an index above 0, no match; from 0, only at 0 |
+| `literal` | the whole pattern is one literal, without `i` on a letter, surrogates, astral or raw bytes | `std.mem.indexOfPos`, no VM |
+| `class_run` | greedy `C+`/`C*` over an ASCII class | the first member, then the longest run, no VM |
+| `first` | anything non-nullable | skips positions where no match can start, while no thread is alive |
+
+The fast paths never touch the VM's scratch. Corpus (8,286 routed patterns: 735
+literal, 75 class_run, 6,009 first, 1,467 none): 0 discrepancies against the backtracker
+and against the VM without prefilters. `CompileOptions.t0_prefilters = false` (tests and
+bench only) turns them off. The VM also got precomputed epsilon closures and
+generation-stamped thread lists (F4a(4) B1).
+
+**Bench (F4a(4)).** 10 runs interleaved with `422e3a9` (end of F3), median. §7.2's T0
+targets are read in the `execAt` table (no allocation, what a host runs):
+
+| Case | Routed to | `execAt` (MB/s) | VM without prefilters | Backtracker | §7.2 target |
+|---|---|---|---|---|---|
+| literal `hello` | VM, literal | 969.0 | 75.2 | 28.4 | ≥ 300 ✓ |
+| `[a-z]+` | VM, class_run | 193.9 | 45.6 | 30.8 | ≥ 500 fast path (adjusted, see below); ≥ 50 plain VM (45.6, adjusted to ≥ 45) |
+| `\d{3}-\d{4}` sparse | VM, first | 490.0 | 70.9 | 29.3 | ≥ 200 ✓ |
+| `\d{3}-\d{4}` dense | VM, first | 37.0 | 36.8 | 16.6 | ≥ 40 (37.0, adjusted to ≥ 35) |
+| email | VM, first | 38.1 | 38.9 | 6.3 | ≥ 30 ✓ |
+
+Overhead per `execAt`, routed against the backtracker: 0.19× (`/abc/`, 5 B), 0.72×
+(`/\d{3}-\d{4}/`, 12 B), 0.09× (`/abc/`, 2 KB), 0.02× (`/[a-z]+@[a-z]+/`, 2 KB); §7.2
+allows 1.5× under 64 B and 1.2× from 1 KB. Compile, dispatcher against the backtracker
+alone: 1.34× (literal), 1.60× (`first`), 1.05× (T0 not eligible), 1.26× (email);
+§7.2 allows 2×. `findAll` against the base: literal 27.8 → 936.3 MB/s, `[a-z]+` 22.5 →
+59.1, sparse 28.1 → 383.2, dense 16.2 → 33.3, email 7.1 → 36.6.
+
+- **`[a-z]+` fast path: 500 MB/s is not reachable on the bench's prose, by the number of
+  matches.** The scan itself runs at ~1.8 GB/s (words of 200-400 letters). The prose has
+  161,000 matches per MiB, one `execAt` each: 500 MB/s would need ≤ 12 ns per match
+  including the scan, and it measures ~23 ns. The two mispredicted branches per word
+  (start and end of a run of random length) and the call already take more than 12 ns.
+  The target is adjusted in §7.2: ≥ 500 MB/s of scan, ≥ 150 MB/s on the bench's prose.
+- **Plain VM, 9% and 7.5% short** (`[a-z]+` 45.6 against 50, dense 37.0 against 40):
+  the Pike VM's per-position cost (2-5 threads per byte, each a dispatch, a set test and
+  the precomputed closure). Lowering it further needs a different architecture (a
+  DFA-like state cache), not F4a's. Targets adjusted in §7.2 to the measured figures.
+
+**Backtracker cases lose 6-19% by code layout, not by an algorithm change.** The T2
+cases of the bench stay on the backtracker, whose code F4a doesn't touch:
+
+| Case (backtracker) | Base `422e3a9` | F4a (`931db48`) | Δ |
+|---|---|---|---|
+| `<(\w+)>.*?<\/\1>` (`findAll`) | 26.73 MB/s | 23.71 MB/s | −11.3% |
+| `(?<=\$)\d+` (`findAll`) | 0.60 MB/s | 0.49 MB/s | −18.6% |
+| `(a+)+b` (to `StepLimitExceeded`) | 32.4 ms | 34.4 ms | +6.2% |
+| `(a\|aa)*c` (to `StepLimitExceeded`) | 29.7 ms | 31.2 ms | +5.1% |
+
+- **The cause is LLVM's code layout.**
+  - **Bisection with the full bench** puts it at `45f70eb`, the F4a(3) dispatcher. The
+    earlier commits `7c67b33` and `d77f702` match the base.
+  - **With a minimal bench** (only these cases) it shows up one commit later, at
+    `e37d1f5`: each binary places it in a different commit.
+  - **Instruction counts are unchanged** (callgrind: `(a+)+b` 267.6 M → 273.0 M, +2%)
+    while the time grows 6-16%.
+  - **Isolating** the VM's side of the dispatcher in a `noinline` function restored
+    these cases in the minimal binary and not in the full one.
+- **The workarounds were not kept.** Neither that `noinline` nor aligning `matchFrom`
+  (not measured) is a fix: they depend on LLVM's layout, which the next compiler update
+  can move again.
+- **F4b/F6a rewrite the backtracker. These numbers are not a target of F4a nor of F4b.**
+  The F6a row of the plan says the same: F4a's bench is not F6a's reference.
+
 ### test262 baseline (F0b)
 
 The real test262 measurement that replaces the sample above as the semantic
