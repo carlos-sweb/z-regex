@@ -1,3 +1,7 @@
+> **This document is outdated. See [README.md](README.md) for the current state.**
+> (Este documento está desactualizado: describe una versión anterior a la 0.3.0, y sus
+> ejemplos de código no compilan con Zig 0.16. El estado actual está en README.md.)
+
 # zregex - Motor Moderno de Expresiones Regulares para Zig
 
 [![Licencia: MIT](https://img.shields.io/badge/Licencia-MIT-blue.svg)](LICENSE)
