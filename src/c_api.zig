@@ -4,11 +4,10 @@
 //! It handles memory management, error handling, and type conversions between C and Zig.
 
 const std = @import("std");
-const regex = @import("regex.zig");
+const regex = @import("zregex");
 const Regex = regex.Regex;
 const MatchResult = regex.MatchResult;
 const Allocator = std.mem.Allocator;
-const nextSearchStart = @import("executor/recursive_matcher.zig").RecursiveMatcher.nextSearchStart;
 
 // =============================================================================
 // Global State
@@ -102,7 +101,7 @@ fn zigErrorToC(err: anytype) ZRegexError {
         error.RecursionLimitExceeded => .ZREGEXP_ERROR_RECURSION_LIMIT,
         error.StepLimitExceeded => .ZREGEXP_ERROR_STEP_LIMIT,
         error.UnmatchedParen => .ZREGEXP_ERROR_UNMATCHED_PAREN,
-        error.InvalidEscape, error.InvalidQuantifier => .ZREGEXP_ERROR_SYNTAX,
+        error.InvalidEscape, error.InvalidQuantifier, error.IncompatibleFlags => .ZREGEXP_ERROR_SYNTAX,
         error.InvalidCharRange => .ZREGEXP_ERROR_INVALID_RANGE,
         else => .ZREGEXP_ERROR_UNKNOWN,
     };
@@ -160,7 +159,7 @@ export fn zregex_compile(pattern: [*:0]const u8, options: ?*const ZRegexOptions)
     // Note: max_recursion_depth and max_steps are runtime execution limits,
     // not compilation options. They are handled by the Matcher, not the compiler.
     const re = if (options) |opts| blk: {
-        const compile_opts = @import("codegen/compiler.zig").CompileOptions{
+        const compile_opts = regex.CompileOptions{
             .case_insensitive = opts.case_insensitive,
             .multiline = opts.multiline,
             .dot_all = opts.dot_all,
@@ -559,7 +558,7 @@ export fn zregex_clear_error() void {
 export fn zregex_compile_n(pattern: [*]const u8, len: usize, options: ?*const ZRegexOptions) ?*ZRegex {
     clearError();
     const pattern_slice = pattern[0..len];
-    const compile_opts: @import("codegen/compiler.zig").CompileOptions = if (options) |opts| .{
+    const compile_opts: regex.CompileOptions = if (options) |opts| .{
         .case_insensitive = opts.case_insensitive,
         .multiline = opts.multiline,
         .dot_all = opts.dot_all,
@@ -595,24 +594,84 @@ export fn zregex_match_at_n(re: *ZRegex, input: [*]const u8, len: usize, start: 
     return null;
 }
 
-/// First match starting at or after byte `start`, trying each start
-/// position in turn exactly like `Matcher.find` does from 0 (including its
-/// byte-at-a-time stepping). Returns null on no match; see
+/// First match starting at or after byte `start`, advancing one character
+/// at a time exactly like `Regex.find` does from 0. Returns null on no match; see
 /// `zregex_match_at_n` for telling failures apart.
 export fn zregex_search_n(re: *ZRegex, input: [*]const u8, len: usize, start: usize) ?*ZMatch {
     clearError();
     const input_slice = input[0..len];
+    // A search never starts in the middle of a character (F3c): from a
+    // `start` inside one, it starts at the next position.
     var pos = start;
-    // Step by whole UTF-8/WTF-8 sequences, like `Regex.find`: a search never
-    // starts in the middle of a character.
-    while (pos <= len) : (pos = nextSearchStart(input_slice, pos)) {
-        const result = re.findAt(input_slice, pos) catch |err| {
-            setZigError(err);
-            return null;
-        };
-        if (result) |match| return wrapMatch(input_slice, match);
-    }
+    const subject: regex.Subject = .{ .wtf8 = input_slice };
+    while (pos <= len and !subject.isPosition(pos)) pos += 1;
+    const result = re.findFrom(input_slice, pos) catch |err| {
+        setZigError(err);
+        return null;
+    };
+    if (result) |match| return wrapMatch(input_slice, match);
     return null;
+}
+
+// =============================================================================
+// Execution over WTF-8 or UTF-16 (F3c)
+// =============================================================================
+
+/// One `Scratch` per thread for the exec functions below (they never run
+/// a match from inside another). Its buffers live until the thread ends.
+threadlocal var tls_scratch: ?regex.Scratch = null;
+
+fn threadScratch() *regex.Scratch {
+    if (tls_scratch == null) tls_scratch = regex.Scratch.init(allocator);
+    return &tls_scratch.?;
+}
+
+/// `Regex.execAt` with the stickiness chosen per call: fills `slots` (`nslots`
+/// entries, at least 2 * (zregex_group_count + 1)) with the start and end of
+/// the match and of each group, `ZREGEXP_NO_CAPTURE` for a group that didn't
+/// take part. Returns 1 on a match, 0 on none, -1 on an error (see
+/// `zregex_last_error_name`: e.g. "InvalidIndex" for an index inside a
+/// character, "SlotsTooSmall").
+fn execC(re: *ZRegex, subject: regex.Subject, index: usize, sticky: bool, slots: [*]usize, nslots: usize) c_int {
+    clearError();
+    var r = re.*;
+    r.sticky = sticky;
+    var stack_slots: [64]?usize = undefined;
+    const n = @min(nslots, r.slotCount());
+    const buf: []?usize = if (n <= stack_slots.len) stack_slots[0..n] else allocator.alloc(?usize, n) catch {
+        setZigError(error.OutOfMemory);
+        return -1;
+    };
+    defer if (n > stack_slots.len) allocator.free(buf);
+    var out: regex.MatchSlots = .{ .slots = buf };
+    const found = r.execAt(subject, index, threadScratch(), &out, .{}) catch |err| {
+        setZigError(err);
+        return -1;
+    };
+    if (!found) return 0;
+    for (buf, 0..) |v, i| slots[i] = v orelse NO_CAPTURE;
+    return 1;
+}
+
+/// `execC` over `len` bytes of WTF-8; indices are byte offsets (with `b+2`
+/// between the halves of a 4-byte character, see the `subject` module).
+export fn zregex_exec_wtf8(re: *ZRegex, input: [*]const u8, len: usize, index: usize, sticky: bool, slots: [*]usize, nslots: usize) c_int {
+    return execC(re, .{ .wtf8 = input[0..len] }, index, sticky, slots, nslots);
+}
+
+/// `execC` over `len` UTF-16 code units; indices are code-unit offsets.
+export fn zregex_exec_utf16(re: *ZRegex, input: [*]const u16, len: usize, index: usize, sticky: bool, slots: [*]usize, nslots: usize) c_int {
+    return execC(re, .{ .utf16 = input[0..len] }, index, sticky, slots, nslots);
+}
+
+/// `Regex.advanceIndex` over WTF-8 bytes.
+export fn zregex_advance_index_wtf8(re: *ZRegex, input: [*]const u8, len: usize, index: usize) usize {
+    return re.advanceIndex(.{ .wtf8 = input[0..len] }, index);
+}
+
+/// `Regex.advanceIndex` over UTF-16 code units.
+export fn zregex_advance_index_utf16(re: *ZRegex, input: [*]const u16, len: usize, index: usize) usize {
+    return re.advanceIndex(.{ .utf16 = input[0..len] }, index);
 }
 
 /// Number of capturing groups in the pattern (not counting group 0).
@@ -731,4 +790,67 @@ test "zregex_last_error_name reports the precise compile error" {
     const re = zregex_compile_n(ok.ptr, ok.len, null).?;
     zregex_free(re);
     try std.testing.expectEqualStrings("", std.mem.span(zregex_last_error_name()));
+}
+
+test "zregex_compile / zregex_compile_n carry u and v to CompileResult.mode (F3c)" {
+    const Mode = regex.subject.Mode;
+    const Case = struct { unicode: bool, v: bool, mode: Mode };
+    const cases = [_]Case{
+        .{ .unicode = false, .v = false, .mode = .code_unit },
+        .{ .unicode = true, .v = false, .mode = .code_point },
+        .{ .unicode = false, .v = true, .mode = .code_point },
+    };
+    // `u` and `v` together are a SyntaxError (F4a(4) prep).
+    var both = zregex_default_options();
+    both.unicode = true;
+    both.v = true;
+    try std.testing.expect(zregex_compile("a", &both) == null);
+    try std.testing.expectEqual(ZRegexError.ZREGEXP_ERROR_SYNTAX, zregex_last_error());
+    try std.testing.expect(zregex_compile_n("a", 1, &both) == null);
+    try std.testing.expectEqualStrings("IncompatibleFlags", std.mem.span(zregex_last_error_name()));
+    for (cases) |c| {
+        var opts = zregex_default_options();
+        opts.unicode = c.unicode;
+        opts.v = c.v;
+        const re = zregex_compile("a", &opts).?;
+        defer zregex_free(re);
+        try std.testing.expectEqual(c.mode, re.compiled.mode);
+        const re_n = zregex_compile_n("a", 1, &opts).?;
+        defer zregex_free(re_n);
+        try std.testing.expectEqual(c.mode, re_n.compiled.mode);
+    }
+    const plain = zregex_compile("a", null).?;
+    defer zregex_free(plain);
+    try std.testing.expectEqual(Mode.code_unit, plain.compiled.mode);
+}
+
+test "zregex_exec_wtf8 / zregex_exec_utf16 agree and report errors (F3c)" {
+    const re = zregex_compile("(b)|x", null).?;
+    defer zregex_free(re);
+    var slots: [4]usize = undefined;
+    const w = "a\u{1F600}b";
+    try std.testing.expectEqual(@as(c_int, 1), zregex_exec_wtf8(re, w.ptr, w.len, 0, false, &slots, slots.len));
+    try std.testing.expectEqualSlices(usize, &.{ 5, 6, 5, 6 }, &slots);
+    const u = [_]u16{ 'a', 0xD83D, 0xDE00, 'b' };
+    try std.testing.expectEqual(@as(c_int, 1), zregex_exec_utf16(re, &u, u.len, 0, false, &slots, slots.len));
+    try std.testing.expectEqualSlices(usize, &.{ 3, 4, 3, 4 }, &slots);
+    try std.testing.expectEqual(@as(c_int, 0), zregex_exec_utf16(re, &u, u.len, 0, true, &slots, slots.len));
+    try std.testing.expectEqual(@as(c_int, -1), zregex_exec_wtf8(re, w.ptr, w.len, 2, false, &slots, slots.len));
+    try std.testing.expectEqualStrings("InvalidIndex", std.mem.span(zregex_last_error_name()));
+    try std.testing.expectEqual(@as(c_int, -1), zregex_exec_wtf8(re, w.ptr, w.len, 0, false, &slots, 3));
+    try std.testing.expectEqualStrings("SlotsTooSmall", std.mem.span(zregex_last_error_name()));
+    // Without `u` one code unit (b+2 in WTF-8, F3d); with `u` one code point.
+    try std.testing.expectEqual(@as(usize, 3), zregex_advance_index_wtf8(re, w.ptr, w.len, 1));
+    try std.testing.expectEqual(@as(usize, 2), zregex_advance_index_utf16(re, &u, u.len, 1));
+    var uopts = zregex_default_options();
+    uopts.unicode = true;
+    const re_u = zregex_compile("(b)|x", &uopts).?;
+    defer zregex_free(re_u);
+    try std.testing.expectEqual(@as(usize, 5), zregex_advance_index_wtf8(re_u, w.ptr, w.len, 1));
+    try std.testing.expectEqual(@as(usize, 3), zregex_advance_index_utf16(re_u, &u, u.len, 1));
+    try std.testing.expectEqual(@as(c_int, 0), zregex_exec_utf16(re, &u, u.len, 5, false, &slots, slots.len));
+    // No group taking part is NO_CAPTURE.
+    const x = "x";
+    try std.testing.expectEqual(@as(c_int, 1), zregex_exec_wtf8(re, x.ptr, x.len, 0, false, &slots, slots.len));
+    try std.testing.expectEqualSlices(usize, &.{ 0, 1, NO_CAPTURE, NO_CAPTURE }, &slots);
 }

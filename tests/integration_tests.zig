@@ -335,3 +335,27 @@ test {
 test {
     _ = @import("captures_tests.zig");
 }
+test {
+    _ = @import("bytecode_snapshot.zig");
+}
+test {
+    _ = @import("hir_contract_tests.zig");
+}
+test {
+    _ = @import("tier2_pipeline_tests.zig");
+}
+test {
+    _ = @import("exec_tests.zig");
+}
+test {
+    _ = @import("subject_tests.zig");
+}
+test {
+    _ = @import("differential.zig");
+}
+test {
+    _ = @import("code_unit_tests.zig");
+}
+test {
+    _ = @import("t0_tests.zig");
+}

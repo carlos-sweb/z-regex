@@ -13,7 +13,20 @@ This is tooling only: the library itself has no Node dependency.
   `@@search`, `@@split`) reaches the matcher through `RegExpExec`, so V8
   supplies the language and the algorithms around matching, zregex the
   matching.
-- Strings cross the FFI as WTF-8. Offsets are mapped back to UTF-16 indices.
+- Subjects cross the FFI in one of two encodings (F3c, `--encoding` or
+  `ZREGEX_ENCODING`), through `zregex_exec_wtf8` / `zregex_exec_utf16`:
+  - `utf16`: the string's own code units; indices need no mapping.
+  - `wtf8`: WTF-8 bytes; UTF-16 indices map to byte offsets, with `b+2`
+    for the point between the two halves of a 4-byte character (the
+    `subject` module's convention), so any `lastIndex` is expressible.
+- **Default and baselines (since F3d):** the default is `utf16` (what JS
+  uses inside, so what a real host sees) and `baseline.json` is measured
+  with it (`zig build test262`). `wtf8` is a cross-check against its own
+  `baseline-wtf8.json` (`zig build test262-wtf8`), run at each phase's
+  closing gate rather than on every commit. The two must hold the same
+  status for every test: a test that passes with WTF-8 and fails with
+  UTF-16 is an engine bug, the other way round a harness bug. (Until F3d
+  the default was `wtf8`.)
 - Parse-phase negative tests (`negative: phase: parse`) never run: the
   regex literal is extracted and zregex must reject it.
 - A pool of child processes runs one test per IPC message, so a crash
@@ -28,8 +41,10 @@ zig build -Doptimize=ReleaseSafe               # safety checks on: bugs surface 
 node scripts/test262/run.mjs                   # full run -> zig-out/test262/results.json
 node scripts/test262/run.mjs --sample 100      # stratified, reproducible sample
 node scripts/test262/run.mjs --filter lookBehind
+node scripts/test262/run.mjs --encoding wtf8   # the subject as WTF-8 (default: utf16)
 
-zig build test262                              # the gate: ReleaseSafe build + --check-baseline
+zig build test262                              # the gate: ReleaseSafe build + --check-baseline (UTF-16)
+zig build test262-wtf8                         # phase gate: WTF-8 against baseline-wtf8.json
 node scripts/test262/run.mjs --update-baseline-improvements scripts/test262/baseline.json  # record improvements only
 node scripts/test262/run.mjs --update-baseline scripts/test262/baseline.json   # new test262 revision only
 ```
@@ -62,6 +77,45 @@ only for a new pinned test262 revision. With
 | `ZREGEX_NATIVE_STACK_MB` | `8` | native stack for FFI calls; koffi's own default is 1 MiB, on which zregex's recursive matcher overflows |
 
 The pinned test262 revision is in `TEST262_SHA`.
+
+### test262-wtf8 at a phase gate
+
+`zig build test262-wtf8` has three outcomes:
+
+- **No status differs between the encodings:** green.
+- **Differences that are documented and justified:** accepted. They are recorded in
+  `docs/KNOWN_LIMITATIONS.md` and `baseline-wtf8.json` is updated.
+- **Undocumented differences:** they block the phase.
+
+A test that passes with WTF-8 and fails with UTF-16 is an engine bug; the other way
+round, a harness bug.
+
+## The V8 differential reference
+
+`zig build differential-v8` (`differential.mjs`) is compared against a committed
+reference run, not against zero:
+
+- **Current reference:** `tests/differential/reference/diff-F4b.json` (F4b closed), generated
+  with UTF-16 subjects. It has 477 different results and 17 `StepLimitExceeded`, all on
+  the backtracker: 470 T2 patterns and 7 T1 (by `analyze()`), with the backtracker's
+  iteration semantics (captures not reset per iteration, empty iterations accepted) and
+  backreferences, for F5/F6a; no T0 pattern is left. Against `diff-F3d.json` (536 + 17,
+  now in `archive/`), the 59 T0 divergences are gone since F4b(3) routes groups and
+  nullable loops to the tagged VM; none appeared, none changed.
+- **Lifecycle:**
+  - The current reference is the entry reference of the next phase. `diff-F3d.json` was
+    F4a's, and F4a closed identical to it (0 gone, 0 appeared, 0 changed, in both
+    encodings), so no `diff-F4a.json` was generated: `diff-F3d.json` was also F4b's
+    entry reference. F4b changed results (the 59 T0 divergences), so it closed with
+    `diff-F4b.json`, the entry reference of F5.
+  - A phase that changes the executor but not the semantics (F4a) must not add any
+    divergence against it. That is its gate.
+  - When the phase closes, a new reference (`diff-F4a.json`, ...) is generated only if
+    something changed. Otherwise the current one stays in force (until F4b, for F4a).
+  - A replaced reference moves to `tests/differential/reference/archive/`.
+- **Comparing:** group divergences by (flags, pattern, subject), counting repeats, and
+  classify each one as gone, appeared or changed. Every appeared or changed entry is
+  explained one by one before a phase closes.
 
 ## Statuses
 
@@ -101,10 +155,10 @@ at the cost of roughly doubling the time of the non-passing entries
 - `new RegExp(src)` with a pattern V8 rejects but zregex would accept: V8
   throws first, so the test passes without measuring zregex. Only
   parse-negative tests with an extractable literal measure rejection.
-- A non-`u` `lastIndex` between the two halves of a surrogate pair can't be
-  expressed in WTF-8 (D6): a search resumes after the pair and a sticky
-  attempt fails, so a match never starts before `lastIndex`. Tests that
-  need to match a lone half of a pair fail on this.
+- (Fixed in F3c.) A non-`u` `lastIndex` between the two halves of a
+  surrogate pair couldn't be expressed in WTF-8, so a search resumed after
+  the pair and a sticky attempt failed. With `b+2` it is a position, and
+  `Symbol.replace/coerce-unicode.js` passes in both encodings.
 - `RegExp.$1` and the other legacy statics are maintained by V8's own
   matcher, which the hook bypasses; the tests for them are `legacy-regexp`,
   which Node 22's V8 doesn't support anyway (skipped).

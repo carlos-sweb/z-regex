@@ -3,7 +3,7 @@
 //! See scripts/README.md for regeneration instructions.
 
 /// An inclusive codepoint range.
-pub const CodepointRange = struct { start: u32, end: u32 };
+pub const CodepointRange = extern struct { start: u32, end: u32 };
 
 /// A (from, to) codepoint case-mapping pair.
 pub const CaseMapping = struct { from: u32, to: u32 };

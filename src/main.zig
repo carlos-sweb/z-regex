@@ -31,50 +31,68 @@
 const std = @import("std");
 
 // Version information
-pub const version = "0.2.0";
+pub const version = "0.3.0";
 pub const zig_version_required = "0.16.0";
 
 // Utils module exports
-pub const DynBuf = @import("utils/dynbuf.zig").DynBuf;
-pub const BitSet256 = @import("utils/bitset.zig").BitSet256;
-pub const DynBitSet = @import("utils/bitset.zig").DynBitSet;
-pub const Pool = @import("utils/pool.zig").Pool;
-pub const Pooled = @import("utils/pool.zig").Pooled;
-pub const debug = @import("utils/debug.zig");
+pub const DynBuf = @import("utils").dynbuf.DynBuf;
+pub const BitSet256 = @import("utils").bitset.BitSet256;
+pub const DynBitSet = @import("utils").bitset.DynBitSet;
+pub const Pool = @import("utils").pool.Pool;
+pub const Pooled = @import("utils").pool.Pooled;
+pub const debug = @import("utils").debug;
+pub const Budget = @import("utils").budget.Budget;
 
 // Bytecode module exports
-pub const Opcode = @import("bytecode/opcodes.zig").Opcode;
-pub const OpcodeCategory = @import("bytecode/opcodes.zig").OpcodeCategory;
-pub const Instruction = @import("bytecode/format.zig").Instruction;
-pub const BytecodeWriter = @import("bytecode/writer.zig").BytecodeWriter;
-pub const BytecodeReader = @import("bytecode/reader.zig").BytecodeReader;
+pub const Opcode = @import("tier2").opcodes.Opcode;
+pub const OpcodeCategory = @import("tier2").opcodes.OpcodeCategory;
+pub const Instruction = @import("tier2").format.Instruction;
+pub const BytecodeWriter = @import("tier2").writer.BytecodeWriter;
+pub const BytecodeReader = @import("tier2").reader.BytecodeReader;
+pub const disassemble = @import("tier2").reader.disassemble;
 
 // Parser module exports
-pub const Token = @import("parser/lexer.zig").Token;
-pub const TokenType = @import("parser/lexer.zig").TokenType;
-pub const Lexer = @import("parser/lexer.zig").Lexer;
-pub const Node = @import("parser/ast.zig").Node;
-pub const NodeType = @import("parser/ast.zig").NodeType;
-pub const Parser = @import("parser/parser.zig").Parser;
-pub const ParseError = @import("parser/parser.zig").ParseError;
+pub const Token = @import("frontend").lexer.Token;
+pub const TokenType = @import("frontend").lexer.TokenType;
+pub const Lexer = @import("frontend").lexer.Lexer;
+pub const Node = @import("frontend").ast.Node;
+pub const NodeType = @import("frontend").ast.NodeType;
+pub const Parser = @import("frontend").parser.Parser;
+pub const ParseError = @import("frontend").parser.ParseError;
 
 // Codegen module exports
-pub const CodeGenerator = @import("codegen/generator.zig").CodeGenerator;
-pub const CodegenError = @import("codegen/generator.zig").CodegenError;
-pub const MAX_PROGRAM_BYTES = @import("codegen/generator.zig").MAX_PROGRAM_BYTES;
-pub const Optimizer = @import("codegen/optimizer.zig").Optimizer;
-pub const OptLevel = @import("codegen/optimizer.zig").OptLevel;
-pub const compile = @import("codegen/compiler.zig").compile;
-pub const compileSimple = @import("codegen/compiler.zig").compileSimple;
-pub const CompileOptions = @import("codegen/compiler.zig").CompileOptions;
-pub const CompileResult = @import("codegen/compiler.zig").CompileResult;
-pub const NamedGroup = @import("codegen/compiler.zig").NamedGroup;
+pub const CodeGenerator = @import("tier2").generator.CodeGenerator;
+pub const CodegenError = @import("tier2").generator.CodegenError;
+pub const MAX_PROGRAM_BYTES = @import("tier2").generator.MAX_PROGRAM_BYTES;
+pub const Optimizer = @import("tier2").optimizer.Optimizer;
+pub const OptLevel = @import("tier2").optimizer.OptLevel;
+pub const compile = @import("compile.zig").compile;
+pub const compileSimple = @import("compile.zig").compileSimple;
+pub const CompileOptions = @import("compile.zig").CompileOptions;
+pub const CompileResult = @import("compile.zig").CompileResult;
+pub const compileTiers = @import("compile.zig").compileTiers;
+pub const Compiled = @import("compile.zig").Compiled;
+pub const TierUnavailable = @import("compile.zig").TierUnavailable;
+/// Whether this build runs patterns without an explicit `force_tier` on the
+/// backtracker (`-Dforce-backtracker`-style builds; tests only, F4a(5)).
+pub const force_backtracker = @import("build_options").force_backtracker;
+pub const CharSet = @import("ir").charset.CharSet;
+/// The input a regex runs over: WTF-8 or UTF-16, indices in its own units (F3).
+pub const subject = @import("subject");
+pub const Subject = subject.Subject;
+pub const hir = @import("ir").hir;
+pub const lower = @import("frontend").lower;
+/// The backtracker (Tier 2): bytecode, code generator, matcher.
+pub const tier2 = @import("tier2");
+/// The linear-time VM (Tier 0, F4a).
+pub const tier0 = @import("tier0");
+pub const NamedGroup = @import("compile.zig").NamedGroup;
 
 // Executor module exports
-pub const Capture = @import("executor/thread.zig").Capture;
-pub const Matcher = @import("executor/matcher.zig").Matcher;
-pub const MatchResult = @import("executor/matcher.zig").MatchResult;
-pub const CaptureIndices = @import("executor/matcher.zig").CaptureIndices;
+pub const Capture = @import("tier2").thread.Capture;
+pub const Matcher = @import("tier2").matcher.Matcher;
+pub const MatchResult = @import("tier2").matcher.MatchResult;
+pub const CaptureIndices = @import("tier2").matcher.CaptureIndices;
 
 // Tier classification (docs/REGEX_TIERS_PLAN.md, F0a prototype): reports
 // the features a pattern uses and the minimum execution tier they need.
@@ -84,6 +102,12 @@ pub const analyze = analysis.analyze;
 
 // High-level Regex API
 pub const Regex = @import("regex.zig").Regex;
+pub const Scratch = @import("regex.zig").Scratch;
+pub const MatchSlots = @import("regex.zig").MatchSlots;
+pub const ExecLimits = @import("regex.zig").ExecLimits;
+pub const ExecError = @import("regex.zig").ExecError;
+/// D5 fallbacks of the tagged VM (F4b): must stay 0 (see there).
+pub const two_pass_fallbacks = &@import("regex.zig").two_pass_fallbacks;
 pub const test_ = @import("regex.zig").test_;
 pub const find = @import("regex.zig").find;
 pub const findAll = @import("regex.zig").findAll;
@@ -92,8 +116,8 @@ pub const findAll = @import("regex.zig").findAll;
 // engine (e.g. z-lexer's ID_Start/ID_Continue identifier classification) --
 // avoids duplicating the ~21k lines of UCD-derived tables in tables.zig.
 pub const unicode = struct {
-    pub const UnicodeProperty = @import("unicode/properties.zig").UnicodeProperty;
-    pub const isInCategory = @import("unicode/properties.zig").isInCategory;
+    pub const UnicodeProperty = @import("unicode").properties.UnicodeProperty;
+    pub const isInCategory = @import("unicode").properties.isInCategory;
 };
 
 // Placeholder for development
@@ -102,32 +126,13 @@ pub fn placeholder() void {
     std.debug.print("See ROADMAP.md for development timeline\n", .{});
 }
 
-// Test aggregation
+// Test aggregation: this module's own files. Every other module (ir,
+// unicode, utils, frontend, tier2, ...) has its own test binary, compiled
+// with only the modules it may import (build.zig, F2e).
 test {
     std.testing.refAllDecls(@This());
-
-    // Utils module tests (implemented)
-    _ = @import("utils/utils_tests.zig");
-
-    // Bytecode module tests (implemented)
-    _ = @import("bytecode/bytecode_tests.zig");
-
-    // Parser module tests (implemented)
-    _ = @import("parser/parser_tests.zig");
-
-    // Codegen module tests (implemented)
-    _ = @import("codegen/codegen_tests.zig");
-
-    // Executor module tests (implemented)
-    _ = @import("executor/executor_tests.zig");
-
-    // Regex API tests (implemented)
+    _ = @import("compile.zig");
     _ = @import("regex.zig");
-
-    // Unicode module tests (General_Category properties + simple case folding)
-    _ = @import("unicode/unicode_tests.zig");
-
-    // Tier classifier (F0a)
     _ = @import("analysis/classify.zig");
 }
 

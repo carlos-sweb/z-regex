@@ -7,6 +7,7 @@
 const std = @import("std");
 const zregex = @import("zregex");
 const testing = std.testing;
+const dual = @import("dual_encoding.zig");
 
 const u: zregex.CompileOptions = .{ .unicode = true };
 const annex_b: zregex.CompileOptions = .{};
@@ -30,6 +31,8 @@ fn expectAccepted(pattern: []const u8, options: zregex.CompileOptions) !void {
     re.deinit();
 }
 
+/// Checks `find` on the WTF-8 input, and (F3c) the same search on its
+/// UTF-16 form, which must find the same match.
 fn expectMatch(pattern: []const u8, options: zregex.CompileOptions, input: []const u8, expected: ?[]const u8) !void {
     var re = try zregex.Regex.compileWithOptions(testing.allocator, pattern, options);
     defer re.deinit();
@@ -40,6 +43,14 @@ fn expectMatch(pattern: []const u8, options: zregex.CompileOptions, input: []con
         try testing.expectEqualStrings(e, got.group(input));
     } else {
         try testing.expect(m == null);
+    }
+    if (!dual.wellFormed(input)) return;
+    const in16 = try dual.execUtf16(testing.allocator, re, input, 0);
+    defer if (in16) |f| f.deinit(testing.allocator);
+    try testing.expectEqual(m == null, in16 == null);
+    if (m) |x| {
+        try testing.expectEqual(x.start, in16.?.slots[0].?);
+        try testing.expectEqual(x.end, in16.?.slots[1].?);
     }
 }
 
@@ -197,8 +208,9 @@ test "an escaped lone surrogate is its WTF-8 sequence, not a literal 'u'" {
         try expectMatch("[\\udc00-\\udfff]", opts, "\xED\xB0\x80", "\xED\xB0\x80");
         try expectMatch("\\ud800", opts, "ud800", null);
     }
-    // Without `u` the pair is two code units (not combined, D6).
-    try expectMatch("\\ud834\\udf06", annex_b, "\xF0\x9D\x8C\x86", null);
+    // Without `u` the escapes are two code units, which match the two
+    // halves of the subject's pair (F3d, D6; V8: /\ud834\udf06/.test("𝌆")).
+    try expectMatch("\\ud834\\udf06", annex_b, "\xF0\x9D\x8C\x86", "\xF0\x9D\x8C\x86");
 }
 
 // --- D12 (start positions): a search never starts inside a character ---
@@ -252,11 +264,13 @@ test "\\s and \\S follow ECMA-262 WhiteSpace + LineTerminator, standalone and in
             try expectMatch("^[^\\s]$", opts, ws, null);
         }
         for (not_whitespace) |c| {
+            // Without `u` an astral character (💚) is two characters (F3d).
+            const one: ?[]const u8 = if (opts.unicode or c.len < 4) c else null;
             try expectMatch("^\\s$", opts, c, null);
             try expectMatch("^[\\s]$", opts, c, null);
-            try expectMatch("^\\S$", opts, c, c);
-            try expectMatch("^[\\S]$", opts, c, c);
-            try expectMatch("^[^\\s]$", opts, c, c);
+            try expectMatch("^\\S$", opts, c, one);
+            try expectMatch("^[\\S]$", opts, c, one);
+            try expectMatch("^[^\\s]$", opts, c, one);
         }
     }
 }
@@ -265,8 +279,10 @@ test "negated shorthands in a class cover every code point, not just 0-255" {
     for ([_]zregex.CompileOptions{ annex_b, u }) |opts| {
         // Before F1a these missed everything above U+00FF.
         for ([_][]const u8{ "\xE2\x82\xAC", "\xF0\x9F\x92\x9A", "\xEF\xBB\xBF" }) |c| {
-            try expectMatch("^[\\D]$", opts, c, c);
-            try expectMatch("^[\\W]$", opts, c, c);
+            // Without `u` an astral character is two characters (F3d).
+            const one: ?[]const u8 = if (opts.unicode or c.len < 4) c else null;
+            try expectMatch("^[\\D]$", opts, c, one);
+            try expectMatch("^[\\W]$", opts, c, one);
         }
         try expectMatch("^[\\s\\S]+$", opts, "a \xE2\x82\xAC\n", "a \xE2\x82\xAC\n");
         try expectMatch("^[\\s\\d\\w-]+$", opts, "a-1\xC2\xA0", "a-1\xC2\xA0");
@@ -410,4 +426,44 @@ test "D8: *+ ++ ?+ are SyntaxErrors by default and possessive with the opt-in" {
     try expectMatch("a+a", annex_b, "aaaa", "aaaa");
     // Lazy quantifiers are unaffected.
     try expectMatch("a+?", annex_b, "aaa", "a");
+}
+
+// --- v-mode class set operations with `u` (fixed before F2c) ---
+
+test "v + u: a set operation whose last operand is a bracketed class" {
+    // Before the fix the token after the nested operand's `]` (the outer
+    // `]`) was read outside a class, where `u` rejects a lone `]`. Since
+    // F4a(4) prep `compile` rejects `u` with `v` (a SyntaxError, as in
+    // ECMA-262), so the lexer state the fix is about (`unicode_mode` and
+    // `v_mode` together, which F5 brings back for `v` alone) is checked on
+    // the lexer and parser directly.
+    for ([_][]const u8{ "[[a]&&[a]]", "[\\p{L}&&[a]]", "[[a]--\\p{Lu}]", "[\\p{L}--[^a-z]]" }) |p| try parseUnicodeSets(p, true);
+    try parseUnicodeSets("[[a]&&[a]]]", false);
+    // Only the nested class's lookahead is relaxed: a stray `]` after a
+    // top-level class is still rejected under `u`.
+    try expectRejected("[a]]", u);
+    const v: zregex.CompileOptions = .{ .v = true };
+    try expectMatch("[[a]&&[a]]", v, "xa", "a");
+    try expectMatch("[[a]&&[a]]", v, "b", null);
+    try expectMatch("[\\p{L}&&[a]]", v, "1a", "a");
+    try expectMatch("[\\p{L}&&[a]]", v, "b", null);
+    try expectMatch("[[a]--\\p{Lu}]", v, "Aa", "a");
+    try expectMatch("[[a]--\\p{Lu}]", v, "A", null);
+    try expectMatch("[\\p{L}--[^a-z]]", v, "Ab", "b");
+    try testing.expectError(error.IncompatibleFlags, zregex.Regex.compileWithOptions(testing.allocator, "[[a]&&[a]]", .{ .v = true, .unicode = true }));
+}
+
+/// Parses `pattern` with the lexer in `unicode_mode` and `v_mode` together.
+fn parseUnicodeSets(pattern: []const u8, accepted: bool) !void {
+    var lexer = zregex.Lexer.init(pattern);
+    lexer.unicode_mode = true;
+    lexer.v_mode = true;
+    var parser = try zregex.Parser.init(testing.allocator, &lexer);
+    defer parser.deinit();
+    if (parser.parse()) |ast| {
+        ast.deinit();
+        if (!accepted) return error.TestExpectedError;
+    } else |err| {
+        if (err == error.OutOfMemory or accepted) return err;
+    }
 }

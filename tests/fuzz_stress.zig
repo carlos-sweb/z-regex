@@ -46,6 +46,13 @@ test "fuzz: deterministic stress over 20,000 syntax-biased patterns" {
     }
     // A broken execution filter must not leave the matcher untested unnoticed.
     try std.testing.expect(common.stats.executed > 0);
+    // Nor leave T0's VM without its comparison against the backtracker.
+    try std.testing.expect(common.stats.engines_compared > 0);
+    // F4b: and some of those comparisons on every slot, not just the
+    // bounds (a group in a repeat is compared on the bounds only).
+    try std.testing.expect(common.stats.engines_compared > common.stats.engines_bounds_only);
+    // Nor let the sampled path audit sample nothing.
+    try std.testing.expect(common.stats.audited > 0);
 }
 
 // F1c (D9/D16): the token alphabet can't build patterns with hundreds of

@@ -1,5 +1,152 @@
 const std = @import("std");
 
+/// The module layers (docs/REGEX_TIERS_PLAN.md, F2e): each module may import
+/// only the modules listed as its `deps`, so dependencies go downwards. This
+/// table is the single source of truth: the module graph is built from it,
+/// and `check-layers` checks the sources against it.
+pub const Layer = struct {
+    name: []const u8,
+    /// The module's root file; the module owns that file's directory.
+    root: []const u8,
+    deps: []const []const u8,
+};
+
+/// The test aggregator of the leaf layers (see `test-leaves` below).
+const leaves_tests_root = "src/leaves_tests.zig";
+
+pub const layers = [_]Layer{
+    .{ .name = "ir", .root = "src/ir/root.zig", .deps = &.{} },
+    .{ .name = "unicode", .root = "src/unicode/root.zig", .deps = &.{} },
+    .{ .name = "utils", .root = "src/utils/root.zig", .deps = &.{} },
+    .{ .name = "subject", .root = "src/subject/root.zig", .deps = &.{} },
+    .{ .name = "frontend", .root = "src/frontend/root.zig", .deps = &.{ "ir", "unicode" } },
+    .{ .name = "tier0", .root = "src/tier0/root.zig", .deps = &.{ "ir", "utils", "subject" } },
+    .{ .name = "tier1", .root = "src/tier1/root.zig", .deps = &.{ "ir", "unicode", "utils", "subject", "tier0" } },
+    .{ .name = "tier2", .root = "src/tier2/root.zig", .deps = &.{ "ir", "unicode", "utils", "subject" } },
+    .{ .name = "zregex", .root = "src/main.zig", .deps = &.{ "ir", "unicode", "utils", "subject", "frontend", "tier0", "tier1", "tier2", "build_options" } },
+};
+
+/// Generated modules a layer may import besides the layers above:
+/// `build_options` (`force_backtracker`, F4a(5): the second integration
+/// test binary runs every test on the backtracker).
+const generated_modules = [_][]const u8{"build_options"};
+
+/// One build of the whole module graph (per target/optimize mode).
+const Modules = struct {
+    by_name: std.StringArrayHashMapUnmanaged(*std.Build.Module),
+
+    fn get(self: Modules, name: []const u8) *std.Build.Module {
+        return self.by_name.get(name).?;
+    }
+};
+
+/// Create every layer's module with exactly its declared imports. With
+/// `public`, `zregex` is the package's exported module (`b.addModule`); the
+/// others are always internal.
+fn addModules(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.builtin.OptimizeMode, public: bool) Modules {
+    return addModulesWith(b, target, optimize, public, false);
+}
+
+/// `addModules`, with `force_backtracker`: a pattern compiled without an
+/// explicit `CompileOptions.force_tier` runs on the backtracker (tests only).
+fn addModulesWith(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.builtin.OptimizeMode, public: bool, force_backtracker: bool) Modules {
+    var mods: Modules = .{ .by_name = .empty };
+    const options = b.addOptions();
+    options.addOption(bool, "force_backtracker", force_backtracker);
+    mods.by_name.put(b.allocator, generated_modules[0], options.createModule()) catch @panic("OOM");
+    for (layers) |layer| {
+        const opts: std.Build.Module.CreateOptions = .{
+            .root_source_file = b.path(layer.root),
+            .target = target,
+            .optimize = optimize,
+        };
+        const m = if (public and std.mem.eql(u8, layer.name, "zregex")) b.addModule("zregex", opts) else b.createModule(opts);
+        for (layer.deps) |dep| m.addImport(dep, mods.get(dep));
+        mods.by_name.put(b.allocator, layer.name, m) catch @panic("OOM");
+    }
+    return mods;
+}
+
+/// The C ABI module (src/c_api.zig), on top of `zregex` only.
+fn addCApiModule(b: *std.Build, mods: Modules, target: std.Build.ResolvedTarget, optimize: std.builtin.OptimizeMode) *std.Build.Module {
+    const m = b.createModule(.{
+        .root_source_file = b.path("src/c_api.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    m.addImport("zregex", mods.get("zregex"));
+    return m;
+}
+
+/// A layer's declared deps, from the table.
+fn depsOf(name: []const u8) []const []const u8 {
+    for (layers) |layer| if (std.mem.eql(u8, layer.name, name)) return layer.deps;
+    unreachable;
+}
+
+const Canary = struct {
+    /// The layer the canary pretends to be (it gets that layer's deps).
+    layer: []const u8,
+    /// Its root file: `bad` must fail with `expect`; `good` must compile.
+    bad: []const u8,
+    good: []const u8,
+    expect: []const u8,
+    /// Extra files next to it (for the relative-path canary).
+    extra: []const [2][]const u8 = &.{},
+};
+
+const canaries = [_]Canary{
+    .{
+        .layer = "tier0",
+        .bad = "pub fn f() usize {\n    return @import(\"unicode\").tables.RANGES_L.len;\n}\n",
+        .good = "pub fn f() usize {\n    return @sizeOf(@import(\"ir\").hir.Flags);\n}\n",
+        .expect = "no module named 'unicode' available within module 'tier0'",
+    },
+    .{
+        .layer = "tier1",
+        .bad = "pub fn f() usize {\n    return @sizeOf(@import(\"tier2\").ExecOptions);\n}\n",
+        .good = "pub fn f() usize {\n    return @sizeOf(@import(\"tier0\").hir.Flags);\n}\n",
+        .expect = "no module named 'tier2' available within module 'tier1'",
+    },
+    .{
+        .layer = "tier0",
+        .bad = "pub fn f() usize {\n    return @import(\"../unicode/properties.zig\").x;\n}\n",
+        .good = "pub fn f() usize {\n    return @import(\"helper.zig\").x;\n}\n",
+        .expect = "import of file outside module path",
+        .extra = &.{ .{ "unicode/properties.zig", "pub const x: usize = 1;\n" }, .{ "helper.zig", "pub const x: usize = 1;\n" } },
+    },
+};
+
+/// Each canary is compiled twice as a module named after its layer, with that
+/// layer's deps from the table: `bad` must fail with exactly `expect` (so a
+/// typo, which fails differently, doesn't pass), `good` must compile (so the
+/// file is otherwise sound). Granting the forbidden edge in the table makes
+/// `bad` compile, and the step fails. The sources are generated into the
+/// build cache, never committed.
+fn addCanaries(b: *std.Build, mods: Modules, target: std.Build.ResolvedTarget, step: *std.Build.Step) void {
+    for (canaries, 0..) |canary, i| {
+        for ([_]bool{ true, false }) |bad| {
+            const files = b.addWriteFiles();
+            const dir = b.fmt("canary{d}/{s}", .{ i, if (bad) "bad" else "good" });
+            const root = files.add(b.fmt("{s}/{s}/root.zig", .{ dir, canary.layer }), if (bad) canary.bad else canary.good);
+            for (canary.extra) |e| {
+                // `extra` paths are relative to the layer directory's parent
+                // (unicode/...) or to the layer directory itself (helper.zig).
+                const sub = if (std.mem.indexOfScalar(u8, e[0], '/') != null) b.fmt("{s}/{s}", .{ dir, e[0] }) else b.fmt("{s}/{s}/{s}", .{ dir, canary.layer, e[0] });
+                _ = files.add(sub, e[1]);
+            }
+            const main = files.add(b.fmt("{s}/main.zig", .{dir}), b.fmt("test {{\n    _ = &@import(\"{s}\").f;\n}}\n", .{canary.layer}));
+            const layer_mod = b.createModule(.{ .root_source_file = root, .target = target, .optimize = .Debug });
+            for (depsOf(canary.layer)) |dep| layer_mod.addImport(dep, mods.get(dep));
+            const main_mod = b.createModule(.{ .root_source_file = main, .target = target, .optimize = .Debug });
+            main_mod.addImport(canary.layer, layer_mod);
+            const t = b.addTest(.{ .name = b.fmt("canary{d}-{s}", .{ i, if (bad) "bad" else "good" }), .root_module = main_mod });
+            if (bad) t.expect_errors = .{ .contains = canary.expect };
+            step.dependOn(&t.step);
+        }
+    }
+}
+
 pub fn build(b: *std.Build) void {
     // Standard target and optimize options
     const target = b.standardTargetOptions(.{});
@@ -11,19 +158,12 @@ pub fn build(b: *std.Build) void {
     // Phase 8) drives zregex through from Node.js. Anyone else wanting to call zregex
     // from C/C++ can link against the shared library and write their own bindings
     // against these exported symbols.
-    const c_api_module = b.createModule(.{
-        .root_source_file = b.path("src/c_api.zig"),
-        .target = target,
-        .optimize = optimize,
-    });
-
     // Public module exposed to downstream consumers via the Zig package manager
-    // (e.g. `b.dependency("zregex", .{}).module("zregex")`).
-    const lib_module = b.addModule("zregex", .{
-        .root_source_file = b.path("src/main.zig"),
-        .target = target,
-        .optimize = optimize,
-    });
+    // (e.g. `b.dependency("zregex", .{}).module("zregex")`), with the
+    // internal layer modules underneath it.
+    const mods = addModules(b, target, optimize, true);
+    const lib_module = mods.get("zregex");
+    const c_api_module = addCApiModule(b, mods, target, optimize);
 
     // =============================================================================
     // Library Compilation
@@ -45,18 +185,80 @@ pub fn build(b: *std.Build) void {
     // Testing
     // =============================================================================
 
-    // Create unit test executable
-    const tests = b.addTest(.{
-        .root_module = lib_module,
-    });
-
-    const run_tests = b.addRunArtifact(tests);
+    // Unit tests: one test binary per layer module, compiled with only the
+    // modules that layer may import, so the tests obey the layering too.
+    // The leaf layers (no deps) share one binary, `test-leaves`
+    // (src/leaves_tests.zig): each binary costs ~25 s to compile in
+    // ReleaseSafe whatever its size (F4a step 0).
+    const test_step = b.step("test", "Run all tests");
+    const unit_test_step = b.step("test-unit", "Run unit tests only");
+    for (layers) |layer| {
+        if (layer.deps.len == 0) continue;
+        const layer_tests = b.addTest(.{ .name = b.fmt("test-{s}", .{layer.name}), .root_module = mods.get(layer.name) });
+        const run_layer_tests = b.addRunArtifact(layer_tests);
+        test_step.dependOn(&run_layer_tests.step);
+        unit_test_step.dependOn(&run_layer_tests.step);
+    }
+    const leaves_tests = b.addTest(.{ .name = "test-leaves", .root_module = b.createModule(.{
+        .root_source_file = b.path(leaves_tests_root),
+        .target = target,
+        .optimize = optimize,
+    }) });
+    const run_leaves_tests = b.addRunArtifact(leaves_tests);
+    test_step.dependOn(&run_leaves_tests.step);
+    unit_test_step.dependOn(&run_leaves_tests.step);
 
     // Tests for the exported C ABI (src/c_api.zig), which has its own root.
     const c_api_tests = b.addTest(.{
         .root_module = c_api_module,
     });
     const run_c_api_tests = b.addRunArtifact(c_api_tests);
+
+    // Layer check (docs/REGEX_TIERS_PLAN.md, F2e), its own step: a textual
+    // lint of every @import against the layer table, plus canaries that must
+    // fail to compile with the exact error the layering produces, each next
+    // to a control that must compile.
+    const check_layers_step = b.step("check-layers", "Check the module layering: import lint and compile-error canaries");
+    const lint_exe = b.addExecutable(.{
+        .name = "check_layers",
+        .root_module = b.createModule(.{ .root_source_file = b.path("tools/check_layers.zig"), .target = b.graph.host, .optimize = .Debug }),
+    });
+    const run_lint = b.addRunArtifact(lint_exe);
+    run_lint.setCwd(b.path("."));
+    run_lint.addArg("src");
+    var leaf_names: std.ArrayListUnmanaged([]const u8) = .empty;
+    for (layers) |layer| {
+        const deps = std.mem.join(b.allocator, ",", layer.deps) catch @panic("OOM");
+        run_lint.addArg(b.fmt("{s}={s}={s}", .{ layer.name, layer.root, deps }));
+        if (layer.deps.len == 0) leaf_names.append(b.allocator, layer.name) catch @panic("OOM");
+    }
+    const leaves = std.mem.join(b.allocator, ",", leaf_names.items) catch @panic("OOM");
+    run_lint.addArg(b.fmt("+test-leaves={s}={s}", .{ leaves_tests_root, leaves }));
+    run_lint.addArg("c_api=src/c_api.zig=zregex");
+    run_lint.has_side_effects = true;
+    check_layers_step.dependOn(&run_lint.step);
+    addCanaries(b, mods, target, check_layers_step);
+
+    // Forced analysis (tests/layers/ref_all.zig): each layer's public API is
+    // walked recursively in a test binary whose only import is that layer, so
+    // a forbidden import anywhere reachable fails to compile. Part of
+    // check-layers, not `test`: it added 77 % to `zig build test` in
+    // ReleaseSafe (F2e measurement); compiling is the check, nothing runs.
+    const ref_all = b.createModule(.{ .root_source_file = b.path("tests/layers/ref_all.zig"), .target = target, .optimize = optimize });
+    const layer_sources = b.addWriteFiles();
+    for (layers) |layer| {
+        const src = layer_sources.add(b.fmt("{s}.zig", .{layer.name}), b.fmt(
+            \\test "forced analysis of the {s} module" {{
+            \\    @import("ref_all").refAllDeclsRecursive(@import("{s}"));
+            \\}}
+            \\
+        , .{ layer.name, layer.name }));
+        const m = b.createModule(.{ .root_source_file = src, .target = target, .optimize = optimize });
+        m.addImport("ref_all", ref_all);
+        m.addImport(layer.name, mods.get(layer.name));
+        const analysis_tests = b.addTest(.{ .name = b.fmt("analysis-{s}", .{layer.name}), .root_module = m });
+        check_layers_step.dependOn(&analysis_tests.step);
+    }
 
     // Create integration test executable
     const integration_module = b.createModule(.{
@@ -72,18 +274,49 @@ pub fn build(b: *std.Build) void {
 
     const run_integration_tests = b.addRunArtifact(integration_tests);
 
-    // Test step (runs all tests)
-    const test_step = b.step("test", "Run all tests");
-    test_step.dependOn(&run_tests.step);
     test_step.dependOn(&run_c_api_tests.step);
     test_step.dependOn(&run_integration_tests.step);
-
-    // Individual test steps
-    const unit_test_step = b.step("test-unit", "Run unit tests only");
-    unit_test_step.dependOn(&run_tests.step);
+    unit_test_step.dependOn(&run_c_api_tests.step);
 
     const integration_test_step = b.step("test-integration", "Run integration tests only");
     integration_test_step.dependOn(&run_integration_tests.step);
+
+    // The same integration tests with every pattern on the backtracker
+    // (F4a(5)): since F4a(3) T0 patterns run on the VM, and without this run
+    // the backtracker would lose their coverage until F6a rewrites it. Tests
+    // about routing itself skip here (`zregex.force_backtracker`). Always
+    // Debug, whatever -Doptimize says: it is a coverage run (with every
+    // safety check), and a second ReleaseSafe graph cost ~45 s of LLVM in
+    // `zig build test` (93 -> 138 s, against the 150 s trigger).
+    const bt_module = b.createModule(.{
+        .root_source_file = b.path("tests/integration_tests.zig"),
+        .target = target,
+        .optimize = .Debug,
+    });
+    bt_module.addImport("zregex", addModulesWith(b, target, .Debug, false, true).get("zregex"));
+    const bt_tests = b.addTest(.{ .name = "test-integration-backtracker", .root_module = bt_module });
+    const run_bt_tests = b.addRunArtifact(bt_tests);
+    test_step.dependOn(&run_bt_tests.step);
+    integration_test_step.dependOn(&run_bt_tests.step);
+
+    // Bytecode snapshot (tests/snapshots/bytecode.txt, checked by
+    // tests/bytecode_snapshot.zig inside `test`): rewrite its outcomes after
+    // a justified bytecode change (docs/REGEX_TIERS_PLAN.md, F2c policy).
+    const snapshot_update_module = b.createModule(.{
+        .root_source_file = b.path("tests/snapshot_update.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    snapshot_update_module.addImport("zregex", lib_module);
+    const snapshot_update_exe = b.addExecutable(.{
+        .name = "snapshot-update",
+        .root_module = snapshot_update_module,
+    });
+    const run_snapshot_update = b.addRunArtifact(snapshot_update_exe);
+    run_snapshot_update.addArg(b.pathFromRoot("tests/snapshots/bytecode.txt"));
+    run_snapshot_update.has_side_effects = true;
+    const snapshot_update_step = b.step("update-bytecode-snapshot", "Rewrite tests/snapshots/bytecode.txt for the current compiler");
+    snapshot_update_step.dependOn(&run_snapshot_update.step);
 
     // Conformance sample against test262-derived cases (see
     // docs/ECMASCRIPT_COMPATIBILITY_PLAN.md Phase 6). Kept out of the
@@ -128,13 +361,10 @@ pub fn build(b: *std.Build) void {
     // needs Node, `npm ci --prefix scripts/test262` and the pinned test262
     // checkout from scripts/test262/fetch.sh. Always runs against a
     // ReleaseSafe build so engine bugs surface as crashes, not silent UB.
+    const safe_mods = addModules(b, target, .ReleaseSafe, false);
     const test262_lib = b.addLibrary(.{
         .name = "zregex-test262",
-        .root_module = b.createModule(.{
-            .root_source_file = b.path("src/c_api.zig"),
-            .target = target,
-            .optimize = .ReleaseSafe,
-        }),
+        .root_module = addCApiModule(b, safe_mods, target, .ReleaseSafe),
         .linkage = .dynamic,
     });
     const run_test262 = b.addSystemCommand(&.{ "node", "scripts/test262/run.mjs", "--check-baseline", "scripts/test262/baseline.json", "--lib" });
@@ -142,6 +372,15 @@ pub fn build(b: *std.Build) void {
     run_test262.has_side_effects = true;
     const test262_step = b.step("test262", "Run test262 against the committed baseline (needs Node + scripts/test262/fetch.sh)");
     test262_step.dependOn(&run_test262.step);
+
+    // The same run with the subject as WTF-8 (F3d): a cross-check against
+    // its own baseline, part of each phase's closing gate, not of every
+    // commit (docs/REGEX_TIERS_PLAN.md). The default run above is UTF-16.
+    const run_test262_wtf8 = b.addSystemCommand(&.{ "node", "scripts/test262/run.mjs", "--encoding", "wtf8", "--check-baseline", "scripts/test262/baseline-wtf8.json", "--out", "zig-out/test262/results-wtf8.json", "--lib" });
+    run_test262_wtf8.addArtifactArg(test262_lib);
+    run_test262_wtf8.has_side_effects = true;
+    const test262_wtf8_step = b.step("test262-wtf8", "Run test262 with WTF-8 subjects against scripts/test262/baseline-wtf8.json (phase gate)");
+    test262_wtf8_step.dependOn(&run_test262_wtf8.step);
 
     // Differential test against V8 (scripts/test262/differential.mjs,
     // docs/REGEX_TIERS_PLAN.md F1c): generated patterns with captures and
@@ -154,13 +393,18 @@ pub fn build(b: *std.Build) void {
     const differential_step = b.step("differential-v8", "Compare zregex with V8 on generated patterns (needs Node + koffi)");
     differential_step.dependOn(&run_differential.step);
 
+    // F0c (docs/REGEX_TIERS_PLAN.md §5.6): tier histogram of a regex corpus
+    // built by scripts/f0c/extract.mjs. `zig build f0c -- corpus.tsv`.
+    const f0c_module = b.createModule(.{ .root_source_file = b.path("tools/f0c.zig"), .target = target, .optimize = .ReleaseSafe });
+    f0c_module.addImport("zregex", addModules(b, target, .ReleaseSafe, false).get("zregex"));
+    const run_f0c = b.addRunArtifact(b.addExecutable(.{ .name = "f0c", .root_module = f0c_module }));
+    if (b.args) |a| run_f0c.addArgs(a);
+    const f0c_step = b.step("f0c", "Tier histogram of a regex corpus (scripts/f0c/extract.mjs output)");
+    f0c_step.dependOn(&run_f0c.step);
+
     // Performance baseline (bench/bench.zig, docs/REGEX_TIERS_PLAN.md F0d).
     // Always ReleaseFast, whatever -Doptimize says, so numbers are comparable.
-    const bench_zregex = b.createModule(.{
-        .root_source_file = b.path("src/main.zig"),
-        .target = target,
-        .optimize = .ReleaseFast,
-    });
+    const bench_zregex = addModules(b, target, .ReleaseFast, false).get("zregex");
     const bench_module = b.createModule(.{
         .root_source_file = b.path("bench/bench.zig"),
         .target = target,

@@ -4,7 +4,7 @@
 //! bytecode dumping, pretty printing, and conditional logging.
 
 const std = @import("std");
-const config = @import("../core/config.zig");
+const config = @import("config.zig");
 
 /// Print a hex dump of a byte buffer
 pub fn hexDump(writer: anytype, data: []const u8, offset: usize) !void {
@@ -87,8 +87,10 @@ pub fn printSection(writer: anytype, title: []const u8) !void {
     try printDivider(writer, 60);
 }
 
-/// Format bytes as human-readable size
-pub fn formatSize(bytes: usize) []const u8 {
+/// Format bytes as human-readable size. `bytes` must be comptime-known (the
+/// result is a comptime string); it took a runtime value before F2e, which
+/// could never compile -- nothing called it until F2e's forced analysis did.
+pub fn formatSize(comptime bytes: usize) []const u8 {
     if (bytes < 1024) {
         return std.fmt.comptimePrint("{} B", .{bytes});
     } else if (bytes < 1024 * 1024) {
