@@ -41,15 +41,21 @@ applying just those overrides (add the codepoint to every script its
 override line lists; remove it from its old default script if that
 script isn't in the override's list) rather than recomputing from scratch.
 
-Usage:
-    curl -o UnicodeData.txt https://www.unicode.org/Public/UCD/latest/ucd/UnicodeData.txt
-    curl -o PropList.txt https://www.unicode.org/Public/UCD/latest/ucd/PropList.txt
-    curl -o DerivedCoreProperties.txt https://www.unicode.org/Public/UCD/latest/ucd/DerivedCoreProperties.txt
-    curl -o emoji-data.txt https://unicode.org/Public/UCD/latest/ucd/emoji/emoji-data.txt
-    curl -o Scripts.txt https://www.unicode.org/Public/UCD/latest/ucd/Scripts.txt
-    curl -o PropertyValueAliases.txt https://www.unicode.org/Public/UCD/latest/ucd/PropertyValueAliases.txt
-    curl -o ScriptExtensions.txt https://www.unicode.org/Public/UCD/latest/ucd/ScriptExtensions.txt
-    python3 scripts/gen_unicode_tables.py UnicodeData.txt PropList.txt DerivedCoreProperties.txt emoji-data.txt Scripts.txt PropertyValueAliases.txt ScriptExtensions.txt > src/unicode/tables.zig
+Name aliases (F5a): PropertyAliases.txt gives the binary properties' short
+names (`Alpha`, `WSpace`/`space`, ...), emitted as `BINARY_ALIAS_NAMES`/
+`BINARY_ALIAS_TARGETS`; PropertyValueAliases.txt's `gc` lines give every
+General_Category value alias (`Letter`, `cntrl`, `digit`, `punct`,
+`Combining_Mark`, ...), emitted as `GC_ALIAS_NAMES`/`GC_ALIAS_SHORT`; its `sc`
+lines give every Script alias, including the extra fields (`Qaac`, `Qaai`).
+DerivedNormalizationProps.txt gives `Changes_When_NFKC_Casefolded`.
+
+Usage (UCD 17.0.0, pinned; the unicodetools repository holds the same files
+as unicode.org's Public/17.0.0/ucd):
+    B=https://raw.githubusercontent.com/unicode-org/unicodetools/main/unicodetools/data/ucd/17.0.0
+    for f in UnicodeData.txt PropList.txt DerivedCoreProperties.txt emoji/emoji-data.txt Scripts.txt \
+        PropertyValueAliases.txt ScriptExtensions.txt PropertyAliases.txt DerivedNormalizationProps.txt; do
+      curl -sSfo "$(basename $f)" "$B/$f"; done
+    python3 scripts/gen_unicode_tables.py UnicodeData.txt PropList.txt DerivedCoreProperties.txt emoji-data.txt Scripts.txt PropertyValueAliases.txt ScriptExtensions.txt PropertyAliases.txt DerivedNormalizationProps.txt > src/unicode/tables.zig
 """
 import re
 import sys
@@ -140,11 +146,15 @@ UNICODE_DATA_BINARY_PROPERTIES = [
     "Bidi_Mirrored",
     "Assigned",
 ]
+DERIVED_NORMALIZATION_BINARY_PROPERTIES = [
+    "Changes_When_NFKC_Casefolded",
+]
 BINARY_PROPERTIES = (
     PROP_LIST_BINARY_PROPERTIES
     + DERIVED_CORE_BINARY_PROPERTIES
     + EMOJI_BINARY_PROPERTIES
     + UNICODE_DATA_BINARY_PROPERTIES
+    + DERIVED_NORMALIZATION_BINARY_PROPERTIES
 )
 
 
@@ -200,7 +210,15 @@ def parse_script_aliases(path):
     `gc`/`ccc` share the same file but are ignored). Returns a list of
     (short, long) tuples. A handful of `sc` lines carry an extra fourth field
     (a legacy alternate name, e.g. `sc ; Zinh ; Inherited ; Qaai`) -- only the
-    short/long pair is used, matching what JS's `\\p{Script=...}` accepts."""
+    short name and every extra field are aliases of the long name: ECMA-262
+    accepts every name PropertyValueAliases.txt lists (`\\p{sc=Qaac}` is
+    Coptic)."""
+    return [(alias, fields[1]) for fields in parse_value_alias_lines(path, "sc") for alias in [fields[0]] + fields[2:]]
+
+
+def parse_value_alias_lines(path, prop):
+    """PropertyValueAliases.txt's lines for property `prop` (`sc`, `gc`), as
+    lists of names after the property field: [short, long, extra, ...]."""
     result = []
     with open(path, "r", encoding="utf-8") as f:
         for line in f:
@@ -208,9 +226,25 @@ def parse_script_aliases(path):
             if not line:
                 continue
             fields = [field.strip() for field in line.split(";")]
-            if len(fields) < 3 or fields[0] != "sc":
+            if len(fields) < 3 or fields[0] != prop:
                 continue
-            result.append((fields[1], fields[2]))
+            result.append(fields[1:])
+    return result
+
+
+def parse_property_aliases(path):
+    """PropertyAliases.txt: `short ; long [; extra ...]` lines. Returns a list
+    of (alias, long) for every name other than the long one."""
+    result = []
+    with open(path, "r", encoding="utf-8") as f:
+        for line in f:
+            line = line.split("#", 1)[0].strip()
+            if not line:
+                continue
+            fields = [field.strip() for field in line.split(";")]
+            if len(fields) < 2:
+                continue
+            result.extend((alias, fields[1]) for alias in [fields[0]] + fields[2:] if alias != fields[1])
     return result
 
 
@@ -325,10 +359,11 @@ def parse_script_extensions(path):
 
 
 def main():
-    if len(sys.argv) != 8:
+    if len(sys.argv) != 10:
         print(
             f"usage: {sys.argv[0]} UnicodeData.txt PropList.txt DerivedCoreProperties.txt "
-            "emoji-data.txt Scripts.txt PropertyValueAliases.txt ScriptExtensions.txt",
+            "emoji-data.txt Scripts.txt PropertyValueAliases.txt ScriptExtensions.txt "
+            "PropertyAliases.txt DerivedNormalizationProps.txt",
             file=sys.stderr,
         )
         sys.exit(1)
@@ -340,7 +375,9 @@ def main():
         scripts_path,
         property_value_aliases_path,
         script_extensions_path,
-    ) = sys.argv[1:8]
+        property_aliases_path,
+        derived_normalization_path,
+    ) = sys.argv[1:10]
 
     by_category = {}  # category (major or minor) -> list of codepoints
     upper_to_lower = []  # (upper_cp, lower_cp)
@@ -388,6 +425,9 @@ def main():
     for cat in all_categories:
         codepoints = sorted(set(by_category.get(cat, [])))
         emit_range_table(cat, merge_ranges(codepoints))
+    # LC (Cased_Letter) is a General_Category value of its own: Lu | Ll | Lt.
+    cased_letter = merge_ranges(sorted(set(by_category.get("Lu", []) + by_category.get("Ll", []) + by_category.get("Lt", []))))
+    emit_range_table("LC", cased_letter)
 
     prop_list = parse_range_property_file(prop_list_path, set(PROP_LIST_BINARY_PROPERTIES))
     derived_core = parse_range_property_file(
@@ -405,8 +445,46 @@ def main():
     )
     binary_property_ranges["Bidi_Mirrored"] = merge_ranges(sorted(set(bidi_mirrored_codepoints)))
     binary_property_ranges["Assigned"] = merge_ranges(sorted(set(assigned_codepoints)))
+    derived_normalization = parse_range_property_file(
+        derived_normalization_path, set(DERIVED_NORMALIZATION_BINARY_PROPERTIES)
+    )
+    binary_property_ranges.update(
+        {name: merge_range_tuples(derived_normalization[name]) for name in DERIVED_NORMALIZATION_BINARY_PROPERTIES}
+    )
     for name in BINARY_PROPERTIES:
         emit_range_table(name, binary_property_ranges[name])
+
+    # Short names of the binary properties above (PropertyAliases.txt), sorted
+    # for a binary search: `\\p{Alpha}` is `\\p{Alphabetic}`.
+    binary_aliases = sorted(
+        (alias, long) for alias, long in parse_property_aliases(property_aliases_path) if long in BINARY_PROPERTIES
+    )
+    print("pub const BINARY_ALIAS_NAMES: []const []const u8 = &.{")
+    for alias, _ in binary_aliases:
+        print(f'    "{alias}",')
+    print("};")
+    print()
+    print("pub const BINARY_ALIAS_TARGETS: []const []const u8 = &.{")
+    for _, long in binary_aliases:
+        print(f'    "{long}",')
+    print("};")
+    print()
+
+    # Every General_Category value name other than its short one (`Letter`,
+    # `cntrl`, `Combining_Mark`, ...), mapped to the short one, sorted.
+    gc_aliases = sorted(
+        (alias, fields[0]) for fields in parse_value_alias_lines(property_value_aliases_path, "gc") for alias in fields[1:]
+    )
+    print("pub const GC_ALIAS_NAMES: []const []const u8 = &.{")
+    for alias, _ in gc_aliases:
+        print(f'    "{alias}",')
+    print("};")
+    print()
+    print("pub const GC_ALIAS_SHORT: []const []const u8 = &.{")
+    for _, short in gc_aliases:
+        print(f'    "{short}",')
+    print("};")
+    print()
 
     scripts = parse_all_scripts(scripts_path)
     script_names = sorted(scripts.keys())
@@ -526,6 +604,7 @@ def main():
         f"script_extensions_lines={len(script_extensions_raw)} "
         f"script_extensions_ranges={script_extensions_ranges_count} "
         f"script_extensions_codes_skipped={skipped_scx_codes} "
+        f"binary_aliases={len(binary_aliases)} gc_aliases={len(gc_aliases)} "
         f"upper_to_lower={len(upper_to_lower)} lower_to_upper={len(lower_to_upper)}",
         file=sys.stderr,
     )

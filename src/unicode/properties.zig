@@ -117,76 +117,42 @@ pub const UnicodeProperty = enum(u8) {
     // Trivial binary properties (no table needed).
     ASCII,
     Any,
+    // F5a, appended so the values above keep their numbers (the AST and the
+    // backtracker's bytecode store them): General_Category `LC`
+    // (Cased_Letter = Lu | Ll | Lt), and the binary property from
+    // DerivedNormalizationProps.txt.
+    LC,
+    Changes_When_NFKC_Casefolded,
 };
 
-/// Long-form aliases JS regexes commonly use for General_Category, mapped to
-/// their short Unicode abbreviation. Not exhaustive of every alias the
-/// Unicode Property Value Aliases file defines -- just the common ones.
-/// Binary properties (`White_Space`, `Alphabetic`, ...) need no alias table:
-/// their canonical Unicode name already matches the enum tag directly.
-const LONG_ALIASES = [_]struct { name: []const u8, cat: UnicodeProperty }{
-    .{ .name = "Letter", .cat = .L },
-    .{ .name = "Uppercase_Letter", .cat = .Lu },
-    .{ .name = "Lowercase_Letter", .cat = .Ll },
-    .{ .name = "Titlecase_Letter", .cat = .Lt },
-    .{ .name = "Modifier_Letter", .cat = .Lm },
-    .{ .name = "Other_Letter", .cat = .Lo },
-    .{ .name = "Mark", .cat = .M },
-    .{ .name = "Nonspacing_Mark", .cat = .Mn },
-    .{ .name = "Spacing_Mark", .cat = .Mc },
-    .{ .name = "Enclosing_Mark", .cat = .Me },
-    .{ .name = "Number", .cat = .N },
-    .{ .name = "Decimal_Number", .cat = .Nd },
-    .{ .name = "Letter_Number", .cat = .Nl },
-    .{ .name = "Other_Number", .cat = .No },
-    .{ .name = "Punctuation", .cat = .P },
-    .{ .name = "Connector_Punctuation", .cat = .Pc },
-    .{ .name = "Dash_Punctuation", .cat = .Pd },
-    .{ .name = "Open_Punctuation", .cat = .Ps },
-    .{ .name = "Close_Punctuation", .cat = .Pe },
-    .{ .name = "Initial_Punctuation", .cat = .Pi },
-    .{ .name = "Final_Punctuation", .cat = .Pf },
-    .{ .name = "Other_Punctuation", .cat = .Po },
-    .{ .name = "Symbol", .cat = .S },
-    .{ .name = "Math_Symbol", .cat = .Sm },
-    .{ .name = "Currency_Symbol", .cat = .Sc },
-    .{ .name = "Modifier_Symbol", .cat = .Sk },
-    .{ .name = "Other_Symbol", .cat = .So },
-    .{ .name = "Separator", .cat = .Z },
-    .{ .name = "Space_Separator", .cat = .Zs },
-    .{ .name = "Line_Separator", .cat = .Zl },
-    .{ .name = "Paragraph_Separator", .cat = .Zp },
-    .{ .name = "Other", .cat = .C },
-    .{ .name = "Control", .cat = .Cc },
-    .{ .name = "Format", .cat = .Cf },
-    .{ .name = "Private_Use", .cat = .Co },
-    .{ .name = "Surrogate", .cat = .Cs },
-};
-
-/// Resolve a `\p{Name}` property name to a `UnicodeProperty`. Accepts the
-/// short General_Category abbreviation (`L`, `Lu`, ...), the common
-/// long-form General_Category spelling (`Letter`, `Uppercase_Letter`, ...),
-/// an optional `General_Category=`/`gc=` prefix (e.g. `\p{gc=Lu}`), and a
-/// binary property's canonical name directly (`White_Space`, `Alphabetic`,
-/// `Uppercase`, `Lowercase`, `ASCII`, `Any`). Returns `null` for anything
-/// else (including real Unicode properties this engine doesn't implement
-/// yet, like `Script` -- callers should surface that as a compile error,
-/// not silently ignore the property).
+/// Resolve a `\p{Name}` property name to a `UnicodeProperty`. Accepts a
+/// General_Category value by any of its names in PropertyValueAliases.txt
+/// (`L`, `Letter`, `LC`, `Cased_Letter`, `cntrl`, `digit`, `punct`,
+/// `Combining_Mark`, ...), bare or after `General_Category=`/`gc=`, and a
+/// binary property by its name or any alias in PropertyAliases.txt
+/// (`Alphabetic` or `Alpha`, `White_Space`, `WSpace` or `space`, ...), bare
+/// only. Returns `null` for anything else (including Script names, which go
+/// through `resolveScript`); callers surface that as a compile error.
 pub fn resolveUnicodeProperty(raw_name: []const u8) ?UnicodeProperty {
     var name = raw_name;
+    var prefixed = false;
     if (std.mem.startsWith(u8, name, "General_Category=")) {
         name = name["General_Category=".len..];
+        prefixed = true;
     } else if (std.mem.startsWith(u8, name, "gc=")) {
         name = name["gc=".len..];
+        prefixed = true;
     }
 
     if (std.meta.stringToEnum(UnicodeProperty, name)) |cat| {
         return cat;
     }
-    for (LONG_ALIASES) |alias| {
-        if (std.mem.eql(u8, alias.name, name)) {
-            return alias.cat;
-        }
+    if (binarySearchNames(tables.GC_ALIAS_NAMES, name)) |i| {
+        return std.meta.stringToEnum(UnicodeProperty, tables.GC_ALIAS_SHORT[i]);
+    }
+    if (prefixed) return null;
+    if (binarySearchNames(tables.BINARY_ALIAS_NAMES, name)) |i| {
+        return std.meta.stringToEnum(UnicodeProperty, tables.BINARY_ALIAS_TARGETS[i]);
     }
     return null;
 }
@@ -383,6 +349,8 @@ fn rangesFor(cat: UnicodeProperty) []const CodepointRange {
         .Extended_Pictographic => tables.RANGES_Extended_Pictographic,
         .Bidi_Mirrored => tables.RANGES_Bidi_Mirrored,
         .Assigned => tables.RANGES_Assigned,
+        .LC => tables.RANGES_LC,
+        .Changes_When_NFKC_Casefolded => tables.RANGES_Changes_When_NFKC_Casefolded,
         // ASCII/Any are handled directly in isInCategory (no table needed).
         .ASCII, .Any => unreachable,
     };
@@ -461,6 +429,29 @@ test "properties: resolveUnicodeProperty binary properties" {
     try std.testing.expectEqual(UnicodeProperty.Lowercase, resolveUnicodeProperty("Lowercase").?);
     try std.testing.expectEqual(UnicodeProperty.ASCII, resolveUnicodeProperty("ASCII").?);
     try std.testing.expectEqual(UnicodeProperty.Any, resolveUnicodeProperty("Any").?);
+}
+
+test "properties: every UCD name resolves (F5a)" {
+    const expect = std.testing.expectEqual;
+    try expect(UnicodeProperty.Alphabetic, resolveUnicodeProperty("Alpha").?);
+    try expect(UnicodeProperty.White_Space, resolveUnicodeProperty("space").?);
+    try expect(UnicodeProperty.White_Space, resolveUnicodeProperty("WSpace").?);
+    try expect(UnicodeProperty.Changes_When_NFKC_Casefolded, resolveUnicodeProperty("CWKCF").?);
+    try expect(UnicodeProperty.LC, resolveUnicodeProperty("gc=Cased_Letter").?);
+    try expect(UnicodeProperty.Cc, resolveUnicodeProperty("cntrl").?);
+    try expect(UnicodeProperty.Nd, resolveUnicodeProperty("General_Category=digit").?);
+    try expect(UnicodeProperty.M, resolveUnicodeProperty("Combining_Mark").?);
+    try std.testing.expect(resolveUnicodeProperty("gc=Alpha") == null);
+    try std.testing.expect(resolveUnicodeProperty("alpha") == null);
+    try expect(resolveScript("Coptic").?, resolveScript("Qaac").?);
+    try expect(resolveScript("Inherited").?, resolveScript("Qaai").?);
+}
+
+test "properties: LC is Lu | Ll | Lt" {
+    for ([_]u32{ 'A', 'a', 0x1C5, 0x10400, 0x2B0, '1' }) |cp| {
+        const want = isInCategory(cp, .Lu) or isInCategory(cp, .Ll) or isInCategory(cp, .Lt);
+        try std.testing.expectEqual(want, isInCategory(cp, .LC));
+    }
 }
 
 test "properties: isInCategory basic ASCII sanity" {

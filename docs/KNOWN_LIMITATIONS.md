@@ -1146,15 +1146,16 @@ the code space), which dominate run time:
 
 **Root causes worth knowing before reading the failures:**
 
-- **`UnknownUnicodeProperty`: short aliases of binary properties** (`\p{Alpha}`,
-  `\p{AHex}`, `\p{Bidi_C}`, `\p{CWU}`, `\p{Dia}`, ...) and
-  `Changes_When_NFKC_Casefolded` are not recognized. One root cause, not 114
-  bugs: a fix in F5 unblocks ~114 entries (57 patterns) of
-  `property-escapes/generated`. **When F5 fixes it, those entries will run
-  `testPropertyEscapes`' per-symbol loop (up to ~1.1 M calls) for the first
-  time, so the first run of that group may take longer and hit timeouts;
-  today's ~57 s for the group is not representative of the gate's cost
-  from F5 on.**
+- **Fixed in F5a(1): property names.** Short names of the binary properties
+  (`\p{Alpha}`, `\p{AHex}`, `\p{space}`, ...), every General_Category value alias
+  (`LC`/`Cased_Letter`, `cntrl`, `digit`, `punct`, `Combining_Mark`), the extra
+  Script aliases (`Qaac`, `Qaai`) and `Changes_When_NFKC_Casefolded` now resolve
+  (tables regenerated from UCD 17.0.0 with `PropertyAliases.txt` and
+  `DerivedNormalizationProps.txt`): 110 entries of `property-escapes/generated` went
+  from `zregex_compile_error` to pass. The group's run time stayed short (the whole
+  UTF-16 run took 67 s), not the long first run the per-symbol loop suggested.
+  Still missing until F5a(2): `Cn`/`Unassigned` and `Script=Unknown`/`Zzzz`
+  (`sc` and `scx`), 6 entries.
 - **`\p{General_Category=Other}` doesn't include unassigned code points
   (Cn)** (e.g. U+038B): a bug in the generated Unicode tables, not in the
   `\p{}` logic (tracked in F5 with pinning the Unicode version).

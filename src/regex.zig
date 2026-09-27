@@ -2798,6 +2798,36 @@ test "Regex: unknown \\p{...} property name is a compile error, not silently ign
     try std.testing.expectError(error.UnknownUnicodeProperty, Regex.compile(allocator, "\\p{Bogus}"));
 }
 
+test "Regex: \\p{...} by any UCD name: binary property short names and General_Category value aliases (F5a)" {
+    const allocator = std.testing.allocator;
+    const Case = struct { pattern: []const u8, yes: []const u8, no: []const u8 };
+    for ([_]Case{
+        .{ .pattern = "^\\p{Alpha}$", .yes = "\u{E9}", .no = "1" },
+        .{ .pattern = "^\\p{AHex}$", .yes = "F", .no = "g" },
+        .{ .pattern = "^\\p{space}$", .yes = "\u{3000}", .no = "a" },
+        .{ .pattern = "^\\p{WSpace}$", .yes = " ", .no = "a" },
+        .{ .pattern = "^\\p{LC}$", .yes = "\u{1C5}", .no = "\u{2B0}" }, // Dž (Lt) yes, modifier letter h (Lm) no
+        .{ .pattern = "^\\p{Cased_Letter}$", .yes = "a", .no = "1" },
+        .{ .pattern = "^\\p{gc=punct}$", .yes = "!", .no = "a" },
+        .{ .pattern = "^\\p{digit}$", .yes = "\u{0663}", .no = "a" },
+        .{ .pattern = "^\\p{cntrl}$", .yes = "\x01", .no = "a" },
+        .{ .pattern = "^\\p{Combining_Mark}$", .yes = "\u{301}", .no = "a" },
+        .{ .pattern = "^\\p{sc=Qaac}$", .yes = "\u{2C80}", .no = "a" }, // Coptic
+        .{ .pattern = "^\\p{scx=Qaai}$", .yes = "\u{200C}", .no = "a" }, // Inherited (U+0300 has other scx)
+        .{ .pattern = "^\\p{CWKCF}$", .yes = "A", .no = "a" },
+        .{ .pattern = "^\\p{Changes_When_NFKC_Casefolded}$", .yes = "\u{A0}", .no = "b" },
+    }) |c| {
+        var re = try Regex.compileWithOptions(allocator, c.pattern, .{ .unicode = true });
+        defer re.deinit();
+        const yes = try re.test_(c.yes);
+        const no = try re.test_(c.no);
+        if (!yes or no) std.debug.print("/{s}/u: yes={} no={}\n", .{ c.pattern, yes, no });
+        try std.testing.expect(yes and !no);
+    }
+    // Aliases of a binary property are bare names only (as in ECMA-262).
+    try std.testing.expectError(error.UnknownUnicodeProperty, Regex.compileWithOptions(allocator, "\\p{gc=Alpha}", .{ .unicode = true }));
+}
+
 test "Regex: \\p{...} alone inside a character class matches the same as standalone" {
     const allocator = std.testing.allocator;
 

@@ -70,17 +70,25 @@ never matching any `wanted_names` entry and losing that line's data with no erro
 caught previously by the extracted range count looking implausibly small, not by a
 crash. If you edit `RANGE_LINE_RE`, sanity-check the per-property range counts again.
 
-To regenerate against the latest UCD release:
+To regenerate (UCD 17.0.0, pinned). The files come from the Unicode Consortium's
+`unicodetools` repository, which holds the same `ucd/17.0.0` files as unicode.org's
+`Public/17.0.0/ucd` (unicode.org itself isn't reachable from every environment). Since
+F5a the script also reads `PropertyAliases.txt` (short names of the binary properties:
+`\p{Alpha}`, `\p{space}`, ...) and `DerivedNormalizationProps.txt`
+(`Changes_When_NFKC_Casefolded`), emits every General_Category value alias of
+`PropertyValueAliases.txt` (`cntrl`, `digit`, `punct`, `Combining_Mark`, ...) and every
+Script alias including the extra fields (`Qaac`, `Qaai`), and the `LC` table
+(Lu | Ll | Lt). A regeneration from the same files must reproduce `tables.zig` byte for
+byte.
 
 ```bash
-curl -o /tmp/UnicodeData.txt https://www.unicode.org/Public/UCD/latest/ucd/UnicodeData.txt
-curl -o /tmp/PropList.txt https://www.unicode.org/Public/UCD/latest/ucd/PropList.txt
-curl -o /tmp/DerivedCoreProperties.txt https://www.unicode.org/Public/UCD/latest/ucd/DerivedCoreProperties.txt
-curl -o /tmp/emoji-data.txt https://unicode.org/Public/UCD/latest/ucd/emoji/emoji-data.txt
-curl -o /tmp/Scripts.txt https://www.unicode.org/Public/UCD/latest/ucd/Scripts.txt
-curl -o /tmp/PropertyValueAliases.txt https://www.unicode.org/Public/UCD/latest/ucd/PropertyValueAliases.txt
-curl -o /tmp/ScriptExtensions.txt https://www.unicode.org/Public/UCD/latest/ucd/ScriptExtensions.txt
-python3 scripts/gen_unicode_tables.py /tmp/UnicodeData.txt /tmp/PropList.txt /tmp/DerivedCoreProperties.txt /tmp/emoji-data.txt /tmp/Scripts.txt /tmp/PropertyValueAliases.txt /tmp/ScriptExtensions.txt > src/unicode/tables.zig
+B=https://raw.githubusercontent.com/unicode-org/unicodetools/main/unicodetools/data/ucd/17.0.0
+cd /tmp && for f in UnicodeData.txt PropList.txt DerivedCoreProperties.txt emoji/emoji-data.txt \
+    Scripts.txt PropertyValueAliases.txt ScriptExtensions.txt PropertyAliases.txt DerivedNormalizationProps.txt; do
+  curl -sSfo "$(basename $f)" "$B/$f"; done; cd -
+python3 scripts/gen_unicode_tables.py /tmp/UnicodeData.txt /tmp/PropList.txt /tmp/DerivedCoreProperties.txt \
+  /tmp/emoji-data.txt /tmp/Scripts.txt /tmp/PropertyValueAliases.txt /tmp/ScriptExtensions.txt \
+  /tmp/PropertyAliases.txt /tmp/DerivedNormalizationProps.txt > src/unicode/tables.zig
 zig build test
 ```
 
