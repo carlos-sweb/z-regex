@@ -1555,6 +1555,14 @@ None. (D17, `\u{H+}` without `u`/`v`, was fixed in F7a: see "Fixed in F7a" below
   differentials against T0's VM (382 bound and 7,538 slot differences on the T0 corpora,
   1,050 rows on T1) -> 0.
 
+### Binary size: measurements across phases are not comparable (noted after F7a)
+
+The 1,112,272 B figure given at the close of F5b (ReleaseFast `.so`, stripped) doesn't
+reproduce with the current procedure: the state before F7a (`4296517`) gives 1,138,656 B.
+Unexplained delta: ~26 KB. The binary has been measured with different procedures from
+phase to phase, so figures from different phases are not comparable. F7b fixes a single
+procedure (`scripts/measure_binary.sh`) and re-measures the earlier points with it.
+
 ### Fixed in F2b
 
 - **`v` set operation whose last operand is a bracketed class failed under
