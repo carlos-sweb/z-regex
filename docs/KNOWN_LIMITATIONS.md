@@ -1139,7 +1139,8 @@ keep the recursive matcher's behavior until F6b.
 **LookLinear (F6a(3)).** A lookahead whose body has no captures, backreferences or nested
 lookarounds, and that T0's VM takes, is answered by `tier0.existsAnchoredMatch` with a
 2-bit-per-position memo per execution (docs/REGEX_TIERS_PLAN.md §4.4). Not delegated: `v`
-patterns (F5c), `i` in `u` mode (F5b's folding), lookbehind (F6b). On the F2c and npm
+patterns (F5c), lookbehind (F6b); `i` in `u` mode is delegated since F7b(3) (F5b's
+lowering folds its sets). On the F2c and npm
 corpora, 2,463 of the 4,441 patterns with a lookahead have delegated sites; on and off
 give the same slots in all 566,490 runs.
 

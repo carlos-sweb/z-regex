@@ -313,7 +313,8 @@ fn generate(allocator: Allocator, fe: *const lower_mod.Frontend, options: Compil
 /// whose body T0's VM answers, and their programs. A body qualifies when
 /// `tier0.check` takes it with the flags in effect there (no captures,
 /// backreferences, lookarounds or iterated nullable bodies), outside `v`
-/// (F5c) and outside `i` in code-point mode (F5b's folding). Sites that are
+/// (F5c); `i` in code-point mode too since F7b (the lowering folds its sets,
+/// F5b). Sites that are
 /// copies of one HIR node with the same flags share a program. The
 /// generator's sites are in bytecode order, so `linear` is sorted by pc.
 fn linearSites(allocator: Allocator, sites: []const CodeGenerator.LookSite, options: CompileOptions, linear: *std.ArrayListUnmanaged(LinearSite), programs: *std.ArrayListUnmanaged(tier0.Program)) !void {
@@ -322,7 +323,6 @@ fn linearSites(allocator: Allocator, sites: []const CodeGenerator.LookSite, opti
     var keys: std.ArrayListUnmanaged(Key) = .empty;
     defer keys.deinit(allocator);
     for (sites) |site| {
-        if (options.unicode and site.flags.ignore_case) continue;
         const key: Key = .{ .body = site.body, .flags = site.flags };
         const index = for (keys.items, 0..) |k, i| {
             if (k.body == key.body and std.meta.eql(k.flags, key.flags)) break i;

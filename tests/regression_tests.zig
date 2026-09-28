@@ -658,6 +658,36 @@ test "F7a: a pattern with a lookbehind gets no empty-iteration marks (F6b)" {
     try testing.expect(plain.compiled.mark_count > 0);
 }
 
+test "F7b: a lookahead under iu is delegated to T0's VM and answers the same (LookLinear)" {
+    // Before F7b(3) LookLinear skipped `i` in code-point mode. Values
+    // checked with Node 22 (V8): Kelvin sign and long s fold with k and s.
+    const a = testing.allocator;
+    const Case = struct { []const u8, []const u8, ?[2]usize };
+    const cases = [_]Case{
+        .{ "(?=k)\\w", "\u{212A}", .{ 0, 3 } },
+        .{ "(?=s\\b)\\w+", "\u{17F}", .{ 0, 2 } },
+        .{ "(?![a-z])\\w", "\u{212A}", null },
+        .{ "x(?=\\p{Lu})", "xa", .{ 0, 1 } },
+    };
+    for (cases) |c| {
+        for ([_]bool{ true, false }) |linear| {
+            var re = try zregex.Regex.compileWithOptions(a, c[0], .{ .case_insensitive = true, .unicode = true, .force_tier = .expert, .t2_look_linear = linear });
+            defer re.deinit();
+            try testing.expectEqual(linear, re.compiled.linear.len > 0);
+            var scratch = zregex.Scratch.init(a);
+            defer scratch.deinit();
+            var buf: [2]?usize = undefined;
+            var out: zregex.MatchSlots = .{ .slots = &buf };
+            const found = try re.execAt(.{ .wtf8 = c[1] }, 0, &scratch, &out, .{});
+            const got: ?[2]usize = if (found) .{ buf[0].?, buf[1].? } else null;
+            if (!std.meta.eql(got, c[2])) {
+                std.debug.print("/{s}/iu linear={} on \"{s}\": {any}, V8 {any}\n", .{ c[0], linear, c[1], got, c[2] });
+                return error.TestUnexpectedResult;
+            }
+        }
+    }
+}
+
 test "F5b: backreferences under i canonicalize (V8)" {
     const Case = struct { []const u8, []const u8, []const u8, bool };
     const cases = [_]Case{
