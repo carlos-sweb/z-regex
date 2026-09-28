@@ -89,7 +89,7 @@ Todo eso es lógica de "¿casa este átomo en `pos`?", sin control de flujo. **S
   | `/(?=(a))?.b\|../` | `"ac"` | g1 = `[0,1]` | `undefined` |
   | `/(?:(?=(a+))a*x\|a*)/` | `"aay"` | g1 = `[0,2]` | `undefined` |
 
-- La Parte 2 (el trail, que se conserva tras el lookahead) lo corrige.
+- La Parte 2 (el trail, que se conserva tras el lookahead) lo corrige. **Corregido en F6a(2)**, con test en `tests/regression_tests.zig`.
 
 ## H3. Dispatcher, VM y qué va al backtracker
 

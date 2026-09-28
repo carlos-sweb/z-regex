@@ -6,25 +6,28 @@
 //! frame per instruction on the path (it's continuation-passing), so how
 //! far a match can go depended on the caller's stack (D14) and its depth
 //! limit was never calibrated against bytes (D15). Here the only stack is
-//! `Scratch.choices` (plus the loop guards, star positions and lookahead
-//! snapshots it already kept on the heap), bounded in bytes by
-//! `ExecLimits.max_backtrack_stack_bytes`.
+//! `Scratch.choices`, with the capture trail and the loop guards and star
+//! positions the recursive matcher already kept on the heap, all bounded
+//! together by `ExecLimits.max_backtrack_stack_bytes`.
 //!
-//! Exploration order, step counting and capture semantics are the
-//! recursive matcher's, instruction for instruction:
+//! Exploration order and step counting are the recursive matcher's,
+//! instruction for instruction:
 //! - a SPLIT pushes its second branch and continues with the first;
-//! - SAVE_START/SAVE_END/CLEAR_CAPTURE push a `restore` of the slot's
-//!   previous value, undone when backtracking past it (the recursive
-//!   matcher's per-frame rollback);
+//! - SAVE_START/SAVE_END/CLEAR_CAPTURE write the slot's previous value to
+//!   the trail (docs/REGEX_TIERS_PLAN.md §4.4 D-D); every choicepoint
+//!   records the trail's height, and resuming it undoes the trail down to
+//!   there;
 //! - a backward jump goes through the zero-progress loop guard (`guards`,
 //!   a stack whose height every choicepoint records: an entry lives until
 //!   backtracking pops a choicepoint older than it, which is exactly how
 //!   long it lived on the recursive chain);
 //! - a simple `*` keeps its positions on `positions` and one choicepoint
 //!   for all of them;
-//! - a lookahead copies the slots to `snapshots` and pushes a barrier; a
-//!   positive one that succeeds drops everything above the barrier (it's
-//!   atomic) and keeps its captures, as the recursive matcher does.
+//! - a lookahead pushes a barrier. A positive one that succeeds drops the
+//!   choicepoints above it (it's atomic) but keeps the trail, so its
+//!   captures stay and a later backtrack past it still undoes them (the
+//!   recursive matcher kept them: bug F, F6A_PRECHECK.md). A negative one
+//!   always undoes the trail to its barrier.
 //! Lookbehind isn't here: patterns with one stay on the recursive matcher
 //! until F6b.
 
@@ -50,17 +53,21 @@ pub const ExecLimits = struct {
     max_backtrack_stack_bytes: usize = DEFAULT_MAX_BACKTRACK_STACK_BYTES,
 };
 
-/// A pending alternative. `guard_h`, `pos_h` and `look_top` are the heights
-/// of the loop guards, the star positions and the innermost lookahead
-/// barrier when it was pushed; resuming it brings them back.
+/// A capture slot's value before a write: undone on backtracking.
+pub const TrailEntry = struct { slot: u32, prev: CaptureGroup };
+
+/// A pending alternative. `trail_h`, `guard_h`, `pos_h` and `look_top` are
+/// the heights of the trail, the loop guards, the star positions and the
+/// innermost lookahead barrier when it was pushed; resuming it brings them
+/// back.
 pub const Choice = struct {
     kind: Kind,
     /// `alt`: the resumed branch jumps backward (through the loop guard).
     back: bool = false,
     /// `alt`: the branch to resume. `star_greedy`/`star_lazy`: the pattern
-    /// after the star. `look`: the pc after LOOKAHEAD_END. `restore`: the
-    /// capture slot.
+    /// after the star. `look`: the pc after LOOKAHEAD_END.
     pc: u32,
+    trail_h: u32,
     guard_h: u32,
     pos_h: u32,
     look_top: u32,
@@ -70,24 +77,10 @@ pub const Choice = struct {
     pos: usize,
     /// `star_greedy`: the star's first index in `positions`. `star_lazy`:
     /// the pc of the starred atom. `look`: 1 for a negative lookahead.
-    /// `restore`: the slot's previous start (`none` for null).
     a: usize = 0,
-    /// `look`: the barrier's first index in `snapshots`. `restore`: the
-    /// slot's previous end (`none` for null).
-    b: usize = 0,
 
-    pub const Kind = enum(u8) { alt, star_greedy, star_lazy, look, restore };
+    pub const Kind = enum(u8) { alt, star_greedy, star_lazy, look };
 };
-
-const none = std.math.maxInt(usize);
-
-fn pack(v: ?usize) usize {
-    return v orelse none;
-}
-
-fn unpack(v: usize) ?usize {
-    return if (v == none) null else v;
-}
 
 /// The explicit-stack backtracker over a subject of `Unit`s (`u8` WTF-8,
 /// `u16` UTF-16). `core` is the recursive matcher's state and atom checks
@@ -97,6 +90,7 @@ pub fn BacktrackerFor(comptime Unit: type) type {
     return struct {
         core: Core,
         stack: std.ArrayListUnmanaged(Choice),
+        trail: std.ArrayListUnmanaged(TrailEntry),
         limits: ExecLimits,
         steps: usize = 0,
         /// Index + 1 of the innermost lookahead barrier in `stack` (0: none).
@@ -113,14 +107,19 @@ pub fn BacktrackerFor(comptime Unit: type) type {
             // The core's own limits stay off: it never runs `matchFrom`.
             const core = try Core.initScratch(bytecode, input, .unlimited(), capture_slots, scratch);
             var stack = scratch.choices;
+            var trail = scratch.trail;
             scratch.choices = .empty;
+            scratch.trail = .empty;
             stack.clearRetainingCapacity();
-            return .{ .core = core, .stack = stack, .limits = limits };
+            trail.clearRetainingCapacity();
+            return .{ .core = core, .stack = stack, .trail = trail, .limits = limits };
         }
 
         pub fn releaseScratch(self: *Self, scratch: *Scratch) void {
             scratch.choices = self.stack;
+            scratch.trail = self.trail;
             self.stack = .empty;
+            self.trail = .empty;
             self.core.releaseScratch(scratch);
         }
 
@@ -138,9 +137,9 @@ pub fn BacktrackerFor(comptime Unit: type) type {
 
         fn clearStacks(self: *Self) void {
             self.stack.clearRetainingCapacity();
+            self.trail.clearRetainingCapacity();
             self.core.loop_guard.clearRetainingCapacity();
             self.core.positions.clearRetainingCapacity();
-            self.core.snapshots.clearRetainingCapacity();
             self.look_top = 0;
         }
 
@@ -153,9 +152,9 @@ pub fn BacktrackerFor(comptime Unit: type) type {
             const limit = self.limits.max_backtrack_stack_bytes;
             if (limit == 0) return;
             const bytes = self.stack.items.len * @sizeOf(Choice) +
+                self.trail.items.len * @sizeOf(TrailEntry) +
                 self.core.loop_guard.items.len * @sizeOf(LoopState) +
-                self.core.positions.items.len * @sizeOf(usize) +
-                self.core.snapshots.items.len * @sizeOf(CaptureGroup);
+                self.core.positions.items.len * @sizeOf(usize);
             if (bytes > limit) return error.BacktrackStackExhausted;
         }
 
@@ -169,6 +168,7 @@ pub fn BacktrackerFor(comptime Unit: type) type {
             return .{
                 .kind = kind,
                 .pc = @intCast(pc),
+                .trail_h = @intCast(self.trail.items.len),
                 .guard_h = @intCast(self.core.loop_guard.items.len),
                 .pos_h = @intCast(self.core.positions.items.len),
                 .look_top = self.look_top,
@@ -188,26 +188,28 @@ pub fn BacktrackerFor(comptime Unit: type) type {
             return true;
         }
 
-        /// Record `slot`'s value for backtracking, then set it.
+        /// Record `slot`'s value on the trail, then set it.
         fn setCapture(self: *Self, slot: usize, value: CaptureGroup) MatchError!void {
             const caps = self.core.caps();
-            const prev = caps[slot];
-            var r = self.choice(.restore, slot, 0);
-            r.a = pack(prev.start);
-            r.b = pack(prev.end);
-            try self.push(r);
+            try self.trail.append(self.gpa(), .{ .slot = @intCast(slot), .prev = caps[slot] });
+            try self.checkBytes();
             caps[slot] = value;
         }
 
-        fn restoreSnapshot(self: *Self, mark: usize) void {
-            @memcpy(self.core.caps(), self.core.snapshots.items[mark..][0..self.core.capture_slots]);
+        /// Undo the capture writes above trail height `h`, newest first.
+        fn undoTo(self: *Self, h: usize) void {
+            const caps = self.core.caps();
+            while (self.trail.items.len > h) {
+                const e = self.trail.pop().?;
+                caps[e.slot] = e.prev;
+            }
         }
 
-        /// Drop everything above the lookahead barrier at `idx` (the barrier
-        /// too), bringing the heights back to its own.
+        /// Drop the choicepoints from the lookahead barrier at `idx` up (the
+        /// barrier too), bringing the heights back to its own. The trail
+        /// stays: undoing it is the caller's choice.
         fn cutTo(self: *Self, idx: usize) void {
             const b = self.stack.items[idx];
-            self.core.snapshots.shrinkRetainingCapacity(b.b);
             self.core.loop_guard.shrinkRetainingCapacity(b.guard_h);
             self.core.positions.shrinkRetainingCapacity(b.pos_h);
             self.look_top = b.look_top;
@@ -219,13 +221,10 @@ pub fn BacktrackerFor(comptime Unit: type) type {
         fn backtrack(self: *Self, pc: *usize, pos: *usize) MatchError!bool {
             while (self.stack.items.len > 0) {
                 const top = &self.stack.items[self.stack.items.len - 1];
+                self.undoTo(top.trail_h);
                 self.core.loop_guard.shrinkRetainingCapacity(top.guard_h);
                 self.look_top = top.look_top;
                 switch (top.kind) {
-                    .restore => {
-                        self.core.caps()[top.pc] = .{ .start = unpack(top.a), .end = unpack(top.b) };
-                        self.stack.items.len -= 1;
-                    },
                     .alt => {
                         const c = top.*;
                         self.stack.items.len -= 1;
@@ -262,9 +261,9 @@ pub fn BacktrackerFor(comptime Unit: type) type {
                         self.stack.items.len -= 1;
                     },
                     .look => {
-                        // The lookahead's body failed.
+                        // The lookahead's body failed (its captures are
+                        // already undone, above).
                         const c = top.*;
-                        self.restoreSnapshot(c.b);
                         self.cutTo(self.stack.items.len - 1);
                         if (c.a == 1) {
                             // Negative: the assertion holds.
@@ -398,11 +397,8 @@ pub fn BacktrackerFor(comptime Unit: type) type {
 
                 .LOOKAHEAD, .NEGATIVE_LOOKAHEAD => {
                     const end_pc = try self.core.findLookaheadEnd(next);
-                    const mark = self.core.snapshots.items.len;
-                    try self.core.snapshots.appendSlice(self.gpa(), self.core.caps());
                     var c = self.choice(.look, end_pc + 1, pos);
                     c.a = @intFromBool(inst.opcode == .NEGATIVE_LOOKAHEAD);
-                    c.b = mark;
                     try self.push(c);
                     self.look_top = @intCast(self.stack.items.len);
                 },
@@ -416,12 +412,14 @@ pub fn BacktrackerFor(comptime Unit: type) type {
                     if (b.a == 1) {
                         // Negative: its body matched, so the assertion
                         // fails, and none of the body's captures stay.
-                        self.restoreSnapshot(b.b);
+                        self.undoTo(b.trail_h);
                         self.cutTo(idx);
                         return false;
                     }
-                    // Positive: atomic. Its alternatives go, its captures
-                    // stay; continue after it where it started.
+                    // Positive: atomic. Its alternatives go; its captures
+                    // stay, on the trail, so backtracking past the
+                    // lookahead later undoes them. Continue after it,
+                    // where it started.
                     self.cutTo(idx);
                     pc_ptr.* = b.pc;
                     pos_ptr.* = b.pos;

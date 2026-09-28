@@ -22,6 +22,7 @@ const Mode = subject_mod.Mode;
 
 const Opcode = opcodes.Opcode;
 const Choice = @import("backtrack.zig").Choice;
+const TrailEntry = @import("backtrack.zig").TrailEntry;
 const Instruction = format.Instruction;
 
 /// Capture slots kept inline in the matcher (no allocation); patterns with
@@ -104,6 +105,8 @@ pub const Scratch = struct {
     positions: std.ArrayListUnmanaged(usize) = .empty,
     /// The explicit-stack backtracker's choicepoints (F6a, `backtrack.zig`).
     choices: std.ArrayListUnmanaged(Choice) = .empty,
+    /// Its capture trail.
+    trail: std.ArrayListUnmanaged(TrailEntry) = .empty,
     in_use: bool = false,
 
     pub fn init(gpa: Allocator) Scratch {
@@ -116,6 +119,7 @@ pub const Scratch = struct {
         self.loop_guard.deinit(self.gpa);
         self.positions.deinit(self.gpa);
         self.choices.deinit(self.gpa);
+        self.trail.deinit(self.gpa);
         self.* = undefined;
     }
 

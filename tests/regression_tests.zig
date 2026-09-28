@@ -275,6 +275,20 @@ test "regression: the backtracker's limits are errors, not crashes (F6a)" {
     try expectExpertLimits("()\\1{1000}", false, "", &.{ 0, 0, 0, 0 }, .{ .max_backtrack_stack_bytes = 0 });
 }
 
+// Bug F (docs/F6A_PRECHECK.md): once a positive lookahead succeeded, its
+// captures survived a later backtrack past it (the recursive matcher kept
+// them outside any rollback). The trail undoes them (F6a). V8's indices;
+// the last three pin the lookahead capture rules that don't change.
+test "regression: a positive lookahead's captures are undone when backtracking past it (bug F, F6a)" {
+    try expectExpert("(?:(?=(a))ab|ac)", false, "ac", &.{ 0, 2, null, null });
+    try expectExpert("(?=(a))?.b|..", false, "ac", &.{ 0, 2, null, null });
+    try expectExpert("(?:(?=(a+))a*x|a*)", false, "aay", &.{ 0, 2, null, null });
+    try expectExpert("(?=(a+))a*b\\1", false, "baaabac", &.{ 3, 6, 3, 4 });
+    try expectExpert("(?=(a))a", false, "a", &.{ 0, 1, 0, 1 });
+    try expectExpert("(?!(a)b)a", false, "ac", &.{ 0, 1, null, null });
+    try expectExpert("(?!(a))\\1b", false, "b", &.{ 0, 1, null, null });
+}
+
 test "regression: a pattern with a lookbehind stays on the recursive matcher until F6b" {
     var lb = try zregex.Regex.compile(testing.allocator, "(?<!\\$)\\d+");
     defer lb.deinit();
