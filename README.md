@@ -242,8 +242,6 @@ The cross-engine benchmark: `bench/compare/prepare.sh`, then `node bench/compare
   mandatory (z-interpreter needs all of it). The old 100-character window (D7) is gone.
 - Patterns with a raw, non-UTF-8 byte (WTF-8 only) stay on the backtracker, as does a tagged
   program over the slot bound.
-- `\u{…}` without `u`/`v` is read as a code point escape (D17; Annex B reads it as `u` plus a
-  quantifier or text).
 
 The full list, with measurements: [docs/KNOWN_LIMITATIONS.md](docs/KNOWN_LIMITATIONS.md).
 

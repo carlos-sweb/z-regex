@@ -1182,6 +1182,12 @@ give the same slots in all 566,490 runs.
   used by every execution through the C API and by the Zig facade (`find`, `findAll`,
   `replace`, ...); before F7b it was accepted and ignored. `max_recursion_depth` is a
   reserved field with no effect.
+- C API: `zregex_last_error_name` (the precise `@errorName`) is recorded only by
+  `zregex_compile_n`, `zregex_match_at_n`, `zregex_search_n` and `zregex_exec_wtf8`/`_utf16`.
+  The older functions (`zregex_compile`, `zregex_find*`, `zregex_is_match`,
+  `zregex_replace*`, `zregex_escape`, `zregex_match_slice`/`_group`,
+  `zregex_named_group_*`) set only the coarse `zregex_last_error` code and leave the name
+  "". Use `zregex_compile_n` for the name of a compile error.
 
 **Bench** (10 interleaved rounds of `zregex_xbench` against `66a9d60`, median `execAt`
 MB/s; the backtracker cases):

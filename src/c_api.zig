@@ -698,7 +698,15 @@ export fn zregex_group_count(re: *ZRegex) usize {
 }
 
 /// `@errorName` of the last failure on this thread, or "" if none. The
-/// string is static; don't free it.
+/// string is static; don't free it. Only `zregex_compile_n`,
+/// `zregex_match_at_n`, `zregex_search_n` and `zregex_exec_wtf8`/`_utf16`
+/// record it; the older functions (`zregex_compile`, `zregex_find`,
+/// `zregex_find_at`, `zregex_find_all`, `zregex_is_match`, `zregex_replace`,
+/// `zregex_replace_all`, `zregex_escape`, `zregex_match_slice`,
+/// `zregex_match_group`, `zregex_named_group_name`,
+/// `zregex_named_group_index`) set only `zregex_last_error` and leave this
+/// "". For the precise name of a compile error, compile with
+/// `zregex_compile_n`.
 export fn zregex_last_error_name() [*:0]const u8 {
     return last_error_name;
 }
