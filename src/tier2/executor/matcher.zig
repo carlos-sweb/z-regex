@@ -122,6 +122,8 @@ pub const Matcher = struct {
     /// Runs on the recursive matcher (lookbehind, until F6b) instead of the
     /// explicit-stack backtracker.
     has_lookbehind: bool = false,
+    /// `CompileResult.word_fold` (F5b).
+    word_fold: bool = false,
     /// LookLinear's sites and programs (`CompileResult.linear`, F6a).
     linear: []const program_mod.LinearSite = &.{},
     linear_programs: []const @import("tier0").Program = &.{},
@@ -170,6 +172,7 @@ pub const Matcher = struct {
             .charsets = compiled.charsets,
             .mode = compiled.mode,
             .has_lookbehind = compiled.has_lookbehind,
+            .word_fold = compiled.word_fold,
             .linear = compiled.linear,
             .linear_programs = compiled.linear_programs,
         };
@@ -205,6 +208,7 @@ pub const Matcher = struct {
             var m = try RecursiveMatcherFor(Unit).initScratch(self.bytecode, input, .{ .max_steps = limits.max_steps }, self.capture_slots, scratch);
             m.charsets = self.charsets;
             m.mode = self.mode;
+            m.word_fold = self.word_fold;
             defer m.releaseScratch(scratch);
             var pos = index;
             while (pos <= input.len) : (pos = subject.advanceIndex(self.mode, pos)) {
@@ -220,6 +224,7 @@ pub const Matcher = struct {
         try b.initScratchInto(self.bytecode, input, limits, self.capture_slots, scratch);
         b.core.charsets = self.charsets;
         b.core.mode = self.mode;
+        b.core.word_fold = self.word_fold;
         b.linear = self.linear;
         b.programs = self.linear_programs;
         defer b.releaseScratch(scratch);

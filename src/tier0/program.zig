@@ -93,6 +93,10 @@ pub const Program = struct {
     /// Set by `compile`; a program built by hand with `save`/`clear` and
     /// run on the tagged VM must set it too.
     max_undo: u32 = 0,
+    /// The pattern's `i` (its root scope): with `u`/`v` (the VM's
+    /// code-point mode), `\b`/`\B` count the extended WordCharacters
+    /// (`ir.word`, F5b).
+    word_ci: bool = false,
     follow: []const u32 = &.{},
     /// Fast paths and the start-position skip (`prefilter.zig`); empty when
     /// compiled without them.

@@ -14,6 +14,8 @@ const Allocator = std.mem.Allocator;
 const opcodes = @import("../bytecode/opcodes.zig");
 const format = @import("../bytecode/format.zig");
 const properties = @import("unicode").properties;
+const casefold = @import("unicode").casefold;
+const word = @import("ir").word;
 const CharSet = @import("ir").charset.CharSet;
 const subject_mod = @import("subject");
 const Subject = subject_mod.Subject;
@@ -196,6 +198,9 @@ pub fn RecursiveMatcherFor(comptime Unit: type) type {
         /// surrogates and astral characters decode differently, so the
         /// inline ASCII path doesn't depend on it.
         mode: Mode = .code_point,
+        /// `i` with `u`/`v` (`CompileResult.word_fold`): `\b`/`\B` count
+        /// the extended WordCharacters (F5b).
+        word_fold: bool = false,
 
         const Self = @This();
 
@@ -1333,18 +1338,26 @@ pub fn RecursiveMatcherFor(comptime Unit: type) type {
 
             // Compare character by character: equal values that take the same
             // number of units (so an ill-formed byte never equals a code point
-            // with its value). With `i`, ASCII letters fold (F5 brings
-            // Canonicalize).
+            // with its value). With `i`, equal under ECMA-262's Canonicalize
+            // (F5b: `casefold`, the tables the lowering folds with), one
+            // character of the pattern's mode at a time (a code point with
+            // `u`/`v`, so an astral one canonicalizes whole).
+            const decode_mode: Mode = if (case_insensitive) self.mode else .code_unit;
+            const fold_mode: casefold.FoldMode = if (self.mode == .code_point) .unicode else .legacy;
             var cap_pos = cap_start;
             var cur_pos = pos;
             while (cap_pos < cap_end) {
-                const a = self.subject().decodeAt(.code_unit, cap_pos).?;
-                const b = self.subject().decodeAt(.code_unit, cur_pos) orelse return .{ .matched = false, .end_pos = pos };
+                const a = self.subject().decodeAt(decode_mode, cap_pos).?;
+                const b = self.subject().decodeAt(decode_mode, cur_pos) orelse return .{ .matched = false, .end_pos = pos };
                 const eq = if (case_insensitive)
-                    foldAscii(a.value) == foldAscii(b.value)
+                    casefold.canonicalize(a.value, fold_mode) == casefold.canonicalize(b.value, fold_mode)
                 else
                     a.value == b.value;
-                if (!eq or a.invalid != b.invalid or a.pos - cap_pos != b.pos - cur_pos) return .{ .matched = false, .end_pos = pos };
+                // Under `i`, equal characters may take different lengths (k
+                // and the Kelvin sign in WTF-8); an ill-formed byte still
+                // never equals a code point (`invalid`).
+                const same_len = case_insensitive or a.pos - cap_pos == b.pos - cur_pos;
+                if (!eq or a.invalid != b.invalid or !same_len) return .{ .matched = false, .end_pos = pos };
                 cap_pos = a.pos;
                 cur_pos = b.pos;
             }
@@ -1353,23 +1366,13 @@ pub fn RecursiveMatcherFor(comptime Unit: type) type {
             return .{ .matched = true, .end_pos = cur_pos };
         }
 
-        fn foldAscii(c: u32) u32 {
-            return if (c >= 'A' and c <= 'Z') c + ('a' - 'A') else c;
-        }
-
-        /// Check if position is at word boundary
+        /// Check if position is at word boundary: WordCharacters
+        /// (`ir.word`), extended under `u`/`v` + `i`.
         pub fn isWordBoundary(self: *const Self, pos: usize) bool {
-            const before_is_word = if (self.decodeBefore(pos)) |d| isWordChar(d.value) else false;
-            const after_is_word = if (self.decodeAt(pos)) |d| isWordChar(d.value) else false;
+            const extended = self.word_fold and self.mode == .code_point;
+            const before_is_word = if (self.decodeBefore(pos)) |d| word.isWordChar(d.value, extended) else false;
+            const after_is_word = if (self.decodeAt(pos)) |d| word.isWordChar(d.value, extended) else false;
             return before_is_word != after_is_word;
-        }
-
-        /// Check if character is word character
-        fn isWordChar(c: u32) bool {
-            return (c >= 'a' and c <= 'z') or
-                (c >= 'A' and c <= 'Z') or
-                (c >= '0' and c <= '9') or
-                c == '_';
         }
     };
 }

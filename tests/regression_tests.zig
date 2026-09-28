@@ -438,3 +438,121 @@ test "LookLinear: the step budget covers the VM too" {
     const r = try lookRun("(?=a+b)", long, true, .{});
     try testing.expect(!r.found);
 }
+
+// F5b(1b): backreferences under `i` compare with ECMA-262's Canonicalize
+// (unicode.casefold, the tables the lowering folds with), not ASCII
+// folding; `\b`/`\B` count the extended WordCharacters under `u` + `i`
+// (ir.word), in all three executors. Every expected value is V8's.
+
+/// Whether `pattern` with `flags` (`i`, `u`) finds a match in `input`
+/// (UTF-16, so astral characters are whole under `u`).
+fn v8Test(pattern: []const u8, flags: []const u8, input: []const u8) !bool {
+    const a = testing.allocator;
+    var re = try zregex.Regex.compileWithOptions(a, pattern, .{
+        .case_insensitive = std.mem.indexOfScalar(u8, flags, 'i') != null,
+        .unicode = std.mem.indexOfScalar(u8, flags, 'u') != null,
+    });
+    defer re.deinit();
+    var scratch = zregex.Scratch.init(a);
+    defer scratch.deinit();
+    const slots = try a.alloc(?usize, re.slotCount());
+    defer a.free(slots);
+    var out: zregex.MatchSlots = .{ .slots = slots };
+    const s16 = try zregex.subject.utf16FromWtf8(a, input);
+    defer a.free(s16);
+    const found16 = try re.execAt(.{ .utf16 = s16 }, 0, &scratch, &out, .{});
+    // The same answer over WTF-8.
+    const found8 = try re.execAt(.{ .wtf8 = input }, 0, &scratch, &out, .{});
+    if (found16 != found8) {
+        std.debug.print("/{s}/{s} on \"{s}\": UTF-16 {}, WTF-8 {}\n", .{ pattern, flags, input, found16, found8 });
+        return error.TestUnexpectedResult;
+    }
+    return found16;
+}
+
+test "F5b: backreferences under i canonicalize (V8)" {
+    const Case = struct { []const u8, []const u8, []const u8, bool };
+    const cases = [_]Case{
+        .{ "(\u{E9})\\1", "i", "\u{E9}\u{C9}", true },
+        .{ "(k)\\1", "iu", "k\u{212A}", true },
+        .{ "^(\u{DF})\\1$", "i", "\u{DF}\u{DF}", true },
+        .{ "^(\u{DF})\\1$", "i", "\u{DF}SS", false },
+        .{ "^(\u{FB01})\\1$", "i", "\u{FB01}\u{FB01}", true },
+        .{ "^(\u{FB01})\\1$", "i", "\u{FB01}FI", false },
+        // Without `u`, the Kelvin sign doesn't fold; σ/ς/Σ is one class;
+        // ᾀ's full uppercase is two characters, so it only matches itself.
+        .{ "(k)\\1", "i", "k\u{212A}", false },
+        .{ "(\u{3C3})\\1", "i", "\u{3C3}\u{3C2}", true },
+        .{ "(\u{1F80})\\1", "i", "\u{1F80}\u{1F88}", false },
+        .{ "(\u{1F80})\\1", "iu", "\u{1F80}\u{1F88}", true },
+        // An astral character canonicalizes whole under `u` only.
+        .{ "(\u{10400})\\1", "iu", "\u{10400}\u{10428}", true },
+        .{ "(\u{10400})\\1", "i", "\u{10400}\u{10428}", false },
+        // Without `i`, no folding.
+        .{ "(\u{E9})\\1", "", "\u{E9}\u{C9}", false },
+    };
+    for (cases) |c| {
+        const got = try v8Test(c[0], c[1], c[2]);
+        if (got != c[3]) {
+            std.debug.print("/{s}/{s} on \"{s}\": got {}, V8 {}\n", .{ c[0], c[1], c[2], got, c[3] });
+            return error.TestUnexpectedResult;
+        }
+    }
+}
+
+test "F5b: \\b and \\B count the extended WordCharacters under u + i (V8)" {
+    const Case = struct { []const u8, []const u8, []const u8, bool };
+    const cases = [_]Case{
+        .{ "a\\b", "iu", "a\u{17F}", false },
+        .{ "a\\b", "iu", "a\u{212A}", false },
+        .{ "^\u{17F}\\B", "iu", "\u{17F}a", true },
+        .{ "\u{17F}\\b", "iu", "\u{17F}!", true },
+        .{ "\u{17F}\\b", "iu", "\u{17F}a", false },
+        // Anchored at the `s`/`k`: the next character (ſ, K) is a word
+        // character. (Unanchored, V8 matches `s`/`k` on that second
+        // character, which needs the literals folded: F5b's Part 2.)
+        .{ "^s\\b", "iu", "s\u{17F}", false },
+        .{ "^k\\b", "iu", "k\u{212A}", false },
+        // Without `i`, or without `u`, no extension.
+        .{ "a\\b", "u", "a\u{17F}", true },
+        .{ "a\\b", "i", "a\u{17F}", true },
+        .{ "^s\\b", "u", "s\u{17F}", true },
+        .{ "^s\\b", "i", "s\u{17F}", true },
+    };
+    for (cases) |c| {
+        const got = try v8Test(c[0], c[1], c[2]);
+        if (got != c[3]) {
+            std.debug.print("/{s}/{s} on \"{s}\": got {}, V8 {}\n", .{ c[0], c[1], c[2], got, c[3] });
+            return error.TestUnexpectedResult;
+        }
+    }
+}
+
+/// `pattern` (flags `i`, `u`) on `input` from index 0: the match's [start,
+/// end] in UTF-16 units, or null.
+fn spanOf(pattern: []const u8, input: []const u8, unicode: bool) !?[2]usize {
+    const a = testing.allocator;
+    var re = try zregex.Regex.compileWithOptions(a, pattern, .{ .case_insensitive = true, .unicode = unicode });
+    defer re.deinit();
+    var scratch = zregex.Scratch.init(a);
+    defer scratch.deinit();
+    const slots = try a.alloc(?usize, re.slotCount());
+    defer a.free(slots);
+    var out: zregex.MatchSlots = .{ .slots = slots };
+    const s16 = try zregex.subject.utf16FromWtf8(a, input);
+    defer a.free(s16);
+    if (!try re.execAt(.{ .utf16 = s16 }, 0, &scratch, &out, .{})) return null;
+    return .{ slots[0].?, slots[1].? };
+}
+
+// Backreferences never run on T0 (tier0.check rejects them), so there is
+// no T0/T2 cross for them. The two backtrackers share checkBackRef: a
+// pattern with a lookbehind runs on the recursive matcher, one without on
+// the explicit-stack one; the same backreference gives the same span on
+// both (and V8's).
+test "F5b: backreferences under i agree on both backtrackers" {
+    try testing.expectEqual(@as(?[2]usize, .{ 1, 3 }), try spanOf("(?<=x)(\u{E9})\\1", "x\u{E9}\u{C9}", false));
+    try testing.expectEqual(@as(?[2]usize, .{ 1, 3 }), try spanOf("(\u{E9})\\1", "x\u{E9}\u{C9}", false));
+    try testing.expectEqual(@as(?[2]usize, .{ 1, 3 }), try spanOf("(?<=x)(k)\\1", "xk\u{212A}", true));
+    try testing.expectEqual(@as(?[2]usize, .{ 1, 3 }), try spanOf("(k)\\1", "xk\u{212A}", true));
+}

@@ -297,6 +297,7 @@ fn generate(allocator: Allocator, fe: *const lower_mod.Frontend, options: Compil
         .charsets = charsets,
         .mode = if (options.unicode or options.v) .code_point else .code_unit,
         .has_lookbehind = program_mod.hasLookbehind(optimized),
+        .word_fold = options.case_insensitive and (options.unicode or options.v),
         .linear = linear_owned,
         .linear_programs = programs_owned,
         .allocator = allocator,

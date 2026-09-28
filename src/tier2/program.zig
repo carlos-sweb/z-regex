@@ -36,6 +36,9 @@ pub const CompileResult = struct {
     /// recursive matcher until F6b, the rest on the explicit-stack
     /// backtracker (F6a).
     has_lookbehind: bool = false,
+    /// `i` together with `u`/`v`: `\b`/`\B` count the extended
+    /// WordCharacters (`ir.word`, F5b).
+    word_fold: bool = false,
     /// The lookaheads T0's VM answers (F6a, LookLinear): bodies without
     /// captures, backreferences or nested lookarounds that `tier0.check`
     /// takes. Sorted by `pc`. Empty unless the pattern runs on the

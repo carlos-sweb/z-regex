@@ -183,6 +183,8 @@ pub fn compileAccepted(gpa: Allocator, root: *const hir.Node, options: Options) 
         else => {},
     };
     var prog: Program = .{ .insts = insts, .sets = owned_sets, .nslots = if (options.tagged) slotCount(root) else 2, .max_undo = undo };
+    // Flags live in `modifier_scope` nodes, only the root one today.
+    if (root.* == .modifier_scope) prog.word_ci = root.modifier_scope.flags.ignore_case;
     errdefer prog.deinit(gpa);
     try buildClosures(gpa, &prog);
     if (options.prefilters) prog.prefilter = try prefilter.analyze(gpa, root, &prog);

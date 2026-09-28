@@ -752,3 +752,54 @@ test "F5a: a group reset per iteration, as V8 (the backtracker keeps the stale g
     try testing.expect(try re.execAt(.{ .wtf8 = "ab\nab xyz09" }, 5, &scratch, &out, .{}));
     try testing.expectEqualSlices(?usize, &.{ 6, 11, null, null }, &buf);
 }
+
+// F5b(1b): `\b`/`\B` under `u` + `i` on T0's VM against the backtracker.
+// `iu` patterns reach the VM through the dispatcher only after F5b's
+// lowering (Part 2), so the VM runs here from the HIR directly, in code
+// point mode, as the dispatcher will run it.
+test "F5b: \\b under u + i, VM against the backtracker" {
+    if (zregex.force_backtracker) return error.SkipZigTest;
+    const gpa = testing.allocator;
+    const patterns = [_][]const u8{ "a\\b", "k\\b", "s\\B", "\\b\\w", "\\w\\b", "\\B" };
+    const word_subjects = [_][]const u8{ "a\u{17F}", "a\u{212A}", "k\u{212A}!", "s\u{17F}x", "!\u{17F}x", "x\u{212A} y", "abc", "" };
+    var extended_seen = false;
+    for (patterns) |pattern| {
+        const fe = try zregex.lower.Frontend.init(gpa, pattern, .{ .unicode = true }, .{ .ignore_case = true });
+        defer fe.deinit();
+        const prog = try tier0.compile(gpa, fe.root);
+        defer prog.deinit(gpa);
+        try testing.expect(prog.word_ci);
+        var bt = try zregex.Regex.compileWithOptions(gpa, pattern, .{ .unicode = true, .case_insensitive = true, .force_tier = .expert });
+        defer bt.deinit();
+        var scratch = tier0.VmScratch.init(gpa);
+        defer scratch.deinit();
+        var bt_scratch = zregex.Scratch.init(gpa);
+        defer bt_scratch.deinit();
+        for (word_subjects) |subj| {
+            const s16 = try zregex.subject.utf16FromWtf8(gpa, subj);
+            defer gpa.free(s16);
+            for ([_]zregex.Subject{ .{ .wtf8 = subj }, .{ .utf16 = s16 } }) |s| {
+                var i: usize = 0;
+                while (i <= s.len()) : (i += 1) {
+                    if (!s.isPosition(i)) continue;
+                    var vm_slots: [2]?usize = undefined;
+                    const vm_found = switch (s) {
+                        .wtf8 => |x| try tier0.exec(&prog, u8, x, .code_point, i, false, &scratch, &vm_slots),
+                        .utf16 => |x| try tier0.exec(&prog, u16, x, .code_point, i, false, &scratch, &vm_slots),
+                    };
+                    var bt_buf: [2]?usize = undefined;
+                    var out: zregex.MatchSlots = .{ .slots = &bt_buf };
+                    const bt_found = try bt.execAt(s, i, &bt_scratch, &out, .{});
+                    try testing.expectEqual(bt_found, vm_found);
+                    if (vm_found) try testing.expectEqualSlices(?usize, &bt_buf, &vm_slots);
+                }
+            }
+        }
+        // The extension is live on the VM: `a\b` doesn't match "aſ".
+        if (std.mem.eql(u8, pattern, "a\\b")) {
+            var slots: [2]?usize = undefined;
+            extended_seen = !try tier0.exec(&prog, u8, "a\u{17F}", .code_point, 0, false, &scratch, &slots);
+        }
+    }
+    try testing.expect(extended_seen);
+}
