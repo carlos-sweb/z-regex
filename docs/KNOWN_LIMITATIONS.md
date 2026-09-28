@@ -1616,6 +1616,33 @@ from before it are not comparable with each other. With it:
 | `41e2a0b` (F5b closed) | 1,113,232 B | 708,104 B |
 | `4296517` (before F7a) | 1,113,232 B | 708,104 B |
 | `2c9a321` (F7a closed) | 1,121,408 B (+8,176) | 711,960 B (+3,856) |
+| `5a0b302` (F7b closed) | 1,119,168 B (-2,240) | 711,928 B (-32) |
+
+### F7b closed: performance and size
+
+Six items, one commit each, each through the full gate (test262 2980 in both encodings,
+`differential-v8` identical to `diff-F7a.json`, the internal differentials at 0):
+- **b1** one procedure for the binary size (`scripts/measure_binary.sh`, above);
+- **b2** `compile` no longer runs the no-op `Optimizer` (see its section; the in-place
+  hand-over of the writer's buffer was reverted at the close);
+- **b3** LookLinear delegates lookaheads under `i` in code-point mode (sites 7,234 ->
+  7,264, 0 differences);
+- **b4** the C API applies `ZRegexOptions.max_steps` (`Regex.limits`; see "F6a", limits);
+- **b5** the loop guard's set is `GuardSet` (see "F6a", known costs);
+- **b6** three local compile costs removed (see "F5a", compile time): -30% to -39%
+  instructions per compile on small patterns with a class or a property.
+
+**Close bench** (10 interleaved rounds of `zregex_xbench` against `1a48240`, minimum time
+per case, criterion: none worse than 10%). The first run flagged 16 of 110 metrics; one was
+real: `t1_pL` compile +119%, bisected to b2's in-place hand-over and fixed (`5a0b302`;
+callgrind hadn't shown it, the cost is in the allocator). A second run, with the fix,
+flagged 7, a set disjoint from the first run's (`t1_book_pL` short exec, `t2_book_backref`,
+`t2_lookahead` short exec, `t2_lookbehind` compile, `t0_iter_cap` short exec). Every flagged
+case of both runs executes the same instructions as the base (callgrind on the full corpus
+and on the short exec: -0.73% to +0.73%; `t2_lookbehind` compile +0.7%), so they are the
+process-to-process noise measured in F7-0, which the minimum doesn't fully remove when a
+base round happens to be fast. Improvements in the second run: compile `t0_email` -48.7%,
+`t2_book_backref` -39.8%, `t1_book_pL` -36.7%, `t1_pL` -29.8%.
 
 ### Fixed in F2b
 
