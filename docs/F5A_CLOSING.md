@@ -93,6 +93,8 @@ Compilación de los T1 enrutados: 2,1–2,6× frente a `.expert` en los patrones
   mide ningún gate actual.
 - **Fase:** por decidir (es contrato de `execAt`, F3; candidato a F7 o antes si un host
   lo pide).
+- ✅ **Corregido en F7a(2):** el matching arranca en el inicio del par (spec); el índice
+  informado es el del par, como V8. También en WTF-8 (`b+2`).
 
 ### Punto E: `\u{…}` sin `u` se lee como escape de code point
 

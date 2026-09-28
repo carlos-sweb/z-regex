@@ -22,9 +22,11 @@
 //!   surrogates at `b` and `b+3`, which never combine, not even with `u`;
 //! - an invalid byte: one unit whose value is the byte, so `b` and `b+1`.
 //!
-//! Decoding at `b+2` gives the trail half in both modes. That is what the
-//! spec does with `u` when `lastIndex` points into a pair. Decoding before
-//! `b+2` gives the lead half.
+//! Decoding at `b+2` gives the trail half in both modes, and decoding
+//! before `b+2` the lead half. An execution that starts inside a pair with
+//! `u` doesn't start there: RegExpBuiltinExec takes "the character that was
+//! obtained from element lastIndex", the whole pair, so `Subject.charStart`
+//! moves such a start to the pair's (F7a, bug D; the same in UTF-16).
 //!
 //! In UTF-16 every index from 0 to the length is a position.
 
@@ -78,6 +80,20 @@ pub const Subject = union(enum) {
         return switch (self) {
             .utf16 => |s| utf16DecodeBefore(s, mode, i),
             .wtf8 => |s| wtf8DecodeBefore(s, mode, i),
+        };
+    }
+
+    /// Where an execution from `i` starts: in code-point mode a position
+    /// inside a surrogate pair (UTF-16 between its halves, WTF-8 the `b+2`
+    /// of a 4-byte sequence) is the pair's start, as RegExpBuiltinExec's
+    /// "character that was obtained from element lastIndex" (F7a, bug D).
+    /// Every other position, and every position in code-unit mode, is
+    /// itself.
+    pub fn charStart(self: Subject, mode: Mode, i: usize) usize {
+        if (mode != .code_point) return i;
+        return switch (self) {
+            .utf16 => |s| if (i > 0 and i < s.len and isTrail(s[i]) and isLead(s[i - 1])) i - 1 else i,
+            .wtf8 => |s| if (midOf(s, i) != null) i - 2 else i,
         };
     }
 
@@ -385,6 +401,22 @@ test "advanceIndex steps one unit without u and one code point with u" {
     try testing.expectEqual(@as(usize, 2), u.advanceIndex(.code_unit, 1));
     try testing.expectEqual(@as(usize, 3), u.advanceIndex(.code_point, 1));
     try testing.expectEqual(@as(usize, 3), u.advanceIndex(.code_point, 2));
+}
+
+test "Subject.charStart: inside a pair with u is the pair's start (F7a, bug D)" {
+    const units = [_]u16{ 'a', 0xD83D, 0xDE00, 0xDE00, 0xD83D, 'b' };
+    const s16: Subject = .{ .utf16 = &units };
+    try testing.expectEqual(@as(usize, 1), s16.charStart(.code_point, 2)); // between the halves
+    try testing.expectEqual(@as(usize, 2), s16.charStart(.code_unit, 2));
+    try testing.expectEqual(@as(usize, 3), s16.charStart(.code_point, 3)); // lone trail after a pair
+    try testing.expectEqual(@as(usize, 5), s16.charStart(.code_point, 5)); // after a lone lead
+    try testing.expectEqual(@as(usize, 0), s16.charStart(.code_point, 0));
+    try testing.expectEqual(@as(usize, 6), s16.charStart(.code_point, 6));
+    const s8: Subject = .{ .wtf8 = "a\u{1F600}b" };
+    try testing.expectEqual(@as(usize, 1), s8.charStart(.code_point, 3)); // b+2
+    try testing.expectEqual(@as(usize, 3), s8.charStart(.code_unit, 3));
+    try testing.expectEqual(@as(usize, 5), s8.charStart(.code_point, 5));
+    try testing.expectEqual(@as(usize, 1), s8.charStart(.code_point, 1));
 }
 
 test "WTF-8 and UTF-16 agree on random well-formed strings" {

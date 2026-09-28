@@ -322,7 +322,11 @@ pub const Regex = struct {
     /// with `advanceIndex`. Indices are in the subject's units (bytes of
     /// WTF-8, or UTF-16 units; see the `subject` module for the WTF-8
     /// positions). An `index` past the end is no match; one inside a
-    /// character is `error.InvalidIndex`. With a warm `scratch` it doesn't
+    /// character is `error.InvalidIndex`. With `u`/`v`, an `index` between
+    /// the halves of a surrogate pair starts at the pair (the spec's
+    /// RegExpBuiltinExec; `Subject.charStart`), and the match's start is
+    /// where it really starts, the pair's, as V8 reports it (the spec
+    /// reports `lastIndex` itself). With a warm `scratch` it doesn't
     /// allocate.
     pub fn execAt(self: *const Self, subject: Subject, index: usize, scratch: *Scratch, out: *MatchSlots, limits: ExecLimits) ExecError!bool {
         return self.exec(subject, index, self.sticky, scratch, out.slots, limits);
@@ -338,9 +342,11 @@ pub const Regex = struct {
 
     /// The dispatcher (F4a): T0's VM when the pattern has a `t0` program,
     /// the backtracker otherwise. The VM is linear and ignores `limits`.
-    fn exec(self: *const Self, subject: Subject, index: usize, sticky: bool, scratch: *Scratch, slots: []?usize, limits: ExecLimits) ExecError!bool {
+    fn exec(self: *const Self, subject: Subject, start: usize, sticky: bool, scratch: *Scratch, slots: []?usize, limits: ExecLimits) ExecError!bool {
         scratch.acquire();
         defer scratch.release();
+        // Bug D (F7a): with `u`/`v` an index inside a pair starts at it.
+        const index = subject.charStart(self.compiled.mode, start);
         if (self.t0) |*p| {
             if (p.nslots == 2) return switch (subject) {
                 .wtf8 => |s| tier0.exec(p, u8, s, self.compiled.mode, index, sticky, &scratch.vm, slots),

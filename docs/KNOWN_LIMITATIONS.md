@@ -1526,6 +1526,17 @@ None. (D17, `\u{H+}` without `u`/`v`, was fixed in F7a: see "Fixed in F7a" below
   stays valid without `u` (ES2020). Tests against V8 in `tests/regression_tests.zig`. It
   removed the 11 runs of the two F2c-corpus patterns `docs/F5A_CLOSING.md` attributed to it.
 
+- **An index inside a surrogate pair with `u`/`v` started at the trail half (bug D)**
+  *(found in F5a, `docs/F5A_CLOSING.md`)*: `execAt` (and everything on it) took the index as
+  a lone trail surrogate. Now it starts at the pair (`Subject.charStart`): UTF-16 between the
+  halves, and WTF-8 at `b+2` of a 4-byte sequence, which is the same place. **The matching
+  follows the spec (RegExpBuiltinExec: "the character that was obtained from element
+  lastIndex"); the reported index matches V8, the pair's start; the spec reports `lastIndex`
+  itself, without moving back.** So `/./gu` with `lastIndex = 1` over "😀x" gives `[0, 2]`
+  (V8: `["😀"]` at 0) and `/\ude00/gu` from there finds nothing (before: `[1, 2]`). Without
+  `u` the index between the halves is a character boundary, as before. No test262 test
+  covers it; tests against V8 in `tests/regression_tests.zig`, both encodings.
+
 ### Fixed in F2b
 
 - **`v` set operation whose last operand is a bracketed class failed under

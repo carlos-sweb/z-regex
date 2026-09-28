@@ -501,6 +501,55 @@ test "F7a: \\u{...} is a code point escape only with u or v (bug E, V8)" {
     }
 }
 
+test "F7a: an index inside a surrogate pair with u starts at the pair (bug D, V8)" {
+    const a = testing.allocator;
+    // pattern, flags (g is implied: a search; y makes it sticky), subject,
+    // lastIndex in UTF-16 units, and V8's `indices[0]` (null: no match).
+    // Values checked with Node 22. The spec starts matching at the pair
+    // too (RegExpBuiltinExec); its reported index would be lastIndex, V8's
+    // is the pair's, as here.
+    const Case = struct { []const u8, []const u8, []const u8, usize, ?[2]usize };
+    const cases = [_]Case{
+        .{ ".", "u", "\u{1F600}x", 1, .{ 0, 2 } },
+        .{ "\\ude00", "u", "\u{1F600}x", 1, null },
+        .{ "(?:)", "u", "\u{1F600}x", 1, .{ 0, 0 } },
+        .{ "x", "u", "\u{1F600}x", 1, .{ 2, 3 } },
+        .{ ".", "uy", "\u{1F600}x", 1, .{ 0, 2 } },
+        .{ "(.)", "u", "a\u{1F600}", 2, .{ 1, 3 } },
+        .{ "\\ud83d", "u", "\u{1F600}", 1, null },
+        .{ "[\\ude00]", "u", "\u{1F600}", 1, null },
+        // Without u the index between the halves is a character boundary.
+        .{ "\\ude00", "", "\u{1F600}x", 1, .{ 1, 2 } },
+        .{ ".", "", "\u{1F600}x", 1, .{ 1, 2 } },
+    };
+    for (cases) |c| {
+        const flags = c[1];
+        var re = try zregex.Regex.compileWithOptions(a, c[0], .{
+            .unicode = std.mem.indexOfScalar(u8, flags, 'u') != null,
+            .sticky = std.mem.indexOfScalar(u8, flags, 'y') != null,
+        });
+        defer re.deinit();
+        var scratch = zregex.Scratch.init(a);
+        defer scratch.deinit();
+        const slots = try a.alloc(?usize, re.slotCount());
+        defer a.free(slots);
+        var out: zregex.MatchSlots = .{ .slots = slots };
+        const s16 = try zregex.subject.utf16FromWtf8(a, c[2]);
+        defer a.free(s16);
+        const found16 = try re.execAt(.{ .utf16 = s16 }, c[3], &scratch, &out, .{});
+        const got16: ?[2]usize = if (found16) .{ slots[0].?, slots[1].? } else null;
+        // WTF-8: the same lastIndex as a byte position (`b+2` between the
+        // halves), the same answer mapped back to UTF-16 units.
+        const idx8 = try zregex.subject.utf16ToWtf8Index(c[2], c[3]);
+        const found8 = try re.execAt(.{ .wtf8 = c[2] }, idx8, &scratch, &out, .{});
+        const got8: ?[2]usize = if (found8) .{ try zregex.subject.wtf8ToUtf16Index(c[2], slots[0].?), try zregex.subject.wtf8ToUtf16Index(c[2], slots[1].?) } else null;
+        if (!std.meta.eql(got16, c[4]) or !std.meta.eql(got8, c[4])) {
+            std.debug.print("/{s}/{s} lastIndex {d}: UTF-16 {any}, WTF-8 {any}, V8 {any}\n", .{ c[0], c[1], c[3], got16, got8, c[4] });
+            return error.TestUnexpectedResult;
+        }
+    }
+}
+
 test "F5b: backreferences under i canonicalize (V8)" {
     const Case = struct { []const u8, []const u8, []const u8, bool };
     const cases = [_]Case{
