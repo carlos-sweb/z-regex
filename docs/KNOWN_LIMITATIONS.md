@@ -1181,7 +1181,14 @@ iterations, so a long loop whose body isn't a single atom was quadratic. **Fixed
 past 64 active guards the backtracker mirrors them in a hash set. `(x)(?:ab)*\1` over 5,000
 iterations: 13.3 -> 0.46 ms, 92.7 M -> 6.8 M instructions (callgrind); 50,000: 882 -> 4.9 ms.
 Loops of up to 64 iterations keep the scan (the set costs more below ~70). The binary
-grows while both executors coexist (until F6b).
+grows while both executors coexist (until F6b). **F7b(5):** the set is no longer
+`std.AutoHashMapUnmanaged` but `GuardSet`, linear probing without tombstones (its removals
+always undo insertions newest first, so emptying the slot is enough); a full removal
+clears the table only when it is at most 16 times the keys, else removes them one by one.
+A table with no keys has every slot free, so it is reused without clearing. Binary
+-2,784 B (ReleaseFast) / -736 B (ReleaseSmall); the same probe (callgrind), 5,000
+iterations: 6.84 -> 6.12 M instructions; 50,000: 62.8 -> 53.8 M; wall time within noise
+(minimum 0.32 -> 0.30 ms and 4.3 -> 3.5–4.6 ms).
 
 ### Bench noise and the historical layout regressions (F7-0)
 

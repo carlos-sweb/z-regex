@@ -201,8 +201,7 @@ pub fn BacktrackerFor(comptime Unit: type) type {
         fn clearStacks(self: *Self) void {
             self.stack.clearRetainingCapacity();
             self.trail.clearRetainingCapacity();
-            self.core.loop_guard.clearRetainingCapacity();
-            self.scratch.guard_set.clearRetainingCapacity();
+            self.truncateGuards(0);
             self.core.positions.clearRetainingCapacity();
             self.look_top = 0;
         }
@@ -218,7 +217,7 @@ pub fn BacktrackerFor(comptime Unit: type) type {
             const bytes = self.stack.items.len * @sizeOf(Choice) +
                 self.trail.items.len * @sizeOf(TrailEntry) +
                 self.core.loop_guard.items.len * @sizeOf(LoopState) +
-                self.scratch.guard_set.count() * @sizeOf(LoopState) +
+                self.scratch.guard_set.count * @sizeOf(LoopState) +
                 self.core.positions.items.len * @sizeOf(usize);
             if (bytes > limit) return error.BacktrackStackExhausted;
         }
@@ -249,12 +248,17 @@ pub fn BacktrackerFor(comptime Unit: type) type {
             if (self.guarded(entry)) return false;
             try self.core.loop_guard.append(self.gpa(), entry);
             const guards = self.core.loop_guard.items;
-            if (guards.len == guard_set_min + 1) {
+            const mirrored = if (guards.len == guard_set_min + 1)
                 // Just past the threshold: the mirror starts with them all.
-                for (guards) |g| try self.scratch.guard_set.put(self.gpa(), g, {});
-            } else if (guards.len > guard_set_min + 1) {
-                try self.scratch.guard_set.put(self.gpa(), entry, {});
-            }
+                self.scratch.guard_set.rebuild(self.gpa(), guards)
+            else if (guards.len > guard_set_min + 1)
+                self.scratch.guard_set.insert(self.gpa(), entry, guards)
+            else {};
+            // The set must mirror the stack exactly (`truncateGuards`).
+            mirrored catch |err| {
+                self.core.loop_guard.shrinkRetainingCapacity(guards.len - 1);
+                return err;
+            };
             try self.checkBytes();
             return true;
         }
@@ -279,9 +283,14 @@ pub fn BacktrackerFor(comptime Unit: type) type {
             if (h >= guards.len) return;
             if (guards.len > guard_set_min) {
                 if (h <= guard_set_min) {
-                    self.scratch.guard_set.clearRetainingCapacity();
-                } else for (guards[h..]) |g| {
-                    _ = self.scratch.guard_set.remove(g);
+                    self.scratch.guard_set.removeAll(guards);
+                } else {
+                    // Newest first: `GuardSet` removes only its newest key.
+                    var i = guards.len;
+                    while (i > h) {
+                        i -= 1;
+                        self.scratch.guard_set.removeNewest(guards[i]);
+                    }
                 }
             }
             self.core.loop_guard.shrinkRetainingCapacity(h);

@@ -92,6 +92,94 @@ pub const LoopState = struct {
     pos: usize,
 };
 
+/// The explicit-stack backtracker's mirror of its loop guards past
+/// `backtrack.zig`'s `guard_set_min` (F7a(3), F7b(5)): an open-addressing
+/// set with linear probing. Removals always undo insertions in reverse
+/// order (the guards are a stack, truncated to a choicepoint's height), so
+/// a removal only empties the slot: when a key was inserted, every slot
+/// its probe crossed held an older key, present as long as it is, so no
+/// present key's probe crosses an emptied slot. `rebuild` reinserts the
+/// stack in order, which keeps that true. Smaller in code than
+/// `std.AutoHashMapUnmanaged` (no tombstones, no metadata).
+pub const GuardSet = struct {
+    /// Power-of-two length, or empty; `free_pc` marks a free slot. With
+    /// `count == 0` every slot is free, so reusing the table after its keys
+    /// are gone costs nothing (a retained table can be large).
+    slots: []LoopState = &.{},
+    count: usize = 0,
+
+    const free_pc = std.math.maxInt(usize);
+
+    pub fn deinit(self: *GuardSet, gpa: Allocator) void {
+        gpa.free(self.slots);
+        self.* = .{};
+    }
+
+    pub fn clearRetainingCapacity(self: *GuardSet) void {
+        if (self.count == 0) return;
+        @memset(self.slots, .{ .pc = free_pc, .pos = 0 });
+        self.count = 0;
+    }
+
+    /// The slot holding `e`, or the free slot where it would go.
+    fn find(self: *const GuardSet, e: LoopState) usize {
+        const mask = self.slots.len - 1;
+        var i: usize = @truncate(std.hash.int(@as(u64, e.pc) *% 0x9E3779B97F4A7C15 ^ @as(u64, e.pos)));
+        while (true) : (i +%= 1) {
+            const s = self.slots[i & mask];
+            if (s.pc == free_pc or (s.pc == e.pc and s.pos == e.pos)) return i & mask;
+        }
+    }
+
+    pub fn contains(self: *const GuardSet, e: LoopState) bool {
+        return self.count > 0 and self.slots[self.find(e)].pc != free_pc;
+    }
+
+    /// The set holds exactly `guards`, inserted oldest first.
+    pub fn rebuild(self: *GuardSet, gpa: Allocator, guards: []const LoopState) Allocator.Error!void {
+        const len = std.math.ceilPowerOfTwoAssert(usize, @max(256, guards.len * 4));
+        if (self.slots.len < len) {
+            const fresh = try gpa.alloc(LoopState, len);
+            gpa.free(self.slots);
+            self.slots = fresh;
+            @memset(self.slots, .{ .pc = free_pc, .pos = 0 });
+        } else self.clearRetainingCapacity();
+        self.count = 0;
+        for (guards) |g| self.put(g);
+    }
+
+    /// Insert `e`, absent and newer than every key present; `guards` is the
+    /// whole guard stack, `e` on top (growing rebuilds from it).
+    pub fn insert(self: *GuardSet, gpa: Allocator, e: LoopState, guards: []const LoopState) Allocator.Error!void {
+        if ((self.count + 1) * 2 > self.slots.len) return self.rebuild(gpa, guards);
+        self.put(e);
+    }
+
+    fn put(self: *GuardSet, e: LoopState) void {
+        self.slots[self.find(e)] = e;
+        self.count += 1;
+    }
+
+    /// Remove every key; `guards` holds them all. Clears the table when it
+    /// is at most 16 times their count, else removes them one by one, so
+    /// the cost stays proportional to the keys (the table keeps its
+    /// largest size between executions).
+    pub fn removeAll(self: *GuardSet, guards: []const LoopState) void {
+        if (self.count * 16 >= self.slots.len) return self.clearRetainingCapacity();
+        var i = guards.len;
+        while (i > 0) {
+            i -= 1;
+            self.removeNewest(guards[i]);
+        }
+    }
+
+    /// Remove `e`, the newest key present.
+    pub fn removeNewest(self: *GuardSet, e: LoopState) void {
+        self.slots[self.find(e)].pc = free_pc;
+        self.count -= 1;
+    }
+};
+
 /// Everything a match allocates, kept between executions so a warm
 /// `Scratch` runs without allocating (F3c; docs/REGEX_TIERS_PLAN.md §4.2).
 /// Not thread-safe and not reentrant: one per thread, and a second one for
@@ -105,8 +193,8 @@ pub const Scratch = struct {
     snapshots: std.ArrayListUnmanaged(CaptureGroup) = .empty,
     loop_guard: std.ArrayListUnmanaged(LoopState) = .empty,
     /// The explicit-stack backtracker's mirror of its loop guards once they
-    /// pass `backtrack.zig`'s `guard_set_min` (F7a(3)): membership in O(1).
-    guard_set: std.AutoHashMapUnmanaged(LoopState, void) = .empty,
+    /// pass `backtrack.zig`'s `guard_set_min` (F7a(3); `GuardSet`, F7b(5)).
+    guard_set: GuardSet = .{},
     /// Positions of the greedy star fast path (a stack: nested stars push
     /// above the outer one's).
     positions: std.ArrayListUnmanaged(usize) = .empty,
@@ -1401,4 +1489,74 @@ test "RecursiveMatcher: ExecOptions - custom limits" {
     const options = ExecOptions.withLimits(100, 5000);
     try std.testing.expectEqual(@as(usize, 100), options.max_recursion_depth);
     try std.testing.expectEqual(@as(usize, 5000), options.max_steps);
+}
+
+test "GuardSet agrees with a scan of the guard stack under LIFO use (F7b(5))" {
+    const gpa = std.testing.allocator;
+    var set: GuardSet = .{};
+    defer set.deinit(gpa);
+    var stack: std.ArrayListUnmanaged(LoopState) = .empty;
+    defer stack.deinit(gpa);
+    var prng = std.Random.DefaultPrng.init(0x7b5);
+    const rnd = prng.random();
+    for (0..4000) |_| {
+        // Few pcs and positions: many collisions and refused duplicates.
+        const e: LoopState = .{ .pc = rnd.uintLessThan(usize, 8), .pos = rnd.uintLessThan(usize, 400) };
+        var present = false;
+        for (stack.items) |g| present = present or (g.pc == e.pc and g.pos == e.pos);
+        if (stack.items.len > 0) try std.testing.expectEqual(present, set.contains(e));
+        if (rnd.uintLessThan(u8, 4) == 0 and stack.items.len > 0) {
+            // Sometimes everything (`removeAll`: a clear or one by one).
+            const h = if (rnd.uintLessThan(u8, 8) == 0) 0 else rnd.uintLessThan(usize, stack.items.len);
+            if (h == 0) set.removeAll(stack.items) else {
+                var i = stack.items.len;
+                while (i > h) {
+                    i -= 1;
+                    set.removeNewest(stack.items[i]);
+                }
+            }
+            stack.shrinkRetainingCapacity(h);
+        } else if (!present) {
+            try stack.append(gpa, e);
+            if (stack.items.len == 1) try set.rebuild(gpa, stack.items) else try set.insert(gpa, e, stack.items);
+        }
+        try std.testing.expectEqual(stack.items.len, set.count);
+        for (stack.items) |g| try std.testing.expect(set.contains(g));
+    }
+    set.clearRetainingCapacity();
+    try std.testing.expect(!set.contains(.{ .pc = 0, .pos = 0 }));
+}
+
+test "GuardSet removals newest first leave no stale slot (F7b(5))" {
+    const gpa = std.testing.allocator;
+    var set: GuardSet = .{};
+    defer set.deinit(gpa);
+    const first: LoopState = .{ .pc = 1, .pos = 0 };
+    try set.rebuild(gpa, &.{first});
+    // Three keys with the same home slot: each probe crosses the older ones.
+    const home = set.find(first);
+    var keys: [3]LoopState = .{ first, undefined, undefined };
+    var n: usize = 1;
+    var pos: usize = 1;
+    while (n < keys.len) : (pos += 1) {
+        const e: LoopState = .{ .pc = 1, .pos = pos };
+        set.removeNewest(first);
+        const same = set.find(e) == home;
+        try set.insert(gpa, first, &.{first});
+        if (same) {
+            keys[n] = e;
+            n += 1;
+        }
+    }
+    for (keys[1..], 2..) |e, len| try set.insert(gpa, e, keys[0..len]);
+    // Partial truncation, then everything one by one (3 keys, 256 slots).
+    set.removeNewest(keys[2]);
+    try std.testing.expect(set.contains(keys[0]) and set.contains(keys[1]) and !set.contains(keys[2]));
+    try set.insert(gpa, keys[2], &keys);
+    set.removeAll(&keys);
+    try std.testing.expectEqual(@as(usize, 0), set.count);
+    for (set.slots) |s| try std.testing.expectEqual(GuardSet.free_pc, s.pc);
+    // No ghost: the oldest key back in its home slot hides nothing.
+    try set.insert(gpa, keys[0], keys[0..1]);
+    try std.testing.expect(!set.contains(keys[1]) and !set.contains(keys[2]));
 }
