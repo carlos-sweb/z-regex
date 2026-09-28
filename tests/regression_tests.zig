@@ -842,3 +842,35 @@ test "F5b: literals, classes and properties fold under i (V8)" {
         }
     }
 }
+
+test "F7b(6): the VM's set cache doesn't mix the letters of an i literal" {
+    // Under `i` each ASCII letter is a two-member set allocated and freed
+    // in turn: the allocator hands the next letter the same address, so
+    // the cache of `char_set` sets (keyed by that address) must not see
+    // them. `smp_allocator` reuses freed memory as a release build does;
+    // the testing allocator never does and would hide it. Values from V8.
+    const a = std.heap.smp_allocator;
+    const cases = [_]struct { []const u8, []const u8, ?[2]usize }{
+        .{ "(?:ab|cd)+|ef", "ab", .{ 0, 2 } },
+        .{ "(?:ab|cd)+|ef", "aAb", .{ 1, 3 } },
+        .{ "ab", "AB", .{ 0, 2 } },
+        .{ "ab", "aa", null },
+        .{ "xy+", "XYYy", .{ 0, 4 } },
+        .{ "[a-c]+b", "CAB", .{ 0, 3 } },
+    };
+    for (cases) |c| {
+        // The VM, also in the `-Dforce-backtracker` run.
+        var re = try zregex.Regex.compileWithOptions(a, c[0], .{ .case_insensitive = true, .force_tier = .regular });
+        defer re.deinit();
+        var scratch = zregex.Scratch.init(a);
+        defer scratch.deinit();
+        var buf: [2]?usize = undefined;
+        var out: zregex.MatchSlots = .{ .slots = buf[0..re.slotCount()] };
+        const found = try re.execAt(.{ .wtf8 = c[1] }, 0, &scratch, &out, .{});
+        if (c[2]) |want| {
+            try testing.expect(found);
+            try testing.expectEqual(want[0], out.slots[0].?);
+            try testing.expectEqual(want[1], out.slots[1].?);
+        } else try testing.expect(!found);
+    }
+}

@@ -199,16 +199,28 @@ fn firstOfWith(prog: *const Program, comptime scan: usize) ?First {
         if (utf8.count() == 256) return null;
     }
     var f: First = .{ .utf8 = undefined, .utf16 = undefined, .high = high, .single8 = null, .single16 = null };
-    for (&f.utf8, &f.utf16, 0..) |*a, *b, i| {
-        a.* = utf8.isSet(i);
-        b.* = utf16.isSet(i);
-    }
+    expand(utf8, &f.utf8);
+    expand(utf16, &f.utf16);
     if (utf8.count() == 1) f.single8 = @intCast(utf8.findFirstSet().?);
     if (utf16.count() == 1 and !high) f.single16 = @intCast(utf16.findFirstSet().?);
     return f;
 }
 
 const Bits = std.StaticBitSet(256);
+
+/// `bits` as a lookup table, eight entries at a time (a bit per `isSet`
+/// was most of the prefilter's compile cost; F7b(6)). Each byte of the
+/// masks is spread to eight 0/1 bytes: replicate it, keep bit i in byte
+/// i, then carry any set bit into bit 7 and shift it down to bit 0.
+fn expand(bits: Bits, out: *[256]bool) void {
+    comptime std.debug.assert(@import("builtin").cpu.arch.endian() == .little);
+    const bytes = std.mem.asBytes(out);
+    for (std.mem.asBytes(&bits.masks), 0..) |b, k| {
+        const kept = (@as(u64, b) *% 0x0101010101010101) & 0x8040201008040201;
+        const one = ((kept +% 0x7F7F7F7F7F7F7F7F) >> 7) & 0x0101010101010101;
+        std.mem.writeInt(u64, bytes[8 * k ..][0..8], one, .little);
+    }
+}
 
 /// Programs above this size get no `first` table (the scan's stack and
 /// visited set are fixed-size); they still run, on the plain VM.
@@ -511,5 +523,17 @@ test "findLiteral: the needle planted at the start, the end, and across a vector
         if (at > 0) try expectSame(u8, &h, at - 1, needle);
         try expectSame(u8, &h, at + 1, needle);
         try testing.expectEqual(@as(?usize, at), findLiteral(u8, &h, 0, needle));
+    }
+}
+
+test "expand gives the table isSet gives (F7b(6))" {
+    var prng = std.Random.DefaultPrng.init(0x7b6);
+    const rnd = prng.random();
+    for (0..64) |_| {
+        var bits = Bits.initEmpty();
+        for (0..rnd.uintLessThan(usize, 256)) |_| bits.set(rnd.int(u8));
+        var table: [256]bool = undefined;
+        expand(bits, &table);
+        for (table, 0..) |t, i| try std.testing.expectEqual(bits.isSet(i), t);
     }
 }

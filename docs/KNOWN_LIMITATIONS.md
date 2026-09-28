@@ -1103,6 +1103,28 @@ limit in `REGEX_TIERS_PLAN.md` §7.2 is now "<= 2x against `.expert`, or <= +2 u
 absolute". Reducing `tier0.compile`'s fixed cost (closure tables, `follow`) is in F7's
 backlog.
 
+**F7b(6): the fixed cost, measured by phase and reduced.** Callgrind of 1,000 compiles per
+pattern (ReleaseFast, `-Dcpu=x86_64_v3`) found three local costs, all fixed:
+- the `first` prefilter turned its two 256-bit sets into lookup tables a bit at a time
+  (~1.8 k instructions per compile); now eight entries at a time;
+- the backtracker's `emitBitmap` tested membership for each of 256 bytes (a binary search
+  each; 5.5 k for `[^a]`); now built from the set's ranges;
+- `tier0`'s `addSet` compared a set emitted twice (`x+` is `x` then `x*`) range by range
+  (~5.5 k for `\p{L}+`, 684 ranges); the builder now remembers the last `char_set` node's
+  set by its HIR ranges. Only for HIR sets: an `i` literal's two-letter sets are freed at
+  once and the next letter's can get the same address (a first version keyed them too and
+  gave `/(?:ab|cd)+|ef/i` no match on "ab"; the corpus differentials caught it, a test with
+  an allocator that reuses memory keeps it caught).
+
+Instructions per compile, before -> after: `\d` 10,512 -> 7,310 (-30%), `[^a]` 16,832 ->
+11,485 (-32%), `\p{L}+` (`u`) 15,732 -> 9,545 (-39%), `\p{Lu}+` 15,953 -> 10,027 (-37%),
+`(\d{3})-(\d{4})` -14%, `<(\w+)>.*?<\/\1>` -28%, `[\p{L}\p{N}_]+` -10%; `[a-z]+`,
+`hello`, `\p{L}` and the lookahead case within 0.2%. What remains is structural: about a
+fifth is the allocator (the AST is allocated node by node, the `Program` in several
+parts), and the backtracker's bytecode is always generated, even for a pattern the VM runs
+(0.35-1.4 k instructions, 5-15% of these compiles), because `force_tier`, the bytecode
+snapshot and the internal differentials use it. Neither is changed in F7b.
+
 **Bugs found in F5a (pre-existing, both engines):**
 - **Fixed after F5a (bug A):** `\p{...}` without `u`/`v` was read as a property
   escape. It is now Annex B's IdentityEscape, as in V8: `/\p{L}/` is the text `p{L}`,

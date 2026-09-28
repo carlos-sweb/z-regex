@@ -297,11 +297,13 @@ pub const CodeGenerator = struct {
     fn emitBitmap(self: *Self, node: *const Node, cs: hir.CharSetNode) !void {
         const opcode: Opcode = if (cs.inverted) .CHAR_CLASS_INV else .CHAR_CLASS;
         if (self.node_bitmap.getPtr(node)) |bits| return self.writer.emitCharClass(opcode, bits);
+        // By ranges, not a membership test per byte (F7b(6)).
         var table = BitTable.init();
-        for (0..256) |c| {
-            const in_set = cs.set.contains(@intCast(c));
-            if (in_set != cs.inverted) table.set(@intCast(c));
+        for (cs.set.ranges) |r| {
+            if (r.lo > 255) continue;
+            table.addRange(@intCast(r.lo), @intCast(@min(r.hi, 255)));
         }
+        if (cs.inverted) table.invert();
         try self.node_bitmap.put(self.allocator, node, table.bits);
         try self.writer.emitCharClass(opcode, &table.bits);
     }

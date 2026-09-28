@@ -263,6 +263,13 @@ const Builder = struct {
     /// stay valid when their instructions are copied into this one.
     sets: *std.ArrayListUnmanaged(Set),
     tagged: bool,
+    /// The HIR ranges of the last `char_set` node's set, and its index: the
+    /// same node emitted again (`x+` is `x` then `x*`) is found without
+    /// comparing its ranges (F7b(6): `\p{L}+` spent a third of its
+    /// compile there). Only for HIR sets: their ranges stay put for the
+    /// whole compile, where `emitUnit`'s are freed at once and the next
+    /// letter's can get the same address.
+    last: struct { src: [*]const ir.charset.Range = undefined, len: usize = std.math.maxInt(usize), idx: u32 = 0 } = .{},
 
     fn pc(self: *const Builder) u32 {
         return @intCast(self.insts.items.len);
@@ -284,11 +291,19 @@ const Builder = struct {
         return @intCast(self.sets.items.len - 1);
     }
 
+    /// `addSet` for a `char_set` node's set (see `last`).
+    fn addHirSet(self: *Builder, set: CharSet) Allocator.Error!u32 {
+        if (self.last.len == set.ranges.len and self.last.src == set.ranges.ptr) return self.last.idx;
+        const idx = try self.addSet(set);
+        self.last = .{ .src = set.ranges.ptr, .len = set.ranges.len, .idx = idx };
+        return idx;
+    }
+
     fn emit(self: *Builder, node: *const hir.Node, flags: hir.Flags) Allocator.Error!void {
         switch (node.*) {
             .empty => {},
             .literal => |l| for (l.units) |u| try self.emitUnit(u.value, flags),
-            .char_set => |cs| _ = try self.add(.{ .set = try self.addSet(cs.set) }),
+            .char_set => |cs| _ = try self.add(.{ .set = try self.addHirSet(cs.set) }),
             .seq => |items| for (items) |item| try self.emit(item, flags),
             .alt => |items| try self.emitAlt(items, flags),
             .repeat => |r| try self.emitRepeat(r, flags),
