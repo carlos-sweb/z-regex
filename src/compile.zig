@@ -257,7 +257,7 @@ fn generate(allocator: Allocator, fe: *const lower_mod.Frontend, options: Compil
     try generator.generate(fe.root);
 
     // Phase 5 was a no-op `Optimizer` that copied the bytecode (F7b): the
-    // writer's buffer is taken as it is.
+    // copy is now the writer's own (`takeBytecode`).
     const bytecode = try writer.takeBytecode();
     errdefer allocator.free(bytecode);
 
