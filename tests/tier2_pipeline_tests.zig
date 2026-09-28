@@ -407,13 +407,18 @@ test "CodeGenerator: dot matches newline with dot_all" {
     try std.testing.expectEqual(@intFromEnum(Opcode.CHAR_ANY), p.code[0]);
 }
 
-test "CodeGenerator: a?/a?? clear inner captures on skip, a{0,1} doesn't" {
+test "CodeGenerator: every iteration of a quantified group clears its captures, a? and a{0,1} alike (F7a(4))" {
+    // RepeatMatcher step 4: `?` and `{0,1}` are the same quantifier. Before
+    // F7a(4) only `?`/`??` cleared (on skip), a codegen artifact.
     var q = try testProgram("(a)?", .{});
     defer q.deinit();
     var c = try testProgram("(a){0,1}", .{});
     defer c.deinit();
+    var n = try testProgram("a{0,1}", .{});
+    defer n.deinit();
     try std.testing.expect(try hasOpcode(q.code, .CLEAR_CAPTURE));
-    try std.testing.expect(!try hasOpcode(c.code, .CLEAR_CAPTURE));
+    try std.testing.expect(try hasOpcode(c.code, .CLEAR_CAPTURE));
+    try std.testing.expect(!try hasOpcode(n.code, .CLEAR_CAPTURE));
 }
 
 fn hasOpcode(code: []const u8, op: Opcode) !bool {

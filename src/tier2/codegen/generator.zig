@@ -370,6 +370,21 @@ pub const CodeGenerator = struct {
         }
     }
 
+    /// One iteration of a quantified body: first the body's capture groups
+    /// are reset, then the body. RepeatMatcher step 4 (ECMA-262): each
+    /// iteration starts with the captures inside the atom undefined, so
+    /// `/(?:(a)|b)*/` over "ab" leaves group 1 undefined (F7a(4); before,
+    /// the first iteration's "a" stayed). The backtrackers undo the reset
+    /// on backtracking like any capture write. Nothing is emitted for a
+    /// body without groups.
+    fn generateIteration(self: *Self, body: *const Node) !void {
+        var group_indices: std.ArrayListUnmanaged(u16) = .empty;
+        defer group_indices.deinit(self.allocator);
+        try hir.collectCaptures(body, &group_indices, self.allocator);
+        for (group_indices.items) |g| try self.writer.emit1(.CLEAR_CAPTURE, g);
+        try self.generateNode(body);
+    }
+
     /// Generate code for star quantifier: e*
     /// Pattern: L1: SPLIT_GREEDY L1_body, L2; L1_body: e; GOTO L1; L2: ...
     /// Greedy: try consuming (looping) before giving up, matching how
@@ -388,7 +403,7 @@ pub const CodeGenerator = struct {
         try self.writer.defineLabel(&loop_label);
         try self.writer.emitSplit(.SPLIT_GREEDY, loop_label, end_label);
 
-        try self.generateNode(body);
+        try self.generateIteration(body);
         try self.writer.emitJump(.GOTO, loop_label);
 
         try self.writer.defineLabel(&end_label);
@@ -401,7 +416,7 @@ pub const CodeGenerator = struct {
         var end_label = try self.writer.createLabel();
 
         try self.writer.defineLabel(&loop_label);
-        try self.generateNode(body);
+        try self.generateIteration(body);
         try self.writer.emitSplit(.SPLIT_GREEDY, loop_label, end_label); // Greedy
 
         try self.writer.defineLabel(&end_label);
@@ -425,7 +440,7 @@ pub const CodeGenerator = struct {
 
         // Define consume label immediately (fall-through)
         try self.writer.defineLabel(&consume_label);
-        try self.generateNode(body);
+        try self.generateIteration(body);
 
         // Define skip label (after the character), clearing any capture
         // groups nested inside the atom first -- see emitClearCapturesOnSkip.
@@ -470,7 +485,7 @@ pub const CodeGenerator = struct {
     fn generateCounted(self: *Self, r: hir.Repeat, split: Opcode) !void {
         // Generate min required repetitions
         for (0..r.min) |_| {
-            try self.generateNode(r.body);
+            try self.generateIteration(r.body);
         }
 
         if (r.max) |max| {
@@ -489,7 +504,7 @@ pub const CodeGenerator = struct {
                     try self.writer.emitSplit(.SPLIT_LAZY, skip_label, consume_label);
                 }
                 try self.writer.defineLabel(&consume_label);
-                try self.generateNode(r.body);
+                try self.generateIteration(r.body);
                 try self.writer.defineLabel(&skip_label);
             }
         } else {
@@ -504,7 +519,7 @@ pub const CodeGenerator = struct {
             } else {
                 try self.writer.emitSplit(.SPLIT_LAZY, end_label, loop_label);
             }
-            try self.generateNode(r.body);
+            try self.generateIteration(r.body);
             try self.writer.emitJump(.GOTO, loop_label);
             try self.writer.defineLabel(&end_label);
         }
@@ -520,7 +535,7 @@ pub const CodeGenerator = struct {
         try self.writer.defineLabel(&loop_label);
         try self.writer.emitSplit(.SPLIT_LAZY, end_label, loop_label);
 
-        try self.generateNode(body);
+        try self.generateIteration(body);
         try self.writer.emitJump(.GOTO, loop_label);
 
         try self.writer.defineLabel(&end_label);
@@ -534,7 +549,7 @@ pub const CodeGenerator = struct {
         var end_label = try self.writer.createLabel();
 
         try self.writer.defineLabel(&loop_label);
-        try self.generateNode(body);
+        try self.generateIteration(body);
         try self.writer.emitSplit(.SPLIT_LAZY, end_label, loop_label);
 
         try self.writer.defineLabel(&end_label);
@@ -553,7 +568,7 @@ pub const CodeGenerator = struct {
 
         // Define consume label immediately (fall-through)
         try self.writer.defineLabel(&consume_label);
-        try self.generateNode(body);
+        try self.generateIteration(body);
 
         // Define skip label (after the character), clearing any capture
         // groups nested inside the atom first -- see emitClearCapturesOnSkip.
@@ -570,7 +585,7 @@ pub const CodeGenerator = struct {
         try self.writer.defineLabel(&loop_label);
         try self.writer.emitSplit(.SPLIT_POSSESSIVE, end_label, loop_label);
 
-        try self.generateNode(body);
+        try self.generateIteration(body);
         try self.writer.emitJump(.GOTO, loop_label);
 
         try self.writer.defineLabel(&end_label);
@@ -584,12 +599,12 @@ pub const CodeGenerator = struct {
         var end_label = try self.writer.createLabel();
 
         // Match at least once
-        try self.generateNode(body);
+        try self.generateIteration(body);
 
         // Loop for more (possessive)
         try self.writer.defineLabel(&loop_label);
         try self.writer.emitSplit(.SPLIT_POSSESSIVE, end_label, loop_label);
-        try self.generateNode(body);
+        try self.generateIteration(body);
         try self.writer.emitJump(.GOTO, loop_label);
 
         try self.writer.defineLabel(&end_label);
@@ -607,7 +622,7 @@ pub const CodeGenerator = struct {
 
         // Define consume label immediately (fall-through)
         try self.writer.defineLabel(&consume_label);
-        try self.generateNode(body);
+        try self.generateIteration(body);
 
         // Define skip label (after the character)
         try self.writer.defineLabel(&skip_label);

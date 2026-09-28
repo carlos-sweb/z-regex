@@ -111,11 +111,11 @@ pub const AnalysisOrigin = packed struct {
 
 pub const Policy = enum { greedy, lazy, possessive };
 
-/// SEMANTIC (see the file comment): which quantifier syntax produced a
-/// Repeat. `question` clears the captures inside its body when it skips;
-/// `counted` (`{n,m}`) doesn't; `plus` and `counted` `{1,}` also differ in
-/// shape. Dies in F6a with the backtracker's code generator (earlier if F4b
-/// aligns the backtracker with the spec's RepeatMatcher).
+/// Which quantifier syntax produced a Repeat: the backtracker's code
+/// generator keeps each form's shape (`plus` and `counted` `{1,}` differ).
+/// It was SEMANTIC until F7a(4): only `question` cleared the captures inside
+/// its body (on skip), `counted` didn't. Since then every iteration clears
+/// them at its start (RepeatMatcher step 4), so `?` and `{0,1}` match alike.
 pub const SyntaxForm = enum { star, plus, question, counted };
 
 pub const Repeat = struct {

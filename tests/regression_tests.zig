@@ -591,6 +591,41 @@ test "F7a: long loops through the loop-guard set agree with the VM (guard)" {
     }
 }
 
+/// Every slot of the forced backtracker (the explicit-stack one, no
+/// lookbehind) against V8's `indices` (-1: undefined; null: no match).
+fn expectBacktrackerSlots(pattern: []const u8, input: []const u8, v8: ?[]const i64) !void {
+    const a = testing.allocator;
+    var re = try zregex.Regex.compileWithOptions(a, pattern, .{ .force_tier = .expert });
+    defer re.deinit();
+    var scratch = zregex.Scratch.init(a);
+    defer scratch.deinit();
+    const slots = try a.alloc(?usize, re.slotCount());
+    defer a.free(slots);
+    var out: zregex.MatchSlots = .{ .slots = slots };
+    const found = try re.execAt(.{ .wtf8 = input }, 0, &scratch, &out, .{});
+    const ok = if (v8) |want| found and want.len == slots.len and for (want, slots) |w, g| {
+        if (w != if (g) |x| @as(i64, @intCast(x)) else -1) break false;
+    } else true else !found;
+    if (!ok) {
+        std.debug.print("/{s}/ on \"{s}\": backtracker {} {any}, V8 {any}\n", .{ pattern, input, found, slots, v8 });
+        return error.TestUnexpectedResult;
+    }
+}
+
+test "F7a: each iteration starts with its captures undefined (RepeatMatcher step 4, V8)" {
+    // Values checked with Node 22.
+    try expectBacktrackerSlots("(?:(a)|b)*", "ab", &.{ 0, 2, -1, -1 });
+    try expectBacktrackerSlots("(?:(a)|b)+", "ab", &.{ 0, 2, -1, -1 });
+    try expectBacktrackerSlots("(?:a|(b))*c", "bac", &.{ 0, 3, -1, -1 });
+    try expectBacktrackerSlots("(?:a|(b)|)*c", "bac", &.{ 0, 3, -1, -1 });
+    try expectBacktrackerSlots("^(?:a|(b)|)*?a$", "abaa", &.{ 0, 4, -1, -1 });
+    try expectBacktrackerSlots("(?:(a)|b){2}", "ab", &.{ 0, 2, -1, -1 });
+    try expectBacktrackerSlots("(?:(a)|b){1,3}", "ab", &.{ 0, 2, -1, -1 });
+    // The last iteration's capture stays.
+    try expectBacktrackerSlots("(?:(a)|b)*", "ba", &.{ 0, 2, 1, 2 });
+    try expectBacktrackerSlots("(?:(a)|(b))*", "ab", &.{ 0, 2, -1, -1, 1, 2 });
+}
+
 test "F5b: backreferences under i canonicalize (V8)" {
     const Case = struct { []const u8, []const u8, []const u8, bool };
     const cases = [_]Case{
