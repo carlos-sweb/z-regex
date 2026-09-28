@@ -1555,13 +1555,22 @@ None. (D17, `\u{H+}` without `u`/`v`, was fixed in F7a: see "Fixed in F7a" below
   differentials against T0's VM (382 bound and 7,538 slot differences on the T0 corpora,
   1,050 rows on T1) -> 0.
 
-### Binary size: measurements across phases are not comparable (noted after F7a)
+### Binary size: one procedure since F7b (the ~26 KB anomaly explained)
 
-The 1,112,272 B figure given at the close of F5b (ReleaseFast `.so`, stripped) doesn't
-reproduce with the current procedure: the state before F7a (`4296517`) gives 1,138,656 B.
-Unexplained delta: ~26 KB. The binary has been measured with different procedures from
-phase to phase, so figures from different phases are not comparable. F7b fixes a single
-procedure (`scripts/measure_binary.sh`) and re-measures the earlier points with it.
+After F7a the F5b figure (1,112,272 B, ReleaseFast `.so`, stripped) didn't reproduce: the
+same commit gave 1,138,656 B. The cause is the build target, not the code: the builds used
+`native`, which follows the host's CPU features, and the container had moved to another
+host in between (same Zig 0.16.0, same source; today's builds are deterministic). Built for
+a fixed CPU model, the F5b commit (`41e2a0b`) gives 1,113,232 B, within 1 KB of the
+original figure. Since F7b the size is measured only with `scripts/measure_binary.sh`
+(x86_64-linux, `-Dcpu=x86_64_v3`, stripped `.so`, ReleaseFast and ReleaseSmall); figures
+from before it are not comparable with each other. With it:
+
+| Commit | ReleaseFast | ReleaseSmall |
+|---|---|---|
+| `41e2a0b` (F5b closed) | 1,113,232 B | 708,104 B |
+| `4296517` (before F7a) | 1,113,232 B | 708,104 B |
+| `2c9a321` (F7a closed) | 1,121,408 B (+8,176) | 711,960 B (+3,856) |
 
 ### Fixed in F2b
 
