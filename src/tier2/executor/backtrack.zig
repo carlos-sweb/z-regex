@@ -494,6 +494,20 @@ pub fn BacktrackerFor(comptime Unit: type) type {
                     if (group < self.core.capture_slots) try self.setCapture(group, .{});
                 },
 
+                // RepeatMatcher step 2.b (F7a(4)): an iteration above the
+                // minimum that matches empty fails. Mark `m` lives in the
+                // tail of the core's slots (`Matcher` adds them after the
+                // capture groups), written through the trail so a
+                // backtrack restores the enclosing iteration's mark.
+                .REPEAT_MARK => {
+                    const slot = self.core.capture_slots - 1 - @as(usize, inst.operands[0]);
+                    try self.setCapture(slot, .{ .start = pos });
+                },
+                .REPEAT_CHECK => {
+                    const slot = self.core.capture_slots - 1 - @as(usize, inst.operands[0]);
+                    if (self.core.caps()[slot].start == pos) return false;
+                },
+
                 .LOOKAHEAD, .NEGATIVE_LOOKAHEAD => {
                     // LookLinear: T0's VM (or the memo) says whether the
                     // body matches here; it has no captures, so nothing

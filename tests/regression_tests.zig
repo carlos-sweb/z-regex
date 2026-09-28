@@ -626,6 +626,38 @@ test "F7a: each iteration starts with its captures undefined (RepeatMatcher step
     try expectBacktrackerSlots("(?:(a)|(b))*", "ab", &.{ 0, 2, -1, -1, 1, 2 });
 }
 
+test "F7a: an empty iteration above the minimum fails (RepeatMatcher step 2.b, V8)" {
+    // Values checked with Node 22; the forced backtracker, every slot.
+    try expectBacktrackerSlots("(?:(?=(abc)))?a", "abc", &.{ 0, 1, -1, -1 });
+    try expectBacktrackerSlots("(a*)*", "b", &.{ 0, 0, -1, -1 });
+    try expectBacktrackerSlots("(()|a)+", "a", &.{ 0, 1, 0, 1, -1, -1 });
+    try expectBacktrackerSlots("(?:(?=(abc))){0,1}a", "abc", &.{ 0, 1, -1, -1 });
+    try expectBacktrackerSlots("(?:(?=(abc)))??a", "abc", &.{ 0, 1, -1, -1 });
+    try expectBacktrackerSlots("(a*)*?b", "b", &.{ 0, 1, -1, -1 });
+    // The iterations up to the minimum may be empty.
+    try expectBacktrackerSlots("(a*){1,}", "b", &.{ 0, 0, 0, 0 });
+    try expectBacktrackerSlots("(a*)+?b", "b", &.{ 0, 1, 0, 0 });
+    try expectBacktrackerSlots("(a*)+", "b", &.{ 0, 0, 0, 0 });
+    try expectBacktrackerSlots("(a*){1,3}", "b", &.{ 0, 0, 0, 0 });
+    try expectBacktrackerSlots("(?:(a)|b|)*c", "bac", &.{ 0, 3, 1, 2 });
+    try expectBacktrackerSlots("(?:(a)|)*x", "ax", &.{ 0, 2, 0, 1 });
+    try expectBacktrackerSlots("(?:a|())*x", "ax", &.{ 0, 2, -1, -1 });
+    try expectBacktrackerSlots("(?:a|())+x", "ax", &.{ 0, 2, -1, -1 });
+    try expectBacktrackerSlots("(?:()|a){2,}x", "ax", &.{ 0, 2, -1, -1 });
+}
+
+test "F7a: a pattern with a lookbehind gets no empty-iteration marks (F6b)" {
+    // It runs on the recursive matcher, which doesn't execute them.
+    const a = testing.allocator;
+    var re = try zregex.Regex.compileWithOptions(a, "(?<=x)(a*)*", .{ .force_tier = .expert });
+    defer re.deinit();
+    try testing.expect(re.compiled.has_lookbehind);
+    try testing.expectEqual(@as(u16, 0), re.compiled.mark_count);
+    var plain = try zregex.Regex.compileWithOptions(a, "(a*)*", .{ .force_tier = .expert });
+    defer plain.deinit();
+    try testing.expect(plain.compiled.mark_count > 0);
+}
+
 test "F5b: backreferences under i canonicalize (V8)" {
     const Case = struct { []const u8, []const u8, []const u8, bool };
     const cases = [_]Case{

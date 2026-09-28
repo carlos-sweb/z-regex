@@ -196,6 +196,21 @@ pub fn nullable(node: *const Node) bool {
     };
 }
 
+/// Whether `node`'s subtree has a lookbehind: such a pattern runs on the
+/// recursive matcher until F6b, the rest on the explicit-stack backtracker.
+pub fn hasLookbehind(node: *const Node) bool {
+    return switch (node.*) {
+        .empty, .literal, .char_set, .backref, .assert => false,
+        .seq, .alt => |items| for (items) |item| {
+            if (hasLookbehind(item)) break true;
+        } else false,
+        .repeat => |r| hasLookbehind(r.body),
+        .capture => |c| hasLookbehind(c.body),
+        .look => |l| l.behind or hasLookbehind(l.body),
+        .modifier_scope => |m| hasLookbehind(m.body),
+    };
+}
+
 /// The lowest and highest capture index in `node`'s subtree (the node
 /// included), or null if it has none. Indices are given in order of the
 /// opening parenthesis, so a subtree's groups are exactly `lo..hi` (F4b's

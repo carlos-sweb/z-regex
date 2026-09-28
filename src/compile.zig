@@ -250,6 +250,9 @@ fn generate(allocator: Allocator, fe: *const lower_mod.Frontend, options: Compil
 
     var generator = CodeGenerator.init(allocator, &writer);
     defer generator.deinit();
+    // RepeatMatcher step 2.b (F7a(4)) on the explicit-stack backtracker;
+    // a pattern with a lookbehind runs on the recursive matcher (F6b).
+    generator.empty_check = !hir.hasLookbehind(fe.root);
     try generator.generate(fe.root);
 
     const unoptimized = try writer.finalize();
@@ -300,6 +303,7 @@ fn generate(allocator: Allocator, fe: *const lower_mod.Frontend, options: Compil
         .charsets = charsets,
         .mode = if (options.unicode or options.v) .code_point else .code_unit,
         .has_lookbehind = program_mod.hasLookbehind(optimized),
+        .mark_count = generator.marks,
         .word_fold = options.case_insensitive and (options.unicode or options.v),
         .linear = linear_owned,
         .linear_programs = programs_owned,

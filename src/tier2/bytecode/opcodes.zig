@@ -184,6 +184,19 @@ pub const Opcode = enum(u8) {
     /// Format: [CLEAR_CAPTURE group:u16]
     CLEAR_CAPTURE = 0x24,
 
+    /// Record where one iteration of a quantifier with a nullable body
+    /// starts, in mark `m` (a hidden slot after the capture groups, undone
+    /// on backtracking like a capture). RepeatMatcher step 2.b (F7a(4)):
+    /// only in programs for the explicit-stack backtracker.
+    /// Format: [REPEAT_MARK m:u16]
+    REPEAT_MARK = 0x25,
+
+    /// Fail if the iteration that `REPEAT_MARK m` opened ends where it
+    /// started: an iteration above the quantifier's minimum that matches
+    /// the empty string fails (RepeatMatcher step 2.b).
+    /// Format: [REPEAT_CHECK m:u16]
+    REPEAT_CHECK = 0x26,
+
     // =========================================================================
     // Backreferences (0x30-0x3F)
     // =========================================================================
@@ -278,7 +291,7 @@ pub const Opcode = enum(u8) {
         return switch (self) {
             .CHAR, .CHAR32, .BYTE, .CHAR2, .CHAR_RANGE, .CHAR_RANGE_INV, .CHAR_CLASS, .CHAR_CLASS_INV, .CHAR_ANY, .CHAR_SET, .CHAR_SET_INV, .UNICODE_PROPERTY, .UNICODE_PROPERTY_INV, .UNICODE_SCRIPT, .UNICODE_SCRIPT_INV, .UNICODE_SCRIPT_EXTENSIONS, .UNICODE_SCRIPT_EXTENSIONS_INV => .character_match,
             .MATCH, .GOTO, .SPLIT, .SPLIT_GREEDY, .SPLIT_LAZY, .SPLIT_POSSESSIVE, .LOOP => .control_flow,
-            .SAVE_START, .SAVE_END, .SAVE_START_NAMED, .SAVE_END_NAMED, .CLEAR_CAPTURE => .capture,
+            .SAVE_START, .SAVE_END, .SAVE_START_NAMED, .SAVE_END_NAMED, .CLEAR_CAPTURE, .REPEAT_MARK, .REPEAT_CHECK => .capture,
             .BACK_REF, .BACK_REF_I => .backreference,
             .LINE_START, .LINE_END, .WORD_BOUNDARY, .NOT_WORD_BOUNDARY, .STRING_START, .STRING_END => .assertion,
             .LOOKAHEAD, .NEGATIVE_LOOKAHEAD, .LOOKBEHIND, .NEGATIVE_LOOKBEHIND, .LOOKAHEAD_END, .LOOKBEHIND_END => .lookaround,
@@ -294,7 +307,7 @@ pub const Opcode = enum(u8) {
             .CHAR, .CHAR_ANY, .MATCH, .LINE_START, .LINE_END, .WORD_BOUNDARY, .NOT_WORD_BOUNDARY, .STRING_START, .STRING_END, .LOOKAHEAD_END, .LOOKBEHIND_END, .PUSH_POS, .CHECK_POS => 1,
 
             // 3 bytes (opcode + u16 capture group, D9)
-            .SAVE_START, .SAVE_END, .BACK_REF, .BACK_REF_I, .CLEAR_CAPTURE => 3,
+            .SAVE_START, .SAVE_END, .BACK_REF, .BACK_REF_I, .CLEAR_CAPTURE, .REPEAT_MARK, .REPEAT_CHECK => 3,
 
             // 2 bytes (opcode + u8)
             .UNICODE_PROPERTY, .UNICODE_PROPERTY_INV, .UNICODE_SCRIPT, .UNICODE_SCRIPT_INV, .UNICODE_SCRIPT_EXTENSIONS, .UNICODE_SCRIPT_EXTENSIONS_INV, .BYTE => 2,

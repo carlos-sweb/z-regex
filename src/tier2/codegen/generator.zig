@@ -96,6 +96,13 @@ pub const CodeGenerator = struct {
     /// the flags in effect, so `compile` can hand the ones without
     /// captures to T0's VM (`CompileResult.linear`).
     look_sites: std.ArrayListUnmanaged(LookSite) = .empty,
+    /// RepeatMatcher step 2.b (F7a(4)): an iteration above a quantifier's
+    /// minimum that matches empty fails, through REPEAT_MARK/REPEAT_CHECK.
+    /// Only for the explicit-stack backtracker: `compile` leaves it off for
+    /// a pattern with a lookbehind (the recursive matcher, until F6b).
+    empty_check: bool = false,
+    /// REPEAT_MARK marks handed out (`CompileResult.mark_count`).
+    marks: u16 = 0,
 
     /// A lookahead of the bytecode: LOOKAHEAD/NEGATIVE_LOOKAHEAD at `pc`,
     /// its LOOKAHEAD_END at `end`.
@@ -385,6 +392,25 @@ pub const CodeGenerator = struct {
         try self.generateNode(body);
     }
 
+    /// Whether an optional iteration of `body` needs the empty check: only
+    /// a nullable body can match empty (RepeatMatcher step 2.b).
+    fn checksEmpty(self: *const Self, body: *const Node) bool {
+        return self.empty_check and hir.nullable(body);
+    }
+
+    /// An iteration above the quantifier's minimum: `generateIteration`,
+    /// failing if it ends where it started (RepeatMatcher step 2.b: with
+    /// `min = 0` an empty iteration is a failure, so `/(a*)*/` over "b"
+    /// leaves group 1 undefined, and `/(?:(?=(abc)))?a/` takes the skip).
+    fn generateOptionalIteration(self: *Self, body: *const Node) !void {
+        if (!self.checksEmpty(body)) return self.generateIteration(body);
+        const m = self.marks;
+        self.marks += 1;
+        try self.writer.emit1(.REPEAT_MARK, m);
+        try self.generateIteration(body);
+        try self.writer.emit1(.REPEAT_CHECK, m);
+    }
+
     /// Generate code for star quantifier: e*
     /// Pattern: L1: SPLIT_GREEDY L1_body, L2; L1_body: e; GOTO L1; L2: ...
     /// Greedy: try consuming (looping) before giving up, matching how
@@ -403,7 +429,7 @@ pub const CodeGenerator = struct {
         try self.writer.defineLabel(&loop_label);
         try self.writer.emitSplit(.SPLIT_GREEDY, loop_label, end_label);
 
-        try self.generateIteration(body);
+        try self.generateOptionalIteration(body);
         try self.writer.emitJump(.GOTO, loop_label);
 
         try self.writer.defineLabel(&end_label);
@@ -412,6 +438,12 @@ pub const CodeGenerator = struct {
     /// Generate code for plus quantifier: e+
     /// Pattern: L1: e; SPLIT L1, L2; L2: ...
     fn generatePlus(self: *Self, body: *const Node) !void {
+        // With a nullable body the first iteration (min 1) may be empty and
+        // the next ones may not (step 2.b): one required copy, then `e*`.
+        if (self.checksEmpty(body)) {
+            try self.generateIteration(body);
+            return self.generateStar(body);
+        }
         var loop_label = try self.writer.createLabel();
         var end_label = try self.writer.createLabel();
 
@@ -440,7 +472,7 @@ pub const CodeGenerator = struct {
 
         // Define consume label immediately (fall-through)
         try self.writer.defineLabel(&consume_label);
-        try self.generateIteration(body);
+        try self.generateOptionalIteration(body);
 
         // Define skip label (after the character), clearing any capture
         // groups nested inside the atom first -- see emitClearCapturesOnSkip.
@@ -504,7 +536,7 @@ pub const CodeGenerator = struct {
                     try self.writer.emitSplit(.SPLIT_LAZY, skip_label, consume_label);
                 }
                 try self.writer.defineLabel(&consume_label);
-                try self.generateIteration(r.body);
+                try self.generateOptionalIteration(r.body);
                 try self.writer.defineLabel(&skip_label);
             }
         } else {
@@ -519,7 +551,7 @@ pub const CodeGenerator = struct {
             } else {
                 try self.writer.emitSplit(.SPLIT_LAZY, end_label, loop_label);
             }
-            try self.generateIteration(r.body);
+            try self.generateOptionalIteration(r.body);
             try self.writer.emitJump(.GOTO, loop_label);
             try self.writer.defineLabel(&end_label);
         }
@@ -535,7 +567,7 @@ pub const CodeGenerator = struct {
         try self.writer.defineLabel(&loop_label);
         try self.writer.emitSplit(.SPLIT_LAZY, end_label, loop_label);
 
-        try self.generateIteration(body);
+        try self.generateOptionalIteration(body);
         try self.writer.emitJump(.GOTO, loop_label);
 
         try self.writer.defineLabel(&end_label);
@@ -545,6 +577,11 @@ pub const CodeGenerator = struct {
     /// Pattern: L1: e; SPLIT_LAZY L2, L1; L2: ...
     /// Lazy = match once, then try exit before consuming more
     fn generateLazyPlus(self: *Self, body: *const Node) !void {
+        // As `generatePlus`: one required copy, then `e*?`.
+        if (self.checksEmpty(body)) {
+            try self.generateIteration(body);
+            return self.generateLazyStar(body);
+        }
         var loop_label = try self.writer.createLabel();
         var end_label = try self.writer.createLabel();
 
@@ -568,7 +605,7 @@ pub const CodeGenerator = struct {
 
         // Define consume label immediately (fall-through)
         try self.writer.defineLabel(&consume_label);
-        try self.generateIteration(body);
+        try self.generateOptionalIteration(body);
 
         // Define skip label (after the character), clearing any capture
         // groups nested inside the atom first -- see emitClearCapturesOnSkip.

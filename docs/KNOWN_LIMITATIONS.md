@@ -1132,8 +1132,9 @@ depth limit of 1000 (`RecursionLimitExceeded`).
 **Capture trail (F6a(2)).** Capture writes go to a trail, undone to each choicepoint's
 height. Fixed on the way (bug F, docs/F6A_PRECHECK.md): once a positive lookahead
 succeeded, its captures survived a later backtrack past it (`/(?:(?=(a))ab|ac)/` on "ac"
-gave group 1 = "a"; V8: undefined). The capture of a discarded empty iteration is still
-not reset (the recursive matcher's known limitation, kept).
+gave group 1 = "a"; V8: undefined). The capture of a discarded empty iteration was not
+reset: fixed in F7a(4) on this backtracker (see "Fixed in F7a"); patterns with a lookbehind
+keep the recursive matcher's behavior until F6b.
 
 **LookLinear (F6a(3)).** A lookahead whose body has no captures, backreferences or nested
 lookarounds, and that T0's VM takes, is answered by `tier0.existsAnchoredMatch` with a
@@ -1538,6 +1539,21 @@ None. (D17, `\u{H+}` without `u`/`v`, was fixed in F7a: see "Fixed in F7a" below
   (V8: `["😀"]` at 0) and `/\ude00/gu` from there finds nothing (before: `[1, 2]`). Without
   `u` the index between the halves is a character boundary, as before. No test262 test
   covers it; tests against V8 in `tests/regression_tests.zig`, both encodings.
+
+- **Quantified groups didn't follow RepeatMatcher steps 4 and 2.b on the backtracker (item
+  13 of `docs/plans/F7.md`)**: each iteration now starts with the captures inside the atom
+  undefined (step 4: `/(?:(a)|b)*/` over "ab" leaves group 1 undefined), and an iteration
+  above the quantifier's minimum that matches empty fails (step 2.b: `/(a*)*/` over "b"
+  leaves group 1 undefined; `/(?:(?=(abc)))?a/` takes the skip). Step 4 is a
+  `CLEAR_CAPTURE` per iteration; step 2.b is `REPEAT_MARK`/`REPEAT_CHECK` around the
+  iterations of a nullable body, emitted only for the explicit-stack backtracker (a
+  pattern with a lookbehind runs on the recursive matcher unchanged until F6b). **The two
+  steps are coupled:** step 4 alone made 5 differential cases worse (an accepted empty
+  iteration cleared the previous iteration's capture), so they shipped together. Results:
+  test262 2978 -> 2980 (`lookahead-quantifier-match-groups.js`); `differential-v8` 470
+  different results -> 0 and 17 `StepLimitExceeded` -> 2 (`diff-F7a.json`); the internal
+  differentials against T0's VM (382 bound and 7,538 slot differences on the T0 corpora,
+  1,050 rows on T1) -> 0.
 
 ### Fixed in F2b
 

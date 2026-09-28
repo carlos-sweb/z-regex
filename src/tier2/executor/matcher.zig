@@ -114,6 +114,9 @@ pub const Matcher = struct {
     named_groups: []const NamedGroup = &.{},
     /// Capture slots per match: the pattern's group count + 1 (D9).
     capture_slots: usize = 1,
+    /// REPEAT_MARK marks (F7a(4)): hidden slots after the capture groups,
+    /// for the explicit-stack backtracker only.
+    mark_slots: usize = 0,
     /// The program's CharSet table (`CompileResult.charsets`, F2b).
     charsets: []const CharSet = &.{},
     /// Code units or code points (`CompileResult.mode`, F3d). Bytecode
@@ -137,6 +140,7 @@ pub const Matcher = struct {
             .allocator = allocator,
             .bytecode = bytecode,
             .capture_slots = RecursiveMatcher.captureSlotsIn(bytecode),
+            .mark_slots = program_mod.markSlotsIn(bytecode),
             .has_lookbehind = program_mod.hasLookbehind(bytecode),
         };
     }
@@ -157,6 +161,7 @@ pub const Matcher = struct {
             .bytecode = bytecode,
             .named_groups = named_groups,
             .capture_slots = @as(usize, group_count) + 1,
+            .mark_slots = program_mod.markSlotsIn(bytecode),
             .has_lookbehind = program_mod.hasLookbehind(bytecode),
         };
     }
@@ -169,6 +174,7 @@ pub const Matcher = struct {
             .bytecode = compiled.bytecode,
             .named_groups = compiled.named_groups,
             .capture_slots = @as(usize, compiled.group_count) + 1,
+            .mark_slots = compiled.mark_count,
             .charsets = compiled.charsets,
             .mode = compiled.mode,
             .has_lookbehind = compiled.has_lookbehind,
@@ -221,7 +227,9 @@ pub const Matcher = struct {
         }
 
         var b: BacktrackerFor(Unit) = undefined;
-        try b.initScratchInto(self.bytecode, input, limits, self.capture_slots, scratch);
+        // The core keeps the marks after the capture slots; only the
+        // capture slots are reported.
+        try b.initScratchInto(self.bytecode, input, limits, self.capture_slots + self.mark_slots, scratch);
         b.core.charsets = self.charsets;
         b.core.mode = self.mode;
         b.core.word_fold = self.word_fold;
@@ -231,7 +239,7 @@ pub const Matcher = struct {
         var pos = index;
         while (pos <= input.len) : (pos = subject.advanceIndex(self.mode, pos)) {
             if (pos != index) b.reset();
-            if (try b.run(0, pos)) |end| return fill(slots, pos, end, b.captureSlice());
+            if (try b.run(0, pos)) |end| return fill(slots, pos, end, b.captureSlice()[0..self.capture_slots]);
             if (sticky) break;
         }
         return false;

@@ -4,7 +4,7 @@ An ECMA-262 regular expression engine in Zig, independent of the JavaScript engi
 
 [![Zig 0.16+](https://img.shields.io/badge/zig-0.16%2B-orange)](https://ziglang.org/)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
-[![test262](https://img.shields.io/badge/test262-2978%2F3017-blue)](scripts/test262/baseline.json)
+[![test262](https://img.shields.io/badge/test262-2980%2F3017-blue)](scripts/test262/baseline.json)
 [![T0](https://img.shields.io/badge/T0-complete-green)](docs/REGEX_TIERS_PLAN.md)
 
 ## What it is
@@ -29,8 +29,9 @@ An ECMA-262 regular expression engine in Zig, independent of the JavaScript engi
   and `\p{…}` run on T0's linear VM (code-point mode); since F5b, so does case folding
   under `i` (with and without `u`). `v` (F5c) still runs on the backtracker.
 - **T2 (backreferences, lookaround): on the backtracker**, with a step budget. Rewrite in F6a.
-- **test262: 2978/3017 (98.7%)**, 0 regressions.
-- **Divergences from V8** in the differential: 470, all T2; **0 on T0 and T1**.
+- **test262: 2980/3017 (98.8%)**, 0 regressions.
+- **Divergences from V8** in the differential: 0 different results; 2 patterns hit the step
+  limit (T2).
 
 ## What runs where
 
@@ -183,10 +184,10 @@ against V8, Rust regex, PCRE2 and zig-regex.
 
 ## Compatibility
 
-- **test262: 2978/3017 (98.7%)**, 0 regressions, the same status with UTF-16 and WTF-8
+- **test262: 2980/3017 (98.8%)**, 0 regressions, the same status with UTF-16 and WTF-8
   subjects. Baseline: `scripts/test262/baseline.json`.
-- **`differential-v8`** against `tests/differential/reference/diff-F5b.json`: 0 new, 0 gone,
-  0 changed. Its 470 divergences are all T2; none is T0 or T1.
+- **`differential-v8`** against `tests/differential/reference/diff-F7a.json`: 0 new, 0 gone,
+  0 changed. It has no different result; 2 T2 patterns hit the step limit.
 - **Internal differential** (every capture slot, V8 as the arbiter where the executors
   disagree): 0 crashes and 0 two-pass mismatches in 12.76 M runs over the real corpora and
   14.16 M over the iteration corpus (`tests/corpus/`).

@@ -36,6 +36,10 @@ pub const CompileResult = struct {
     /// recursive matcher until F6b, the rest on the explicit-stack
     /// backtracker (F6a).
     has_lookbehind: bool = false,
+    /// How many REPEAT_MARK marks the bytecode uses (F7a(4)): hidden slots
+    /// the explicit-stack backtracker keeps after the capture groups. 0
+    /// with a lookbehind (the recursive matcher never gets them).
+    mark_count: u16 = 0,
     /// `i` together with `u`/`v`: `\b`/`\B` count the extended
     /// WordCharacters (`ir.word`, F5b).
     word_fold: bool = false,
@@ -78,6 +82,18 @@ pub fn hasLookbehind(bytecode: []const u8) bool {
         pc += inst.size;
     }
     return false;
+}
+
+/// The number of REPEAT_MARK marks in `bytecode`: one past the highest.
+pub fn markSlotsIn(bytecode: []const u8) usize {
+    var n: usize = 0;
+    var pc: usize = 0;
+    while (pc < bytecode.len) {
+        const inst = format_mod.decodeInstruction(bytecode, pc) catch return n;
+        if (inst.opcode == .REPEAT_MARK) n = @max(n, @as(usize, inst.operands[0]) + 1);
+        pc += inst.size;
+    }
+    return n;
 }
 
 pub fn freeCharSets(allocator: Allocator, charsets: []const CharSet) void {

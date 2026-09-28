@@ -28,7 +28,7 @@
 # changed, exactly the `uv` entries.
 1f65ed2fc157c741		5b2f5d	[/]
 0dcc096902c1f92d		5b2f2f5d	[//]
-8570374eb144fd72		28612a29625c312b	(a*)b\\1+
+a26f4e06b953761a		28612a29625c312b	(a*)b\\1+
 1def87084eb1341c		285b78755d5c647b327d285b412d485d7b327d293f295c31	([xu]\\d{2}([A-H]{2})?)\\1
 77e94991ae1e272b		5c62285c772b29205c315c62	\\b(\\w+) \\1\\b
 18d679dadc5efb79		5b612d7a5d2b	[a-z]+
@@ -167,7 +167,7 @@ cedc142ce7311d00		5b5c707b7d5d	[\\p{}]
 error:InvalidEscape	u	5b5c707b7d5d	[\\p{}]
 7cc712a85a548123	u	5c707b4c7d	\\p{L}
 9956ac34d90f1254		5c707b4c7d	\\p{L}
-fa12ce387be00aa2		61283f3d62293f	a(?=b)?
+f623d3a530b60790		61283f3d62293f	a(?=b)?
 error:InvalidQuantifier	u	61283f3d62293f	a(?=b)?
 0e9b485841bd59bc		283f3c613e78295c6b3c613e	(?<a>x)\\k<a>
 0e9b485841bd59bc	u	283f3c613e78295c6b3c613e	(?<a>x)\\k<a>
@@ -446,18 +446,18 @@ error:InvalidQuantifier	v	2e283f3c3d2e297b322c337d	.(?<=.){2,3}
 error:InvalidQuantifier		2e283f3c212e292a	.(?<!.)*
 error:InvalidQuantifier	u	2e283f3c212e292a	.(?<!.)*
 error:InvalidQuantifier	v	2e283f3c212e292a	.(?<!.)*
-75dc7e5feb714ce8		2e283f3d2e293f	.(?=.)?
+84da7543d3c8da83		2e283f3d2e293f	.(?=.)?
 error:InvalidQuantifier	u	2e283f3d2e293f	.(?=.)?
-75dc7e5feb714ce8	v	2e283f3d2e293f	.(?=.)?
-5de42b7690b0ee65		2e283f212e293f	.(?!.)?
+84da7543d3c8da83	v	2e283f3d2e293f	.(?=.)?
+6e94f412958467b5		2e283f212e293f	.(?!.)?
 error:InvalidQuantifier	u	2e283f212e293f	.(?!.)?
-5de42b7690b0ee65	v	2e283f212e293f	.(?!.)?
-eff756307ca5bb77		2e283f3d2e297b322c337d	.(?=.){2,3}
+6e94f412958467b5	v	2e283f212e293f	.(?!.)?
+6f1221aa586697c8		2e283f3d2e297b322c337d	.(?=.){2,3}
 error:InvalidQuantifier	u	2e283f3d2e297b322c337d	.(?=.){2,3}
-eff756307ca5bb77	v	2e283f3d2e297b322c337d	.(?=.){2,3}
-5f1359383029bf80		283f3d61292a	(?=a)*
+6f1221aa586697c8	v	2e283f3d2e297b322c337d	.(?=.){2,3}
+a3cc78a8e6cb20a4		283f3d61292a	(?=a)*
 error:InvalidQuantifier	u	283f3d61292a	(?=a)*
-5f1359383029bf80	v	283f3d61292a	(?=a)*
+a3cc78a8e6cb20a4	v	283f3d61292a	(?=a)*
 error:InvalidGroupName		283f3c613e2e295c6b	(?<a>.)\\k
 error:InvalidGroupName	u	283f3c613e2e295c6b	(?<a>.)\\k
 error:InvalidGroupName	v	283f3c613e2e295c6b	(?<a>.)\\k
@@ -671,9 +671,9 @@ error:UnknownGroupName		283f3c613e78295c6b3c623e	(?<a>x)\\k<b>
 error:UnknownGroupName	u	283f3c613e78295c6b3c623e	(?<a>x)\\k<b>
 error:UnknownGroupName		5c6b3c623e283f3c613e7829	\\k<b>(?<a>x)
 error:UnknownGroupName	u	5c6b3c623e283f3c613e7829	\\k<b>(?<a>x)
-2b6bc6f537ea127f		283f3a2861295c313f625c31292a	(?:(a)\\1?b\\1)*
-2b6bc6f537ea127f	u	283f3a2861295c313f625c31292a	(?:(a)\\1?b\\1)*
-2b6bc6f537ea127f	v	283f3a2861295c313f625c31292a	(?:(a)\\1?b\\1)*
+007e11f35162cf68		283f3a2861295c313f625c31292a	(?:(a)\\1?b\\1)*
+007e11f35162cf68	u	283f3a2861295c313f625c31292a	(?:(a)\\1?b\\1)*
+007e11f35162cf68	v	283f3a2861295c313f625c31292a	(?:(a)\\1?b\\1)*
 5dcae8b4836d9429		28283f3a785c317c612962292a63	((?:x\\1|a)b)*c
 5dcae8b4836d9429	u	28283f3a785c317c612962292a63	((?:x\\1|a)b)*c
 5dcae8b4836d9429	v	28283f3a785c317c612962292a63	((?:x\\1|a)b)*c
