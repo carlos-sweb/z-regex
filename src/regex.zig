@@ -161,6 +161,10 @@ pub const RegexError = parser_mod.ParseError || generator_mod.CodegenError || Al
     TierUnavailable,
     /// `unicode` and `v` together, a SyntaxError in ECMA-262.
     IncompatibleFlags,
+    /// A valid pattern this engine can't run yet: a lookbehind of variable
+    /// length or with a capture group inside (F6b step 1, B′; the rest of
+    /// lookbehind is F6b). C API: `ZREGEXP_ERROR_UNSUPPORTED`.
+    UnsupportedFeature,
 };
 
 /// Main Regex type - represents a compiled regular expression
@@ -176,6 +180,10 @@ pub const Regex = struct {
     /// JS `y` flag: `find`/`findAll` only match starting exactly at the
     /// current position, never scanning ahead to find a match further in.
     sticky: bool = false,
+    /// Limits for the facade (`find`, `findAll`, `replace`, ...), which
+    /// takes none per call; `execAt` and `iterator` take theirs from the
+    /// caller instead. The C API sets `max_steps` from `ZRegexOptions`.
+    limits: ExecLimits = .{},
 
     const Self = @This();
 
@@ -280,7 +288,7 @@ pub const Regex = struct {
         const heap = n > stack_slots.len;
         const slots = if (heap) try self.allocator.alloc(?usize, n) else stack_slots[0..n];
         defer if (heap) self.allocator.free(slots);
-        const found = self.exec(.{ .wtf8 = input }, index, sticky, scratch, slots, .{}) catch |err| switch (err) {
+        const found = self.exec(.{ .wtf8 = input }, index, sticky, scratch, slots, self.limits) catch |err| switch (err) {
             error.InvalidIndex => return null,
             error.SlotsTooSmall => unreachable,
             else => |e| return e,
@@ -322,7 +330,11 @@ pub const Regex = struct {
     /// with `advanceIndex`. Indices are in the subject's units (bytes of
     /// WTF-8, or UTF-16 units; see the `subject` module for the WTF-8
     /// positions). An `index` past the end is no match; one inside a
-    /// character is `error.InvalidIndex`. With a warm `scratch` it doesn't
+    /// character is `error.InvalidIndex`. With `u`/`v`, an `index` between
+    /// the halves of a surrogate pair starts at the pair (the spec's
+    /// RegExpBuiltinExec; `Subject.charStart`), and the match's start is
+    /// where it really starts, the pair's, as V8 reports it (the spec
+    /// reports `lastIndex` itself). With a warm `scratch` it doesn't
     /// allocate.
     pub fn execAt(self: *const Self, subject: Subject, index: usize, scratch: *Scratch, out: *MatchSlots, limits: ExecLimits) ExecError!bool {
         return self.exec(subject, index, self.sticky, scratch, out.slots, limits);
@@ -338,9 +350,11 @@ pub const Regex = struct {
 
     /// The dispatcher (F4a): T0's VM when the pattern has a `t0` program,
     /// the backtracker otherwise. The VM is linear and ignores `limits`.
-    fn exec(self: *const Self, subject: Subject, index: usize, sticky: bool, scratch: *Scratch, slots: []?usize, limits: ExecLimits) ExecError!bool {
+    fn exec(self: *const Self, subject: Subject, start: usize, sticky: bool, scratch: *Scratch, slots: []?usize, limits: ExecLimits) ExecError!bool {
         scratch.acquire();
         defer scratch.release();
+        // Bug D (F7a): with `u`/`v` an index inside a pair starts at it.
+        const index = subject.charStart(self.compiled.mode, start);
         if (self.t0) |*p| {
             if (p.nslots == 2) return switch (subject) {
                 .wtf8 => |s| tier0.exec(p, u8, s, self.compiled.mode, index, sticky, &scratch.vm, slots),
@@ -1824,16 +1838,23 @@ test "Regex: \\xHH, \\uHHHH, \\u{...}, \\0 and \\cX escapes" {
         try std.testing.expect(try re.test_("A"));
     }
     {
-        // \u{E9} is 'é', 2 UTF-8 bytes -- must match as a single atomic unit
-        var re = try Regex.compile(allocator, "\\u{E9}");
+        // \u{E9} is 'é' under `u`, 2 UTF-8 bytes -- must match as a single atomic unit
+        var re = try Regex.compileWithOptions(allocator, "\\u{E9}", .{ .unicode = true });
         defer re.deinit();
         try std.testing.expect(try re.test_("\u{E9}"));
     }
     {
-        // \u{1F600} is an emoji, 4 UTF-8 bytes
-        var re = try Regex.compile(allocator, "\\u{1F600}");
+        // \u{1F600} is an emoji under `u`, 4 UTF-8 bytes
+        var re = try Regex.compileWithOptions(allocator, "\\u{1F600}", .{ .unicode = true });
         defer re.deinit();
         try std.testing.expect(try re.test_("\u{1F600}"));
+    }
+    {
+        // Without `u` (F7a, bug E): `\u` is the letter and `{...}` text.
+        var re = try Regex.compile(allocator, "\\u{1F600}");
+        defer re.deinit();
+        try std.testing.expect(!try re.test_("\u{1F600}"));
+        try std.testing.expect(try re.test_("u{1F600}"));
     }
     {
         var re = try Regex.compile(allocator, "\\cA");

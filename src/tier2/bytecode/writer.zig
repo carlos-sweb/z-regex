@@ -204,6 +204,17 @@ pub const BytecodeWriter = struct {
         return self.code.items;
     }
 
+    /// The finished bytecode as a copy the caller owns (free it with the
+    /// writer's allocator); the writer keeps and frees its own buffer.
+    /// Always a copy: shrinking the buffer in place (F7b(2)) made compiling
+    /// `\p{L}+` ~1.7 us slower in the cross-engine bench (`smp_allocator`,
+    /// a process that has run other cases), while the copy is a few dozen
+    /// bytes; callgrind, which counts instructions only, didn't show it.
+    pub fn takeBytecode(self: *Self) ![]u8 {
+        if (self.patches.items.len > 0) return error.UnresolvedLabels;
+        return self.allocator.dupe(u8, self.code.items);
+    }
+
     /// Get bytecode without consuming writer
     pub fn bytecode(self: Self) []const u8 {
         return self.code.items;

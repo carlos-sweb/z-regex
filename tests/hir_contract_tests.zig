@@ -16,11 +16,11 @@ const atoms = [_][]const u8{
     "\\d",        "\\D",         "\\w",       "\\W",       "\\s",                "\\S",
     ".",          "\\p{L}",      "\\P{L}",    "\\p{Lu}",   "\\P{Script=Greek}",  "\\p{scx=Latin}",
     "\\p{ASCII}", "\\P{Any}",    "[^]",       "[]",        "[a-z]",              "[^a-z]",
-    "[ab]",       "[^ab]",       "[a-cX-Z0]", "[\\u{E9}]", "[^\\u{1F600}]",      "[a-z\\u{E9}]",
-    "[^\\P{L}]",  "[\\P{L}\\d]", "[\\s\\S]",  "[^\\W\\d]", "[\\u{C0}-\\u{D6}k]",
+    "[ab]",       "[^ab]",       "[a-cX-Z0]", "[\\u00E9]", "[^\\uD83D\\uDE00]",  "[a-z\\u00E9]",
+    "[^\\P{L}]",  "[\\P{L}\\d]", "[\\s\\S]",  "[^\\W\\d]", "[\\u00C0-\\u00D6k]",
 };
 const flag_sets = [_][]const u8{ "", "i", "s", "u", "iu", "is" };
-const set_ops = [_][]const u8{ "[\\p{L}--[a-z]]", "[[^a-z]&&\\p{L}]", "[^\\p{Lu}&&[A-F]]", "[[\\u{E9}\\u{C9}]--\\p{Ll}]" };
+const set_ops = [_][]const u8{ "[\\p{L}--[a-z]]", "[[^a-z]&&\\p{L}]", "[^\\p{Lu}&&[A-F]]", "[[\\u00E9\\u00C9]--\\p{Ll}]" };
 
 fn has(flags: []const u8, c: u8) bool {
     return std.mem.indexOfScalar(u8, flags, c) != null;

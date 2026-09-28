@@ -1,6 +1,6 @@
 # Benchmarks: z-regex against V8, Rust regex, PCRE2 and zig-regex
 
-What this measures: z-regex 0.3.0 (T0 closed: F4a and F4b) against the engines people
+What this measures: z-regex 0.3.0 † (T0 closed: F4a and F4b) against the engines people
 would use instead, **tier by tier** (docs/REGEX_TIERS_PLAN.md): a T0 case is compared only
 with engines that run it as a regular expression, a T2 case (backreferences, lookaround) only
 with backtracking engines that support it. Tiers are never mixed in one table.
@@ -11,11 +11,15 @@ with backtracking engines that support it. Tiers are never mixed in one table.
 |---|---|
 | Machine | Intel(R) Xeon(R) Processor @ 2.10GHz, 4 cores (no SMT), KVM guest, 15Gi RAM, Linux 6.18.44-fc-v37 |
 | Environment | **shared container**: expect ±15% variance between runs; read the min–max band, not only the median |
-| z-regex | 0.3.0, Zig 0.16.0, ReleaseFast |
+| z-regex | 0.3.0 †, Zig 0.16.0, ReleaseFast |
 | V8 | 12.4.254.21-node.39 (Node v22.22.2) |
 | Rust regex | 1.13.1 (rustc 1.94.1 (e408947bf 2026-03-25)), release, LTO |
 | PCRE2 | 10.42, 8-bit library, JIT and interpreter |
 | zig-regex | 0.1.1 (zig-utils/zig-regex, 173b298) — the last release that builds with Zig 0.16 (v0.2.x needs 0.17-dev) |
+
+† Measured version. These figures (and `bench/results.json`) are from 0.3.0, with the
+literal cells re-measured on 0.3.1; they were not re-measured for 0.4.0 or 0.5.0. They are
+re-published in F7c.
 
 **Method.** 10 interleaved rounds: each round runs every engine once over all its cases, and
 the engines' order rotates from round to round. Within a round, a throughput number is the
@@ -23,6 +27,40 @@ median of up to 5 timed passes after one warm-up. Every cell below is the **medi
 rounds, with the min–max band** in parentheses. Harness, corpora and runner:
 `bench/compare/` (`prepare.sh` builds everything, `run.mjs` only runs, `analyze.mjs` writes
 `bench/results.json`, the raw aggregated numbers).
+
+**Precision (F7-0).** Two series of 5 interleaved rounds of the same z-regex binary differ
+by more than 5% in 35 to 45 of the 66 throughput metrics, whatever was tried:
+
+| Setup (same binary, series A vs B, 5 rounds each) | Metrics with \|A−B\| > 5% | Median \|A−B\| | Max \|A−B\| |
+|---|---|---|---|
+| Samples of ≥ 100 ms instead of one pass (tried in F7-0, not kept) | 45 / 66 | 7.3% | 33.8% |
+| ASLR off (`setarch -R`), one pass per sample | 35 / 66 | 5.7% | 42.8% |
+| ASLR off and the input 2 MiB-aligned | 36 / 66 | 5.8% | 35.5% |
+
+With the same address layout in every process the spread doesn't drop, so it isn't layout:
+it is the shared VM's timing noise, which moves one case by 20–45% from one process to the
+next (each whole run stays within 0.91–1.01 of the median). A bootstrap over the 10 ASLR-off
+runs gives how two series of n rounds compare, per estimator of a case:
+
+| Estimator | n = 5 | n = 10 | n = 20 |
+|---|---|---|---|
+| Median of the rounds: metrics > 5%, p90 \|A−B\| | 52%, 32.0% | 44%, 20.0% | 31%, 14.8% |
+| Best round (minimum time = the max MB/s of the band): metrics > 5%, p90 \|A−B\| | 21%, 7.9% | 8%, 4.2% | 2%, 2.1% |
+
+**Regression criterion (since F7b).** A regression is declared when the bench flags it (10
+interleaved rounds, minimum time per case, worse than 10%) **and** callgrind, or a probe
+that reproduces the case's context, confirms it. Bench flag without confirmation: noise of
+this environment, noted and passed. Callgrind flag without the bench: real, fixed. Both
+have to agree to block a commit. Why: at the F7b close two runs of the same code flagged
+disjoint sets of cases (16 and 7 of 110 metrics), every one executing the same instructions
+as the base (callgrind, ±0.73%); and the one real regression of F7b (a compile cost in the
+allocator) was invisible to callgrind and caught by the bench.
+
+**In this environment the bench cannot detect changes under ~20% with 10 rounds using the
+median; §7.2's 10% gate is applied with this precision.** Comparing the minimum time per case
+(the max MB/s of the min–max band, already in `bench/results.json`), the precision with 10
+rounds is ~4% (p90): regression checks compare the minimum. Changes finer than that are
+measured with callgrind or a dedicated probe, not with this bench.
 
 **Metrics.**
 - *findAll MB/s*: every match through each engine's allocating convenience API (z-regex

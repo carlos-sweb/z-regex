@@ -1123,6 +1123,14 @@ pub const Lexer = struct {
     /// (Annex-B-style leniency; a SyntaxError under `unicode_mode`, which
     /// includes a `\u{...}` above U+10FFFF).
     fn parseUnicodeEscape(self: *Self, start_pos: usize) error{InvalidEscape}!Token {
+        // `\u{...}` is a code point escape only with `u`/`v`. Without them
+        // (`code_units`, as for `\p` above) Annex B reads `\u` as the
+        // identity escape `u`, and the `{...}` after it is left to the
+        // parser: a quantifier when it forms one (`/\u{2}/` is `uu`), text
+        // otherwise (`/\u{1F600}/` matches "u{1F600}").
+        if (self.code_units and self.pos < self.pattern.len and self.pattern[self.pos] == '{') {
+            return Token.escaped('u', start_pos);
+        }
         if (self.pos < self.pattern.len and self.pattern[self.pos] == '{') {
             const brace_start = self.pos;
             self.pos += 1;
@@ -1188,8 +1196,8 @@ pub const Lexer = struct {
             return Token.escaped(value, start_pos);
         }
         // WTF-8, so a lone surrogate half (U+D800-U+DFFF) becomes the same
-        // 3-byte sequence the ecosystem uses for it in subjects (see
-        // `recursive_matcher.zig`'s `decodeSurrogateWtf8`).
+        // 3-byte sequence the ecosystem uses for it in subjects (see the
+        // `subject` module's WTF-8 decoding).
         var buf: [4]u8 = undefined;
         const len = std.unicode.wtf8Encode(@intCast(value), &buf) catch unreachable; // value <= 0x10FFFF
         return Token.multibyteChar(buf, len, start_pos);

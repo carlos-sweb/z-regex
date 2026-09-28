@@ -5,7 +5,7 @@ const std = @import("std");
 test {
     std.testing.refAllDecls(@This());
     _ = @import("thread.zig");
-    _ = @import("recursive_matcher.zig");
+    _ = @import("core.zig");
     _ = @import("matcher.zig");
     _ = @import("backtrack.zig");
 }

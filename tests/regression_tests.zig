@@ -7,7 +7,7 @@
 //!
 //! | Bug (origin)                                                        | Existing test |
 //! |---------------------------------------------------------------------|---------------|
-//! | `/(a*)b\1+/` on "baaac" segfaulted (Phase 6)                        | tests/tier2_pipeline_tests.zig: "RecursiveMatcher: quantified backreference to an empty capture doesn't crash" |
+//! | `/(a*)b\1+/` on "baaac" segfaulted (Phase 6)                        | tests/tier2_pipeline_tests.zig: "backtracker: quantified backreference to an empty capture doesn't crash" |
 //! | `/[a-z]+/i` ignored case in ranges (Phase 6)                         | src/regex.zig: "Regex: case_insensitive character ranges match both cases (test262 S15.10.2.8_A5_T1)" |
 //! | `/[^o]/i` negated class ignored case (Phase 6)                       | src/regex.zig: "Regex: case_insensitive negated character class matches both cases (test262 S15.10.2.6_A3_T7)" |
 //! | `/(123){1,}/` lost its last iteration's capture (Phase 6)           | src/regex.zig: "Regex: a quantified capturing group retains its last iteration's capture (test262 S15.10.2.7_A6_T4)" |
@@ -289,13 +289,80 @@ test "regression: a positive lookahead's captures are undone when backtracking p
     try expectExpert("(?!(a))\\1b", false, "b", &.{ 0, 1, null, null });
 }
 
-test "regression: a pattern with a lookbehind stays on the recursive matcher until F6b" {
-    var lb = try zregex.Regex.compile(testing.allocator, "(?<!\\$)\\d+");
-    defer lb.deinit();
-    try testing.expect(lb.compiled.has_lookbehind);
-    var la = try zregex.Regex.compile(testing.allocator, "(?!\\$)\\d+");
-    defer la.deinit();
-    try testing.expect(!la.compiled.has_lookbehind);
+/// B′ (F6b step 1): the first match of `pattern` (flags: i, u) from 0 in
+/// UTF-16 units, run on UTF-16 and on WTF-8 (converted), with LookLinear on
+/// and off: all four must agree with `want` (V8's, `null`: no match).
+fn expectLookbehind(pattern: []const u8, flags: []const u8, input: []const u8, want: ?[]const i64) !void {
+    const a = testing.allocator;
+    const s16 = try zregex.subject.utf16FromWtf8(a, input);
+    defer a.free(s16);
+    for ([_]bool{ true, false }) |linear| {
+        var re = try zregex.Regex.compileWithOptions(a, pattern, .{
+            .case_insensitive = std.mem.indexOfScalar(u8, flags, 'i') != null,
+            .unicode = std.mem.indexOfScalar(u8, flags, 'u') != null,
+            .t2_look_linear = linear,
+        });
+        defer re.deinit();
+        var scratch = zregex.Scratch.init(a);
+        defer scratch.deinit();
+        const slots = try a.alloc(?usize, re.slotCount());
+        defer a.free(slots);
+        var out: zregex.MatchSlots = .{ .slots = slots };
+        for ([_]zregex.Subject{ .{ .utf16 = s16 }, .{ .wtf8 = input } }) |subj| {
+            const found = try re.execAt(subj, 0, &scratch, &out, .{});
+            const ok = if (want) |w| found and w.len == slots.len and for (w, slots) |x, g| {
+                const u: i64 = if (g) |v| @intCast(if (subj == .wtf8) try zregex.subject.wtf8ToUtf16Index(input, v) else v) else -1;
+                if (u != x) break false;
+            } else true else !found;
+            if (!ok) {
+                std.debug.print("/{s}/{s} on \"{s}\" ({s}, look_linear {}): want {any}, got {any} (found {})\n", .{ pattern, flags, input, @tagName(subj), linear, want, slots, found });
+                return error.TestUnexpectedResult;
+            }
+        }
+    }
+}
+
+test "B′: a lookbehind of fixed length runs on the explicit-stack backtracker (V8's values)" {
+    try expectLookbehind("(?<!\\$)\\d+", "", "$12 34", &.{ 2, 3 });
+    try expectLookbehind("(?<=\\$)\\d+", "", "$12 34", &.{ 1, 3 });
+    try expectLookbehind("(?<=ab)c", "", "abc", &.{ 2, 3 });
+    try expectLookbehind("(?<!ab)c", "", "abc", null);
+    try expectLookbehind("(?<=^)a", "", "a", &.{ 0, 1 });
+    try expectLookbehind("(?<!^a)b", "", "ab", null);
+    // Fewer than L characters before: positive fails, negative holds.
+    try expectLookbehind("(?<!a)b", "", "b", &.{ 0, 1 });
+    try expectLookbehind("(?<=a)", "", "a", &.{ 1, 1 });
+    try expectLookbehind("(?<=[a-c]{2})d", "", "abcd", &.{ 3, 4 });
+    // L counts code units without `u` (WTF-8's b+2 is a position), code
+    // points with it.
+    try expectLookbehind("(?<=\u{1F600})x", "", "\u{1F600}x", &.{ 2, 3 });
+    try expectLookbehind("(?<=\u{1F600})x", "u", "\u{1F600}x", &.{ 2, 3 });
+    try expectLookbehind("(?<=.)x", "u", "\u{1F600}x", &.{ 2, 3 });
+    try expectLookbehind("(?<=.)x", "", "\u{1F600}x", &.{ 2, 3 });
+    try expectLookbehind("(?<=..)x", "", "\u{1F600}x", &.{ 2, 3 });
+    try expectLookbehind("(?<=..)x", "u", "\u{1F600}x", null);
+    // Case folding inside the body.
+    try expectLookbehind("(?<=\u{DF})a", "iu", "\u{1E9E}a", &.{ 1, 2 });
+    try expectLookbehind("(?<=K)x", "iu", "\u{212A}x", &.{ 1, 2 });
+    // RepeatMatcher step 2.b now applies to patterns with a lookbehind.
+    try expectLookbehind("(?<=x)(a*)*", "", "xaa", &.{ 1, 3, 1, 3 });
+}
+
+test "B′: other lookbehinds are error.UnsupportedFeature, after syntax errors" {
+    const a = testing.allocator;
+    for ([_][]const u8{ "(?<=a+)b", "(?<=a|bc)d", "(?<=(a))b", "(?<!(?:x|yz))", "(a)(?<=\\1)", "(?<=a?)b", "(?=(?<=a*))b" }) |p| {
+        try testing.expectError(error.UnsupportedFeature, zregex.Regex.compile(a, p));
+    }
+    // `(?<=\u{1F600}|ab)`: two and two code units without `u`, one and two
+    // code points with it.
+    var cu = try zregex.Regex.compile(a, "(?<=\u{1F600}|ab)c");
+    cu.deinit();
+    try testing.expectError(error.UnsupportedFeature, zregex.Regex.compileWithOptions(a, "(?<=\u{1F600}|ab)c", .{ .unicode = true }));
+    // A quantified lookbehind is a SyntaxError, not an unsupported feature.
+    if (zregex.Regex.compile(a, "a(?<=b)*")) |re| {
+        re.deinit();
+        return error.TestUnexpectedResult;
+    } else |err| try testing.expect(err != error.UnsupportedFeature);
 }
 
 // Found by the F1c long fuzz run (reduced from
@@ -397,8 +464,9 @@ test "LookLinear: which lookaheads are delegated" {
         .{ .pattern = "(?=(a))a", .input = "ba", .sites = 0, .want = .{ 1, 2 } },
         .{ .pattern = "(a)(?=\\1)a", .input = "aa", .sites = 0, .want = .{ 0, 2 } },
         .{ .pattern = "(?=(?=a)a)a", .input = "ba", .sites = 1, .want = .{ 1, 2 } },
-        // Lookbehind: the recursive matcher until F6b, no site.
-        .{ .pattern = "(?<!\\$)\\d+", .input = "$12 34", .sites = 0, .want = .{ 2, 3 } },
+        // A lookbehind of fixed length (B′): delegated from `L` back.
+        .{ .pattern = "(?<!\\$)\\d+", .input = "$12 34", .sites = 1, .want = .{ 2, 3 } },
+        .{ .pattern = "(?<=ab)c|(?<!b)d", .input = "abd abc", .sites = 2, .want = .{ 6, 7 } },
     };
     for (cases) |c| {
         const on = try lookRun(c.pattern, c.input, true, .{});
@@ -451,6 +519,7 @@ fn v8Test(pattern: []const u8, flags: []const u8, input: []const u8) !bool {
     var re = try zregex.Regex.compileWithOptions(a, pattern, .{
         .case_insensitive = std.mem.indexOfScalar(u8, flags, 'i') != null,
         .unicode = std.mem.indexOfScalar(u8, flags, 'u') != null,
+        .v = std.mem.indexOfScalar(u8, flags, 'v') != null,
     });
     defer re.deinit();
     var scratch = zregex.Scratch.init(a);
@@ -468,6 +537,222 @@ fn v8Test(pattern: []const u8, flags: []const u8, input: []const u8) !bool {
         return error.TestUnexpectedResult;
     }
     return found16;
+}
+
+test "F7a: \\u{...} is a code point escape only with u or v (bug E, V8)" {
+    const Case = struct { []const u8, []const u8, []const u8, bool };
+    // Values checked with Node 22 (V8). Without `u`/`v`, Annex B reads `\u`
+    // as the letter and `{...}` as a quantifier when it forms one, text
+    // otherwise; inside a class the braces and digits are members.
+    const cases = [_]Case{
+        .{ "\\u{1F600}", "", "u{1F600}", true },
+        .{ "\\u{1F600}", "", "\u{1F600}", false },
+        .{ "^\\u{2}$", "", "uu", true },
+        .{ "^\\u{2}$", "", "\u{2}", false },
+        .{ "^\\u{2,3}$", "", "uuu", true },
+        .{ "^\\u{41}$", "", "u{41}", false },
+        .{ "^[\\u{1F600}]$", "", "u", true },
+        .{ "^[\\u{1F600}]$", "", "{", true },
+        .{ "^[\\u{1F600}]$", "", "F", true },
+        .{ "^[\\u{1F600}]$", "", "}", true },
+        .{ "^[\\u{1F600}]$", "", "\u{1F600}", false },
+        .{ "\\u{1F600}", "u", "\u{1F600}", true },
+        .{ "\\u{1F600}", "v", "\u{1F600}", true },
+        .{ "^[\\u{1F600}]$", "u", "\u{1F600}", true },
+    };
+    for (cases) |c| {
+        const got = try v8Test(c[0], c[1], c[2]);
+        if (got != c[3]) {
+            std.debug.print("/{s}/{s} on \"{s}\": got {}, V8 {}\n", .{ c[0], c[1], c[2], got, c[3] });
+            return error.TestUnexpectedResult;
+        }
+    }
+}
+
+test "F7a: an index inside a surrogate pair with u starts at the pair (bug D, V8)" {
+    const a = testing.allocator;
+    // pattern, flags (g is implied: a search; y makes it sticky), subject,
+    // lastIndex in UTF-16 units, and V8's `indices[0]` (null: no match).
+    // Values checked with Node 22. The spec starts matching at the pair
+    // too (RegExpBuiltinExec); its reported index would be lastIndex, V8's
+    // is the pair's, as here.
+    const Case = struct { []const u8, []const u8, []const u8, usize, ?[2]usize };
+    const cases = [_]Case{
+        .{ ".", "u", "\u{1F600}x", 1, .{ 0, 2 } },
+        .{ "\\ude00", "u", "\u{1F600}x", 1, null },
+        .{ "(?:)", "u", "\u{1F600}x", 1, .{ 0, 0 } },
+        .{ "x", "u", "\u{1F600}x", 1, .{ 2, 3 } },
+        .{ ".", "uy", "\u{1F600}x", 1, .{ 0, 2 } },
+        .{ "(.)", "u", "a\u{1F600}", 2, .{ 1, 3 } },
+        .{ "\\ud83d", "u", "\u{1F600}", 1, null },
+        .{ "[\\ude00]", "u", "\u{1F600}", 1, null },
+        // Without u the index between the halves is a character boundary.
+        .{ "\\ude00", "", "\u{1F600}x", 1, .{ 1, 2 } },
+        .{ ".", "", "\u{1F600}x", 1, .{ 1, 2 } },
+    };
+    for (cases) |c| {
+        const flags = c[1];
+        var re = try zregex.Regex.compileWithOptions(a, c[0], .{
+            .unicode = std.mem.indexOfScalar(u8, flags, 'u') != null,
+            .sticky = std.mem.indexOfScalar(u8, flags, 'y') != null,
+        });
+        defer re.deinit();
+        var scratch = zregex.Scratch.init(a);
+        defer scratch.deinit();
+        const slots = try a.alloc(?usize, re.slotCount());
+        defer a.free(slots);
+        var out: zregex.MatchSlots = .{ .slots = slots };
+        const s16 = try zregex.subject.utf16FromWtf8(a, c[2]);
+        defer a.free(s16);
+        const found16 = try re.execAt(.{ .utf16 = s16 }, c[3], &scratch, &out, .{});
+        const got16: ?[2]usize = if (found16) .{ slots[0].?, slots[1].? } else null;
+        // WTF-8: the same lastIndex as a byte position (`b+2` between the
+        // halves), the same answer mapped back to UTF-16 units.
+        const idx8 = try zregex.subject.utf16ToWtf8Index(c[2], c[3]);
+        const found8 = try re.execAt(.{ .wtf8 = c[2] }, idx8, &scratch, &out, .{});
+        const got8: ?[2]usize = if (found8) .{ try zregex.subject.wtf8ToUtf16Index(c[2], slots[0].?), try zregex.subject.wtf8ToUtf16Index(c[2], slots[1].?) } else null;
+        if (!std.meta.eql(got16, c[4]) or !std.meta.eql(got8, c[4])) {
+            std.debug.print("/{s}/{s} lastIndex {d}: UTF-16 {any}, WTF-8 {any}, V8 {any}\n", .{ c[0], c[1], c[3], got16, got8, c[4] });
+            return error.TestUnexpectedResult;
+        }
+    }
+}
+
+test "F7a: long loops through the loop-guard set agree with the VM (guard)" {
+    // The backtracker mirrors its loop guards in a set past 64 of them
+    // (F7a(3)). Loops with nullable bodies that iterate, backtrack and cut
+    // across that threshold: the forced backtracker must give the VM's
+    // slots (T0 patterns, where the VM is right by construction; with
+    // `-Dforce-backtracker` both are the backtracker, and still agree).
+    const a = testing.allocator;
+    const patterns = [_][]const u8{ "(?:a|b|)*c", "(?:(a)|b|)*$", "(?:ab|a|)*?b$", "^(?:(a)|(ab)|)*", "(?:(ab)|b|)*x", "^(?:a|b|)*?a$" };
+    var input: [300]u8 = undefined;
+    for (&input, 0..) |*ch, i| ch.* = if (i % 7 == 3) 'b' else 'a';
+    for (patterns) |p| {
+        var vm = try zregex.Regex.compile(a, p);
+        defer vm.deinit();
+        var bt = try zregex.Regex.compileWithOptions(a, p, .{ .force_tier = .expert });
+        defer bt.deinit();
+        var scratch = zregex.Scratch.init(a);
+        defer scratch.deinit();
+        const n = vm.slotCount();
+        const s1 = try a.alloc(?usize, n);
+        defer a.free(s1);
+        const s2 = try a.alloc(?usize, n);
+        defer a.free(s2);
+        var o1: zregex.MatchSlots = .{ .slots = s1 };
+        var o2: zregex.MatchSlots = .{ .slots = s2 };
+        for ([_]usize{ 40, 63, 64, 65, 66, 100, 200, 300 }) |len| {
+            for ([_]u8{ 'c', 'x', 'a' }) |last| {
+                var buf: [301]u8 = undefined;
+                @memcpy(buf[0..len], input[0..len]);
+                buf[len] = last;
+                const subj: zregex.Subject = .{ .wtf8 = buf[0 .. len + 1] };
+                const f1 = try vm.execAt(subj, 0, &scratch, &o1, .{});
+                const f2 = try bt.execAt(subj, 0, &scratch, &o2, .{ .max_steps = 100_000_000 });
+                if (f1 != f2 or (f1 and !std.mem.eql(?usize, s1, s2))) {
+                    std.debug.print("/{s}/ len {d} last '{c}': VM {} {any}, backtracker {} {any}\n", .{ p, len, last, f1, s1, f2, s2 });
+                    return error.TestUnexpectedResult;
+                }
+            }
+        }
+    }
+}
+
+/// Every slot of the forced backtracker (the explicit-stack one, no
+/// lookbehind) against V8's `indices` (-1: undefined; null: no match).
+fn expectBacktrackerSlots(pattern: []const u8, input: []const u8, v8: ?[]const i64) !void {
+    const a = testing.allocator;
+    var re = try zregex.Regex.compileWithOptions(a, pattern, .{ .force_tier = .expert });
+    defer re.deinit();
+    var scratch = zregex.Scratch.init(a);
+    defer scratch.deinit();
+    const slots = try a.alloc(?usize, re.slotCount());
+    defer a.free(slots);
+    var out: zregex.MatchSlots = .{ .slots = slots };
+    const found = try re.execAt(.{ .wtf8 = input }, 0, &scratch, &out, .{});
+    const ok = if (v8) |want| found and want.len == slots.len and for (want, slots) |w, g| {
+        if (w != if (g) |x| @as(i64, @intCast(x)) else -1) break false;
+    } else true else !found;
+    if (!ok) {
+        std.debug.print("/{s}/ on \"{s}\": backtracker {} {any}, V8 {any}\n", .{ pattern, input, found, slots, v8 });
+        return error.TestUnexpectedResult;
+    }
+}
+
+test "F7a: each iteration starts with its captures undefined (RepeatMatcher step 4, V8)" {
+    // Values checked with Node 22.
+    try expectBacktrackerSlots("(?:(a)|b)*", "ab", &.{ 0, 2, -1, -1 });
+    try expectBacktrackerSlots("(?:(a)|b)+", "ab", &.{ 0, 2, -1, -1 });
+    try expectBacktrackerSlots("(?:a|(b))*c", "bac", &.{ 0, 3, -1, -1 });
+    try expectBacktrackerSlots("(?:a|(b)|)*c", "bac", &.{ 0, 3, -1, -1 });
+    try expectBacktrackerSlots("^(?:a|(b)|)*?a$", "abaa", &.{ 0, 4, -1, -1 });
+    try expectBacktrackerSlots("(?:(a)|b){2}", "ab", &.{ 0, 2, -1, -1 });
+    try expectBacktrackerSlots("(?:(a)|b){1,3}", "ab", &.{ 0, 2, -1, -1 });
+    // The last iteration's capture stays.
+    try expectBacktrackerSlots("(?:(a)|b)*", "ba", &.{ 0, 2, 1, 2 });
+    try expectBacktrackerSlots("(?:(a)|(b))*", "ab", &.{ 0, 2, -1, -1, 1, 2 });
+}
+
+test "F7a: an empty iteration above the minimum fails (RepeatMatcher step 2.b, V8)" {
+    // Values checked with Node 22; the forced backtracker, every slot.
+    try expectBacktrackerSlots("(?:(?=(abc)))?a", "abc", &.{ 0, 1, -1, -1 });
+    try expectBacktrackerSlots("(a*)*", "b", &.{ 0, 0, -1, -1 });
+    try expectBacktrackerSlots("(()|a)+", "a", &.{ 0, 1, 0, 1, -1, -1 });
+    try expectBacktrackerSlots("(?:(?=(abc))){0,1}a", "abc", &.{ 0, 1, -1, -1 });
+    try expectBacktrackerSlots("(?:(?=(abc)))??a", "abc", &.{ 0, 1, -1, -1 });
+    try expectBacktrackerSlots("(a*)*?b", "b", &.{ 0, 1, -1, -1 });
+    // The iterations up to the minimum may be empty.
+    try expectBacktrackerSlots("(a*){1,}", "b", &.{ 0, 0, 0, 0 });
+    try expectBacktrackerSlots("(a*)+?b", "b", &.{ 0, 1, 0, 0 });
+    try expectBacktrackerSlots("(a*)+", "b", &.{ 0, 0, 0, 0 });
+    try expectBacktrackerSlots("(a*){1,3}", "b", &.{ 0, 0, 0, 0 });
+    try expectBacktrackerSlots("(?:(a)|b|)*c", "bac", &.{ 0, 3, 1, 2 });
+    try expectBacktrackerSlots("(?:(a)|)*x", "ax", &.{ 0, 2, 0, 1 });
+    try expectBacktrackerSlots("(?:a|())*x", "ax", &.{ 0, 2, -1, -1 });
+    try expectBacktrackerSlots("(?:a|())+x", "ax", &.{ 0, 2, -1, -1 });
+    try expectBacktrackerSlots("(?:()|a){2,}x", "ax", &.{ 0, 2, -1, -1 });
+}
+
+test "F7a: a pattern with a lookbehind gets empty-iteration marks too (B′)" {
+    // Since B′ it runs on the explicit-stack backtracker, like any other.
+    const a = testing.allocator;
+    var re = try zregex.Regex.compileWithOptions(a, "(?<=x)(a*)*", .{ .force_tier = .expert });
+    defer re.deinit();
+    try testing.expect(re.compiled.mark_count > 0);
+    var plain = try zregex.Regex.compileWithOptions(a, "(a*)*", .{ .force_tier = .expert });
+    defer plain.deinit();
+    try testing.expect(plain.compiled.mark_count > 0);
+}
+
+test "F7b: a lookahead under iu is delegated to T0's VM and answers the same (LookLinear)" {
+    // Before F7b(3) LookLinear skipped `i` in code-point mode. Values
+    // checked with Node 22 (V8): Kelvin sign and long s fold with k and s.
+    const a = testing.allocator;
+    const Case = struct { []const u8, []const u8, ?[2]usize };
+    const cases = [_]Case{
+        .{ "(?=k)\\w", "\u{212A}", .{ 0, 3 } },
+        .{ "(?=s\\b)\\w+", "\u{17F}", .{ 0, 2 } },
+        .{ "(?![a-z])\\w", "\u{212A}", null },
+        .{ "x(?=\\p{Lu})", "xa", .{ 0, 1 } },
+    };
+    for (cases) |c| {
+        for ([_]bool{ true, false }) |linear| {
+            var re = try zregex.Regex.compileWithOptions(a, c[0], .{ .case_insensitive = true, .unicode = true, .force_tier = .expert, .t2_look_linear = linear });
+            defer re.deinit();
+            try testing.expectEqual(linear, re.compiled.linear.len > 0);
+            var scratch = zregex.Scratch.init(a);
+            defer scratch.deinit();
+            var buf: [2]?usize = undefined;
+            var out: zregex.MatchSlots = .{ .slots = &buf };
+            const found = try re.execAt(.{ .wtf8 = c[1] }, 0, &scratch, &out, .{});
+            const got: ?[2]usize = if (found) .{ buf[0].?, buf[1].? } else null;
+            if (!std.meta.eql(got, c[2])) {
+                std.debug.print("/{s}/iu linear={} on \"{s}\": {any}, V8 {any}\n", .{ c[0], linear, c[1], got, c[2] });
+                return error.TestUnexpectedResult;
+            }
+        }
+    }
 }
 
 test "F5b: backreferences under i canonicalize (V8)" {
@@ -546,11 +831,12 @@ fn spanOf(pattern: []const u8, input: []const u8, unicode: bool) !?[2]usize {
 }
 
 // Backreferences never run on T0 (tier0.check rejects them), so there is
-// no T0/T2 cross for them. The two backtrackers share checkBackRef: a
-// pattern with a lookbehind runs on the recursive matcher, one without on
-// the explicit-stack one; the same backreference gives the same span on
-// both (and V8's).
-test "F5b: backreferences under i agree on both backtrackers" {
+// no T0/T2 cross for them. Until B′ a pattern with a lookbehind ran on the
+// recursive matcher and one without on the explicit-stack backtracker (the
+// two shared checkBackRef); since B′ both run on the latter, and the same
+// backreference still gives the same span with and without a lookbehind
+// (and V8's).
+test "F5b: backreferences under i agree with and without a lookbehind" {
     try testing.expectEqual(@as(?[2]usize, .{ 1, 3 }), try spanOf("(?<=x)(\u{E9})\\1", "x\u{E9}\u{C9}", false));
     try testing.expectEqual(@as(?[2]usize, .{ 1, 3 }), try spanOf("(\u{E9})\\1", "x\u{E9}\u{C9}", false));
     try testing.expectEqual(@as(?[2]usize, .{ 1, 3 }), try spanOf("(?<=x)(k)\\1", "xk\u{212A}", true));
@@ -622,5 +908,37 @@ test "F5b: literals, classes and properties fold under i (V8)" {
             std.debug.print("/{s}/iu on \"{s}\": got {}, V8 {}\n", .{ c[0], c[1], got, c[2] });
             return error.TestUnexpectedResult;
         }
+    }
+}
+
+test "F7b(6): the VM's set cache doesn't mix the letters of an i literal" {
+    // Under `i` each ASCII letter is a two-member set allocated and freed
+    // in turn: the allocator hands the next letter the same address, so
+    // the cache of `char_set` sets (keyed by that address) must not see
+    // them. `smp_allocator` reuses freed memory as a release build does;
+    // the testing allocator never does and would hide it. Values from V8.
+    const a = std.heap.smp_allocator;
+    const cases = [_]struct { []const u8, []const u8, ?[2]usize }{
+        .{ "(?:ab|cd)+|ef", "ab", .{ 0, 2 } },
+        .{ "(?:ab|cd)+|ef", "aAb", .{ 1, 3 } },
+        .{ "ab", "AB", .{ 0, 2 } },
+        .{ "ab", "aa", null },
+        .{ "xy+", "XYYy", .{ 0, 4 } },
+        .{ "[a-c]+b", "CAB", .{ 0, 3 } },
+    };
+    for (cases) |c| {
+        // The VM, also in the `-Dforce-backtracker` run.
+        var re = try zregex.Regex.compileWithOptions(a, c[0], .{ .case_insensitive = true, .force_tier = .regular });
+        defer re.deinit();
+        var scratch = zregex.Scratch.init(a);
+        defer scratch.deinit();
+        var buf: [2]?usize = undefined;
+        var out: zregex.MatchSlots = .{ .slots = buf[0..re.slotCount()] };
+        const found = try re.execAt(.{ .wtf8 = c[1] }, 0, &scratch, &out, .{});
+        if (c[2]) |want| {
+            try testing.expect(found);
+            try testing.expectEqual(want[0], out.slots[0].?);
+            try testing.expectEqual(want[1], out.slots[1].?);
+        } else try testing.expect(!found);
     }
 }

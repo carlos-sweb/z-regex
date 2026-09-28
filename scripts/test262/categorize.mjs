@@ -15,8 +15,12 @@ const { results } = JSON.parse(fs.readFileSync(file, 'utf8'));
 const RULES = [
   ['short binary-property aliases (UnknownUnicodeProperty)', 'F5', (k, r) => /UnknownUnicodeProperty/.test(r.detail || '')],
   ['Unicode tables / case folding', 'F5', (k) => /property-escapes\/generated\/|unicode_full_case_folding|u-case-mapping/.test(k)],
+  // B′ (F6b step 1): a lookbehind of variable length or with captures is
+  // `UnsupportedFeature` at compile time until full F6b. After B′ the D7
+  // rule below must match nothing: a fixed-length lookbehind that fails is
+  // a bug of B′.
+  ['lookbehind of variable length or with captures (UnsupportedFeature until F6b)', 'F6b', (k, r) => /UnsupportedFeature/.test(r.detail || '')],
   ['lookbehind (D7)', 'F6b', (k) => /lookBehind\/|named-groups\/lookbehind/.test(k)],
-  ['captures in quantified lookahead', 'F6a', (k) => /lookahead-quantifier-match-groups/.test(k)],
   // Only D5 (dot/anchors vs \r, U+2028, U+2029) fails in these two; bonus
   // for F1, not counted in its target (docs/REGEX_TIERS_PLAN.md, F1).
   ['line terminators \\r U+2028 U+2029 (D5)', 'F1', (k) => /dotall\/without-dotall-unicode/.test(k)],

@@ -19,7 +19,6 @@ const Tier = classify.Tier;
 const build_options = @import("build_options");
 
 const CodeGenerator = generator_mod.CodeGenerator;
-const Optimizer = optimizer_mod.Optimizer;
 const OptLevel = optimizer_mod.OptLevel;
 const BytecodeWriter = bytecode_writer.BytecodeWriter;
 pub const NamedGroup = format_mod.NamedGroup;
@@ -33,7 +32,9 @@ const hir = @import("ir").hir;
 
 /// Compiler options
 pub const CompileOptions = struct {
-    /// Optimization level
+    /// Optimization level. No effect: the `Optimizer` never optimized, and
+    /// since F7b `compile` doesn't run it (kept for API compatibility until
+    /// the 1.0 API review, F7c).
     opt_level: OptLevel = .basic,
 
     /// Case insensitive matching
@@ -175,7 +176,7 @@ fn frontend(allocator: Allocator, pattern: []const u8, options: CompileOptions) 
     // ECMA-262: `u` and `v` together are a SyntaxError (the same check as
     // `analysis.Flags.parse`).
     if (options.unicode and options.v) return error.IncompatibleFlags;
-    return lower_mod.Frontend.init(allocator, pattern, .{
+    const fe = try lower_mod.Frontend.init(allocator, pattern, .{
         .unicode = options.unicode,
         .v = options.v,
         .possessive = options.possessive,
@@ -184,6 +185,14 @@ fn frontend(allocator: Allocator, pattern: []const u8, options: CompileOptions) 
         .multiline = options.multiline,
         .dot_all = options.dot_all,
     });
+    // B′ (F6b step 1): the backtracker runs a lookbehind of fixed length
+    // without captures; any other is a valid pattern this engine can't run
+    // yet (not a SyntaxError: the parser's errors came first).
+    if (!hir.lookbehindsFixed(fe.root)) {
+        fe.deinit();
+        return error.UnsupportedFeature;
+    }
+    return fe;
 }
 
 /// Where the pattern runs, or `error.TierUnavailable` when `force_tier`
@@ -250,15 +259,15 @@ fn generate(allocator: Allocator, fe: *const lower_mod.Frontend, options: Compil
 
     var generator = CodeGenerator.init(allocator, &writer);
     defer generator.deinit();
+    // RepeatMatcher step 2.b (F7a(4)): every pattern runs on the
+    // explicit-stack backtracker since B′ (F6b step 1).
+    generator.empty_check = true;
     try generator.generate(fe.root);
 
-    const unoptimized = try writer.finalize();
-    // Note: unoptimized is owned by writer, will be freed by writer.deinit()
-
-    // Phase 5: Optimization
-    var optimizer = Optimizer.init(allocator, options.opt_level);
-    const optimized = try optimizer.optimize(unoptimized);
-    errdefer allocator.free(optimized);
+    // Phase 5 was a no-op `Optimizer` that copied the bytecode (F7b): the
+    // copy is now the writer's own (`takeBytecode`).
+    const bytecode = try writer.takeBytecode();
+    errdefer allocator.free(bytecode);
 
     // Copy named-group names out of the parser's pattern-borrowed slices so
     // they outlive this function (the pattern itself may not outlive the
@@ -294,12 +303,12 @@ fn generate(allocator: Allocator, fe: *const lower_mod.Frontend, options: Compil
     }
 
     return CompileResult{
-        .bytecode = optimized,
+        .bytecode = bytecode,
         .named_groups = try named_groups.toOwnedSlice(allocator),
         .group_count = parser.group_counter,
         .charsets = charsets,
         .mode = if (options.unicode or options.v) .code_point else .code_unit,
-        .has_lookbehind = program_mod.hasLookbehind(optimized),
+        .mark_count = generator.marks,
         .word_fold = options.case_insensitive and (options.unicode or options.v),
         .linear = linear_owned,
         .linear_programs = programs_owned,
@@ -311,7 +320,8 @@ fn generate(allocator: Allocator, fe: *const lower_mod.Frontend, options: Compil
 /// whose body T0's VM answers, and their programs. A body qualifies when
 /// `tier0.check` takes it with the flags in effect there (no captures,
 /// backreferences, lookarounds or iterated nullable bodies), outside `v`
-/// (F5c) and outside `i` in code-point mode (F5b's folding). Sites that are
+/// (F5c); `i` in code-point mode too since F7b (the lowering folds its sets,
+/// F5b). Sites that are
 /// copies of one HIR node with the same flags share a program. The
 /// generator's sites are in bytecode order, so `linear` is sorted by pc.
 fn linearSites(allocator: Allocator, sites: []const CodeGenerator.LookSite, options: CompileOptions, linear: *std.ArrayListUnmanaged(LinearSite), programs: *std.ArrayListUnmanaged(tier0.Program)) !void {
@@ -320,7 +330,6 @@ fn linearSites(allocator: Allocator, sites: []const CodeGenerator.LookSite, opti
     var keys: std.ArrayListUnmanaged(Key) = .empty;
     defer keys.deinit(allocator);
     for (sites) |site| {
-        if (options.unicode and site.flags.ignore_case) continue;
         const key: Key = .{ .body = site.body, .flags = site.flags };
         const index = for (keys.items, 0..) |k, i| {
             if (k.body == key.body and std.meta.eql(k.flags, key.flags)) break i;

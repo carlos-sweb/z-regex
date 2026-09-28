@@ -1,0 +1,31 @@
+{
+ "seed": 3868,
+ "count": 4000,
+ "node": "v22.22.2",
+ "counts": {
+  "patterns": 4000,
+  "v8Rejected": 314,
+  "zregexRejected": 0,
+  "crashed": 0,
+  "compared": 11056,
+  "same": 11056,
+  "differentResult": 0,
+  "zregexError": 2
+ },
+ "divergences": [
+  {
+   "kind": "zregex_error",
+   "subject": "_😀bb1_1b",
+   "reason": "zregex failed while matching: StepLimitExceeded",
+   "source": "((a*?)*?(?:[^a]+(?<n0>[^a]*b*?)+\\w*){2}((?<n1>\\4\\4\\5)\\5(\\u0061*?)*?(?<n2>é{1,2}\\8\\1)*?)+?a{2}){2}\\2",
+   "flags": ""
+  },
+  {
+   "kind": "zregex_error",
+   "subject": "aa",
+   "reason": "zregex failed while matching: StepLimitExceeded",
+   "source": "(?<n0>(?:(?:\\2)??|(?<n1>a1??)+?\\k<n0>)+(?<n2>(\\5|\\1\\6|\\3)(\\3\\x62*\\k<n1>|\\3)\\1\\3)((\\k<n2>[ab]+|\\6)+?(?:\\u0061*?|\\x62{1,2})+?)*?)+\\d* ",
+   "flags": ""
+  }
+ ]
+}

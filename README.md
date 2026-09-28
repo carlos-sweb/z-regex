@@ -4,7 +4,7 @@ An ECMA-262 regular expression engine in Zig, independent of the JavaScript engi
 
 [![Zig 0.16+](https://img.shields.io/badge/zig-0.16%2B-orange)](https://ziglang.org/)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
-[![test262](https://img.shields.io/badge/test262-2978%2F3017-blue)](scripts/test262/baseline.json)
+[![test262](https://img.shields.io/badge/test262-2968%2F3017-blue)](scripts/test262/baseline.json)
 [![T0](https://img.shields.io/badge/T0-complete-green)](docs/REGEX_TIERS_PLAN.md)
 
 ## What it is
@@ -28,9 +28,13 @@ An ECMA-262 regular expression engine in Zig, independent of the JavaScript engi
 - **T1 (Unicode: `u`/`v`, `\p{…}`, full case folding): in development (F5).** Since F5a, `u`
   and `\p{…}` run on T0's linear VM (code-point mode); since F5b, so does case folding
   under `i` (with and without `u`). `v` (F5c) still runs on the backtracker.
-- **T2 (backreferences, lookaround): on the backtracker**, with a step budget. Rewrite in F6a.
-- **test262: 2978/3017 (98.7%)**, 0 regressions.
-- **Divergences from V8** in the differential: 470, all T2; **0 on T0 and T1**.
+- **T2 (backreferences, lookaround): on the explicit-stack backtracker**, with a step budget.
+  Lookbehind: fixed length without captures only (F6b step 1); the rest is
+  `error.UnsupportedFeature` until full F6b.
+- **test262: 2968/3017 (98.4%)**: 12 lookbehind entries that passed before F6b's step 1 are
+  now `UnsupportedFeature` (see Compatibility).
+- **Divergences from V8** in the differential: 0 different results; 2 patterns hit the step
+  limit (T2).
 
 ## What runs where
 
@@ -46,7 +50,8 @@ An ECMA-262 regular expression engine in Zig, independent of the JavaScript engi
 | `v`, `\q{…}`, case folding under `v` | T1 | F5c (runs on the backtracker) |
 | Backreferences | T2 | OK (backtracker) |
 | Lookahead | T2 | OK (backtracker) |
-| Lookbehind | T2 | OK (backtracker, D7) |
+| Lookbehind, fixed length, no captures | T2 | OK (backtracker, F6b step 1) |
+| Lookbehind, variable length or with captures | T2 | `error.UnsupportedFeature` (full F6b) |
 
 "OK" means it works and passes the tests. It does **not** mean optimized. Which executor runs a
 pattern is decided at compile time from the pattern (`zregex.analyze`); the results are the
@@ -57,7 +62,7 @@ same whichever runs it.
 With Zig 0.16. Add the dependency (this writes the hash into `build.zig.zon`):
 
 ```sh
-zig fetch --save https://github.com/carlos-sweb/z-regex/archive/refs/tags/v0.4.0.tar.gz
+zig fetch --save https://github.com/carlos-sweb/z-regex/archive/refs/tags/v0.5.0.tar.gz
 ```
 
 In `build.zig`:
@@ -183,10 +188,12 @@ against V8, Rust regex, PCRE2 and zig-regex.
 
 ## Compatibility
 
-- **test262: 2978/3017 (98.7%)**, 0 regressions, the same status with UTF-16 and WTF-8
-  subjects. Baseline: `scripts/test262/baseline.json`.
-- **`differential-v8`** against `tests/differential/reference/diff-F5b.json`: 0 new, 0 gone,
-  0 changed. Its 470 divergences are all T2; none is T0 or T1.
+- **test262: 2968/3017 (98.4%)**, the same status with UTF-16 and WTF-8 subjects. Baseline:
+  `scripts/test262/baseline.json`. The 49 not passing: 30 lookbehind entries that are
+  `UnsupportedFeature` (variable length or captures, full F6b), 4 host (JS lexer) and 15 not
+  extractable.
+- **`differential-v8`** against `tests/differential/reference/diff-F7a.json`: 0 new, 0 gone,
+  0 changed. It has no different result; 2 T2 patterns hit the step limit.
 - **Internal differential** (every capture slot, V8 as the arbiter where the executors
   disagree): 0 crashes and 0 two-pass mismatches in 12.76 M runs over the real corpora and
   14.16 M over the iteration corpus (`tests/corpus/`).
@@ -229,11 +236,12 @@ The cross-engine benchmark: `bench/compare/prepare.sh`, then `node bench/compare
   non-ASCII ranges is partial.
 - **T2 uses the current backtracker**, bounded by a step budget: a pathological pattern stops
   with `error.StepLimitExceeded` instead of an answer.
-- **Lookbehind (D7)** looks back through a limited window; F6b replaces it.
+- **Lookbehind (F6b step 1):** only of fixed length without captures or backreferences
+  inside (29 of the 34 lookbehind patterns in the npm corpus); any other is
+  `error.UnsupportedFeature` (C API `ZREGEXP_ERROR_UNSUPPORTED`) until full F6b, which is
+  mandatory (z-interpreter needs all of it). The old 100-character window (D7) is gone.
 - Patterns with a raw, non-UTF-8 byte (WTF-8 only) stay on the backtracker, as does a tagged
   program over the slot bound.
-- `\u{…}` without `u`/`v` is read as a code point escape (D17; Annex B reads it as `u` plus a
-  quantifier or text).
 
 The full list, with measurements: [docs/KNOWN_LIMITATIONS.md](docs/KNOWN_LIMITATIONS.md).
 
@@ -242,11 +250,16 @@ The full list, with measurements: [docs/KNOWN_LIMITATIONS.md](docs/KNOWN_LIMITAT
 - **T0: done** (F4a, F4b; v0.3.0; v0.3.1 adds the SIMD literal search; v0.3.2 adds `Regex.iterator`).
 - **v0.4.0:** F5a, F6a and F5b (T1 without `v` on the VM, explicit-stack backtracker,
   full case folding under `i`; test262 2978/3017).
+- **v0.5.0:** F7a, F7b, B′ and C API error names (RepeatMatcher steps 4 and 2.b, compile
+  cost, fixed-length lookbehind on the explicit-stack backtracker; test262 2968/3017;
+  [release notes](docs/RELEASE_NOTES_v0.5.0.md)).
 - **F5, T1 (Unicode):** F5a done (`u` and `\p{…}` on the VM, every UCD property name);
   F5b done (full case folding under `i`); F5c (full `v`) pending.
 - **F6a, T2 without lookbehind: done** (explicit-stack backtracker, capture trail,
   LookLinear; F6a(1)–(3)).
-- **F6b, lookbehind (or its plan B):** pending.
+- **F6b, lookbehind:** step 1 done (B′: fixed length without captures, on the
+  explicit-stack backtracker; the recursive matcher is retired); step 2, variable length
+  and captures (matching backward), pending and mandatory.
 
 No dates. Phases and exit criteria: [docs/REGEX_TIERS_PLAN.md](docs/REGEX_TIERS_PLAN.md).
 

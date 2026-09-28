@@ -81,7 +81,7 @@ pub fn decodeInstruction(bytecode: []const u8, offset: usize) !Instruction {
         .CHAR, .CHAR_ANY, .MATCH, .LINE_START, .LINE_END, .WORD_BOUNDARY, .NOT_WORD_BOUNDARY, .STRING_START, .STRING_END, .LOOKAHEAD_END, .LOOKBEHIND_END, .PUSH_POS, .CHECK_POS => {},
 
         // u16 capture group (D9)
-        .SAVE_START, .SAVE_END, .BACK_REF, .BACK_REF_I, .CLEAR_CAPTURE => {
+        .SAVE_START, .SAVE_END, .BACK_REF, .BACK_REF_I, .CLEAR_CAPTURE, .REPEAT_MARK, .REPEAT_CHECK => {
             inst.operands[0] = readU16(bytecode[offset + 1 ..]);
             inst.operand_count = 1;
         },
@@ -100,7 +100,7 @@ pub fn decodeInstruction(bytecode: []const u8, offset: usize) !Instruction {
         },
 
         // 4 byte operand (u32)
-        .CHAR32, .CHAR_SET, .CHAR_SET_INV, .LOOKAHEAD, .NEGATIVE_LOOKAHEAD, .LOOKBEHIND, .NEGATIVE_LOOKBEHIND => {
+        .CHAR32, .CHAR_SET, .CHAR_SET_INV, .LOOKAHEAD, .NEGATIVE_LOOKAHEAD, .LOOKBEHIND_FIXED, .NEGATIVE_LOOKBEHIND_FIXED => {
             inst.operands[0] = readU32(bytecode[offset + 1 ..]);
             inst.operand_count = 1;
         },
@@ -159,7 +159,7 @@ pub fn encodeInstruction(inst: Instruction, buffer: []u8) !usize {
         .CHAR, .CHAR_ANY, .MATCH, .LINE_START, .LINE_END, .WORD_BOUNDARY, .NOT_WORD_BOUNDARY, .STRING_START, .STRING_END, .LOOKAHEAD_END, .LOOKBEHIND_END, .PUSH_POS, .CHECK_POS => {},
 
         // u16 capture group (D9)
-        .SAVE_START, .SAVE_END, .BACK_REF, .BACK_REF_I, .CLEAR_CAPTURE => {
+        .SAVE_START, .SAVE_END, .BACK_REF, .BACK_REF_I, .CLEAR_CAPTURE, .REPEAT_MARK, .REPEAT_CHECK => {
             writeU16(buffer[pos..], @intCast(inst.operands[0]));
             pos += 2;
         },
@@ -177,7 +177,7 @@ pub fn encodeInstruction(inst: Instruction, buffer: []u8) !usize {
         },
 
         // 4 byte operand (u32)
-        .CHAR32, .CHAR_SET, .CHAR_SET_INV, .LOOKAHEAD, .NEGATIVE_LOOKAHEAD, .LOOKBEHIND, .NEGATIVE_LOOKBEHIND => {
+        .CHAR32, .CHAR_SET, .CHAR_SET_INV, .LOOKAHEAD, .NEGATIVE_LOOKAHEAD, .LOOKBEHIND_FIXED, .NEGATIVE_LOOKBEHIND_FIXED => {
             writeU32(buffer[pos..], inst.operands[0]);
             pos += 4;
         },

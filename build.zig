@@ -106,7 +106,7 @@ const canaries = [_]Canary{
     },
     .{
         .layer = "tier1",
-        .bad = "pub fn f() usize {\n    return @sizeOf(@import(\"tier2\").ExecOptions);\n}\n",
+        .bad = "pub fn f() usize {\n    return @sizeOf(@import(\"tier2\").ExecLimits);\n}\n",
         .good = "pub fn f() usize {\n    return @sizeOf(@import(\"tier0\").hir.Flags);\n}\n",
         .expect = "no module named 'tier2' available within module 'tier1'",
     },

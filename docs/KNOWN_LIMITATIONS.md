@@ -5,7 +5,7 @@ zregex regex engine. Every claim below was checked by direct execution against t
 current source tree (compiling small probe programs against the `zregex` module and
 observing the actual result), not inferred from design docs or past status reports.
 
-## Version: 0.4.0 (F5a: `u` and `\p{...}` on T0's VM; F6a: explicit-stack backtracker, capture trail, LookLinear; F5b: full case folding under `i`; test262 2978/3017; see "F5a", "F6a" and "F5b" below). 0.3.2 was 0.3.0 plus the SIMD pairwise literal search in the literal fast path (0.3.1) and `Regex.iterator` (0.3.2). 0.3.0 closed T0: F4a and F4b, test262 2856/3017; see "F4a" and "F4b" below. v0.2.0 was F1 (test262 2846/3017, see "F1 closed" below). The rest of this
+## Version: 0.5.0 (F7a: bugs D and E, RepeatMatcher steps 4 and 2.b on the backtracker; F7b: compile cost, loop guard, LookLinear under `iu`, C API `max_steps`; F6b step 1 (B′): fixed-length lookbehind on the explicit-stack backtracker, the recursive matcher retired, any other lookbehind is `UnsupportedFeature`; every C API function records the error name; test262 2968/3017; see "Fixed in F7a", "F7b closed" and "F6b step 1 (B′)" below; release notes: `docs/RELEASE_NOTES_v0.5.0.md`). 0.4.0 was F5a: `u` and `\p{...}` on T0's VM; F6a: explicit-stack backtracker, capture trail, LookLinear; F5b: full case folding under `i`; test262 2978/3017; see "F5a", "F6a" and "F5b" below). 0.3.2 was 0.3.0 plus the SIMD pairwise literal search in the literal fast path (0.3.1) and `Regex.iterator` (0.3.2). 0.3.0 closed T0: F4a and F4b, test262 2856/3017; see "F4a" and "F4b" below. v0.2.0 was F1 (test262 2846/3017, see "F1 closed" below). The rest of this
 header describes the earlier state: 402/402 unit/integration tests passing, 168/168 (100%) on a test262-derived
 conformance sample (Phases 0, 1, 2 (now including duplicate named groups across
 mutually exclusive alternation branches, e.g. `(?<x>a)|(?<x>b)`, matching JS exactly),
@@ -38,7 +38,9 @@ older internal notes had previously (incorrectly) listed as broken:
 - **Alternation** `a|b` — no infinite loop; correctly matches either branch.
 - **Lookahead** `(?=...)`, `(?!...)` and **lookbehind** `(?<=...)`, `(?<!...)` — all four
   forms are zero-width and behave correctly (verified with `find`, not `test_`, since
-  these assertions don't consume input — see the `test_` vs `find` note below).
+  these assertions don't consume input — see the `test_` vs `find` note below). Since
+  F6b step 1 a lookbehind has to be of fixed length without captures; any other is
+  `error.UnsupportedFeature` (see "F6b step 1 (B′)").
 - **`\W`, `\S` negation** — correctly inverted (an older internal note claimed these were
   "parsed but not correctly inverted"; that is no longer true).
 - **Counted quantifiers** `{n}`, `{n,}`, `{n,m}` and their lazy forms `{n,m}?`.
@@ -1051,6 +1053,8 @@ phase product). D5 fallbacks to the backtracker (`two_pass_fallbacks`): 0 in eve
 - **Systemic note.** This is the third layout case in the project (F4a(4), F4b(4) and
   F4a(4)A's prefilter). After T0, decide how to measure without depending on LLVM's
   layout: separate binaries, more runs, or `-fno-llvm` for the bench.
+  **F7-0:** most of this is the environment's noise, not layout; see "Bench noise and the
+  historical layout regressions (F7-0)" below.
 
 ### F5a: `u` and `\p{...}` on T0's VM, every UCD property name
 
@@ -1101,6 +1105,28 @@ limit in `REGEX_TIERS_PLAN.md` §7.2 is now "<= 2x against `.expert`, or <= +2 u
 absolute". Reducing `tier0.compile`'s fixed cost (closure tables, `follow`) is in F7's
 backlog.
 
+**F7b(6): the fixed cost, measured by phase and reduced.** Callgrind of 1,000 compiles per
+pattern (ReleaseFast, `-Dcpu=x86_64_v3`) found three local costs, all fixed:
+- the `first` prefilter turned its two 256-bit sets into lookup tables a bit at a time
+  (~1.8 k instructions per compile); now eight entries at a time;
+- the backtracker's `emitBitmap` tested membership for each of 256 bytes (a binary search
+  each; 5.5 k for `[^a]`); now built from the set's ranges;
+- `tier0`'s `addSet` compared a set emitted twice (`x+` is `x` then `x*`) range by range
+  (~5.5 k for `\p{L}+`, 684 ranges); the builder now remembers the last `char_set` node's
+  set by its HIR ranges. Only for HIR sets: an `i` literal's two-letter sets are freed at
+  once and the next letter's can get the same address (a first version keyed them too and
+  gave `/(?:ab|cd)+|ef/i` no match on "ab"; the corpus differentials caught it, a test with
+  an allocator that reuses memory keeps it caught).
+
+Instructions per compile, before -> after: `\d` 10,512 -> 7,310 (-30%), `[^a]` 16,832 ->
+11,485 (-32%), `\p{L}+` (`u`) 15,732 -> 9,545 (-39%), `\p{Lu}+` 15,953 -> 10,027 (-37%),
+`(\d{3})-(\d{4})` -14%, `<(\w+)>.*?<\/\1>` -28%, `[\p{L}\p{N}_]+` -10%; `[a-z]+`,
+`hello`, `\p{L}` and the lookahead case within 0.2%. What remains is structural: about a
+fifth is the allocator (the AST is allocated node by node, the `Program` in several
+parts), and the backtracker's bytecode is always generated, even for a pattern the VM runs
+(0.35-1.4 k instructions, 5-15% of these compiles), because `force_tier`, the bytecode
+snapshot and the internal differentials use it. Neither is changed in F7b.
+
 **Bugs found in F5a (pre-existing, both engines):**
 - **Fixed after F5a (bug A):** `\p{...}` without `u`/`v` was read as a property
   escape. It is now Annex B's IdentityEscape, as in V8: `/\p{L}/` is the text `p{L}`,
@@ -1130,13 +1156,15 @@ depth limit of 1000 (`RecursionLimitExceeded`).
 **Capture trail (F6a(2)).** Capture writes go to a trail, undone to each choicepoint's
 height. Fixed on the way (bug F, docs/F6A_PRECHECK.md): once a positive lookahead
 succeeded, its captures survived a later backtrack past it (`/(?:(?=(a))ab|ac)/` on "ac"
-gave group 1 = "a"; V8: undefined). The capture of a discarded empty iteration is still
-not reset (the recursive matcher's known limitation, kept).
+gave group 1 = "a"; V8: undefined). The capture of a discarded empty iteration was not
+reset: fixed in F7a(4) on this backtracker (see "Fixed in F7a"); patterns with a lookbehind
+keep the recursive matcher's behavior until F6b.
 
 **LookLinear (F6a(3)).** A lookahead whose body has no captures, backreferences or nested
 lookarounds, and that T0's VM takes, is answered by `tier0.existsAnchoredMatch` with a
 2-bit-per-position memo per execution (docs/REGEX_TIERS_PLAN.md §4.4). Not delegated: `v`
-patterns (F5c), `i` in `u` mode (F5b's folding), lookbehind (F6b). On the F2c and npm
+patterns (F5c), lookbehind (F6b); `i` in `u` mode is delegated since F7b(3) (F5b's
+lowering folds its sets). On the F2c and npm
 corpora, 2,463 of the 4,441 patterns with a lookahead have delegated sites; on and off
 give the same slots in all 566,490 runs.
 
@@ -1149,7 +1177,19 @@ give the same slots in all 566,490 runs.
 - `max_memo_bytes` (default 1 MiB): a memo table that doesn't fit isn't an error, that
   lookahead runs without memo; 0 turns the memo off.
 - `max_recursion_depth` is gone (API change): only the recursive matcher had one.
-- The C API still doesn't take limits per execution (no ABI change).
+- The C API still doesn't take limits per execution (no ABI change). Since F7b,
+  `ZRegexOptions.max_steps` (0 keeps the default) becomes the regex's own `Regex.limits`,
+  used by every execution through the C API and by the Zig facade (`find`, `findAll`,
+  `replace`, ...); before F7b it was accepted and ignored. `max_recursion_depth` is a
+  reserved field with no effect.
+- C API: every function that can fail records the error's name
+  (`zregex_last_error_name`) with its code (`zregex_last_error`): the Zig error's own name
+  when there is one (`UnexpectedToken`, `StepLimitExceeded`, `OutOfMemory`, ...), else the
+  code's (`InvalidGroup` for an index out of range). Until this change `zregex_compile`,
+  `zregex_find*`, `zregex_is_match`, `zregex_replace*`, `zregex_escape`,
+  `zregex_match_slice`/`_group` and `zregex_named_group_*` set only the code;
+  `zregex_named_group_name`/`_index` out of range now also report
+  `ZREGEXP_ERROR_INVALID_GROUP` (before, a bare null / 0).
 
 **Bench** (10 interleaved rounds of `zregex_xbench` against `66a9d60`, median `execAt`
 MB/s; the backtracker cases):
@@ -1168,10 +1208,39 @@ and 22.3 ms (29.0 and 24.8 before). Compiling a pattern with delegated lookahead
 their T0 programs (`t2_lookahead`: 3.5 -> 4.9 us). `Regex.exec` keeps the backtracker's
 side out of line (`noinline`): inlined, its frame cost every T0 call ~25 ns.
 
-**Known costs.** The zero-progress loop guard is still a linear search over the active
-iterations, so a long loop whose body isn't a single atom is quadratic: 5,000 iterations of
-`(?:ab)*` take ~7 ms (for F7 if it matters). The binary
-grows while both executors coexist (until F6b).
+**Known costs.** The zero-progress loop guard was a linear search over the active
+iterations, so a long loop whose body isn't a single atom was quadratic. **Fixed in F7a(3):**
+past 64 active guards the backtracker mirrors them in a hash set. `(x)(?:ab)*\1` over 5,000
+iterations: 13.3 -> 0.46 ms, 92.7 M -> 6.8 M instructions (callgrind); 50,000: 882 -> 4.9 ms.
+Loops of up to 64 iterations keep the scan (the set costs more below ~70). The binary
+grows while both executors coexist (until F6b). **F7b(5):** the set is no longer
+`std.AutoHashMapUnmanaged` but `GuardSet`, linear probing without tombstones (its removals
+always undo insertions newest first, so emptying the slot is enough); a full removal
+clears the table only when it is at most 16 times the keys, else removes them one by one.
+A table with no keys has every slot free, so it is reused without clearing. Binary
+-2,784 B (ReleaseFast) / -736 B (ReleaseSmall); the same probe (callgrind), 5,000
+iterations: 6.84 -> 6.12 M instructions; 50,000: 62.8 -> 53.8 M; wall time within noise
+(minimum 0.32 -> 0.30 ms and 4.3 -> 3.5–4.6 ms).
+
+### Bench noise and the historical layout regressions (F7-0)
+
+The bench's precision was measured in F7-0 (`docs/BENCHMARKS.md`, "Precision (F7-0)"): in
+this environment one case moves 20–45% from one process to the next, ASLR off and a 2 MiB
+aligned input don't reduce it, and with 10 rounds the median can't see changes under ~20%
+(the minimum time per case can, to ~4%). The three "layout regressions" below were measured
+with the median of 10 rounds, inside that noise. They are not reopened; they are noted here
+so nobody investigates them again:
+
+- **F4a(4):** the backtracker cases lost 11.3% (`<(\w+)>.*?<\/\1>`) to 18.6%
+  (`(?<=\$)\d+`) in `findAll`, with instruction counts unchanged (callgrind, +2%). Possibly
+  part noise.
+- **F4b(4):** the capture-less path lost 7–14% in `execAt`, "resolved" by moving the tagged
+  VM to its own file (`090678e`). Possibly part noise; the recovery was measured the same
+  way.
+- **F6a:** the regression that led to the `noinline` `execBacktracker` and to
+  `initScratchInto` may have included noise, but the fixes are real: callgrind gives 1,644
+  -> 1,537 instructions per short exec (base 1,435), and `t0_literal`'s short exec went
+  20.6 -> 45.5 -> 20.0 ns (`5c34af3`).
 
 ### F5b: full case folding under `i` (F5b closed)
 
@@ -1492,20 +1561,156 @@ incorrect examples in this repository's own README and doc comments.
 
 ## Confirmed bugs (still open)
 
-- **`\u{H+}` without `u`/`v` is read as a code point escape (D17)** *(found in F4b(2) by
-  the V8 arbiter; fix planned with the `u` grammar work of F5)*:
+None. (D17, `\u{H+}` without `u`/`v`, was fixed in F7a: see "Fixed in F7a" below.)
 
-  ```zig
-  Regex.compile(a, "\\u{1F600}"); // matches U+1F600; V8: `u` then the text "{1F600}"
-  Regex.compile(a, "\\u{2}");     // matches U+0002;  V8: "uu" (`u` quantified {2})
-  ```
+### Fixed in F7a
 
-  Annex B reads `\u` not followed by 4 hex digits as the identity escape `u`, and the
-  `{...}` after it as a quantifier when it is one, literal text otherwise.
-  `parseUnicodeEscape` (`lexer.zig`) takes the `{H+}` branch whatever `unicode_mode`
-  says. Inside a group name, `\u{...}` is valid without `u` (ES2020) and works. No
-  test262 test depends on it (its `\u{` without `u` are group names or early errors),
-  and `differential-v8`'s generator never writes `\u{` without `u`, so neither gate saw it.
+- **`\u{H+}` without `u`/`v` was read as a code point escape (D17, bug E)** *(found in
+  F4b(2) by the V8 arbiter)*: now, as in Annex B, `\u` is the letter and the `{...}` after it a
+  quantifier when it forms one, text otherwise. `/\u{2}/` matches "uu", `/\u{1F600}/`
+  matches "u{1F600}" and not U+1F600, and `/[\u{1F600}]/` is the members `u { 1 F 6 0 }`.
+  With `u` or `v` it is the code point escape, as before; inside a group name `\u{...}`
+  stays valid without `u` (ES2020). Tests against V8 in `tests/regression_tests.zig`. It
+  removed the 11 runs of the two F2c-corpus patterns `docs/F5A_CLOSING.md` attributed to it.
+
+- **An index inside a surrogate pair with `u`/`v` started at the trail half (bug D)**
+  *(found in F5a, `docs/F5A_CLOSING.md`)*: `execAt` (and everything on it) took the index as
+  a lone trail surrogate. Now it starts at the pair (`Subject.charStart`): UTF-16 between the
+  halves, and WTF-8 at `b+2` of a 4-byte sequence, which is the same place. **The matching
+  follows the spec (RegExpBuiltinExec: "the character that was obtained from element
+  lastIndex"); the reported index matches V8, the pair's start; the spec reports `lastIndex`
+  itself, without moving back.** So `/./gu` with `lastIndex = 1` over "😀x" gives `[0, 2]`
+  (V8: `["😀"]` at 0) and `/\ude00/gu` from there finds nothing (before: `[1, 2]`). Without
+  `u` the index between the halves is a character boundary, as before. No test262 test
+  covers it; tests against V8 in `tests/regression_tests.zig`, both encodings.
+
+- **Quantified groups didn't follow RepeatMatcher steps 4 and 2.b on the backtracker (item
+  13 of `docs/plans/F7.md`)**: each iteration now starts with the captures inside the atom
+  undefined (step 4: `/(?:(a)|b)*/` over "ab" leaves group 1 undefined), and an iteration
+  above the quantifier's minimum that matches empty fails (step 2.b: `/(a*)*/` over "b"
+  leaves group 1 undefined; `/(?:(?=(abc)))?a/` takes the skip). Step 4 is a
+  `CLEAR_CAPTURE` per iteration; step 2.b is `REPEAT_MARK`/`REPEAT_CHECK` around the
+  iterations of a nullable body, emitted only for the explicit-stack backtracker (a
+  pattern with a lookbehind runs on the recursive matcher unchanged until F6b). **The two
+  steps are coupled:** step 4 alone made 5 differential cases worse (an accepted empty
+  iteration cleared the previous iteration's capture), so they shipped together. Results:
+  test262 2978 -> 2980 (`lookahead-quantifier-match-groups.js`); `differential-v8` 470
+  different results -> 0 and 17 `StepLimitExceeded` -> 2 (`diff-F7a.json`); the internal
+  differentials against T0's VM (382 bound and 7,538 slot differences on the T0 corpora,
+  1,050 rows on T1) -> 0.
+
+### The bytecode `Optimizer` doesn't optimize (F7b)
+
+`src/tier2/codegen/optimizer.zig` never did anything but copy the bytecode (its three
+passes are TODO stubs). Since F7b `compile` doesn't run it: the writer hands over a copy of
+its bytecode (`BytecodeWriter.takeBytecode`). What it removes is a step that claimed to
+optimize, not a cost. F7b(2) first handed over the writer's own buffer, shrunk in place:
+callgrind saw no change (-0.5% to +0.5%), but the cross-engine bench did (`\p{L}+` compile
+~1.7 us slower in a process that has run other cases; A/B on the same head: 3.9-5.0 vs
+2.3-2.7 us), so the copy came back at the F7b close. `CompileOptions.opt_level`, `Optimizer`
+and `OptLevel` have no effect and stay exported until the 1.0 API review (F7c).
+
+### Binary size: one procedure since F7b (the ~26 KB anomaly explained)
+
+After F7a the F5b figure (1,112,272 B, ReleaseFast `.so`, stripped) didn't reproduce: the
+same commit gave 1,138,656 B. The cause is the build target, not the code: the builds used
+`native`, which follows the host's CPU features, and the container had moved to another
+host in between (same Zig 0.16.0, same source; today's builds are deterministic). Built for
+a fixed CPU model, the F5b commit (`41e2a0b`) gives 1,113,232 B, within 1 KB of the
+original figure. Since F7b the size is measured only with `scripts/measure_binary.sh`
+(x86_64-linux, `-Dcpu=x86_64_v3`, stripped `.so`, ReleaseFast and ReleaseSmall); figures
+from before it are not comparable with each other. With it:
+
+| Commit | ReleaseFast | ReleaseSmall |
+|---|---|---|
+| `41e2a0b` (F5b closed) | 1,113,232 B | 708,104 B |
+| `4296517` (before F7a) | 1,113,232 B | 708,104 B |
+| `2c9a321` (F7a closed) | 1,121,408 B (+8,176) | 711,960 B (+3,856) |
+| `5a0b302` (F7b closed) | 1,119,168 B (-2,240) | 711,928 B (-32) |
+
+### F7b closed: performance and size
+
+Six items, one commit each, each through the full gate (test262 2980 in both encodings,
+`differential-v8` identical to `diff-F7a.json`, the internal differentials at 0):
+- **b1** one procedure for the binary size (`scripts/measure_binary.sh`, above);
+- **b2** `compile` no longer runs the no-op `Optimizer` (see its section; the in-place
+  hand-over of the writer's buffer was reverted at the close);
+- **b3** LookLinear delegates lookaheads under `i` in code-point mode (sites 7,234 ->
+  7,264, 0 differences);
+- **b4** the C API applies `ZRegexOptions.max_steps` (`Regex.limits`; see "F6a", limits);
+- **b5** the loop guard's set is `GuardSet` (see "F6a", known costs);
+- **b6** three local compile costs removed (see "F5a", compile time): -30% to -39%
+  instructions per compile on small patterns with a class or a property.
+
+**Close bench** (10 interleaved rounds of `zregex_xbench` against `1a48240`, minimum time
+per case, criterion: none worse than 10%). The first run flagged 16 of 110 metrics; one was
+real: `t1_pL` compile +119%, bisected to b2's in-place hand-over and fixed (`5a0b302`;
+callgrind hadn't shown it, the cost is in the allocator). A second run, with the fix,
+flagged 7, a set disjoint from the first run's (`t1_book_pL` short exec, `t2_book_backref`,
+`t2_lookahead` short exec, `t2_lookbehind` compile, `t0_iter_cap` short exec). Every flagged
+case of both runs executes the same instructions as the base (callgrind on the full corpus
+and on the short exec: -0.73% to +0.73%; `t2_lookbehind` compile +0.7%), so they are the
+process-to-process noise measured in F7-0, which the minimum doesn't fully remove when a
+base round happens to be fast. Improvements in the second run: compile `t0_email` -48.7%,
+`t2_book_backref` -39.8%, `t1_book_pL` -36.7%, `t1_pL` -29.8%.
+
+### F6b step 1 (B′): lookbehind of fixed length, the recursive matcher retired
+
+**What runs.** A lookbehind whose body consumes a fixed number of characters `L`
+(`hir.fixedLength`: literals, sets, assertions, lookarounds, `min == max` repeats,
+alternations of equal branches; code units without `u`/`v`, code points with them) and has
+no capture group inside runs on the explicit-stack backtracker: it steps `L` characters back
+(`Subject.decodeBefore`, which keeps a surrogate pair and WTF-8's `b+2` straight) and
+matches the body forward from there, requiring it to end where the lookbehind stands
+(`LOOKBEHIND_FIXED L`; no reverse code generation). LookLinear delegates such a body to T0's
+VM from `L` characters back. **Anything else is `error.UnsupportedFeature`** at compile time,
+after the parser's SyntaxErrors (C API: `ZREGEXP_ERROR_UNSUPPORTED = 9`; no new symbol):
+variable length (`(?<=a+)`, `(?<=a|bc)`), a capture group or a backreference inside
+(`(?<=(a))`, `(?<=\1)`), and also a variable-length lookbehind in code that never runs
+(inside a `{0}`), which the old code generator dropped. Full F6b (matching backward) lifts
+the error; it is mandatory (z-interpreter needs all of lookbehind).
+
+**The recursive matcher is gone.** Every pattern runs on the explicit-stack backtracker;
+`recursive_matcher.zig` became `core.zig` (the state and the atom checks, without the
+recursive control flow and the 100-character window of D7). Patterns with a lookbehind now
+get RepeatMatcher steps 4 and 2.b (F7a(4)), which the recursive matcher never had.
+
+**Measured.**
+- test262: 2980 -> **2968** in UTF-16 and WTF-8, as predicted: the 12 entries that passed
+  and now fail to compile are `lookBehind/{alternations, back-references, do-not-backtrack,
+  misc, nested-lookaround, sliced-strings}.js` (sloppy and strict), every one with a
+  lookbehind of variable length or with captures (`nested-lookaround`'s first rejected one
+  is `(?<=a(?=([^a]{2})d)\w{3})`: fixed length, with a capture in an inner lookahead). The
+  30 lookbehind entries not passing are all `UnsupportedFeature`; none fails at run time.
+- Against V8 (F2c corpus, 5,580 patterns with a lookbehind, every `lastIndex`, UTF-16):
+  the 1,279 of fixed length without captures had 18 patterns with a difference, now 7 and
+  none new. The 11 whose only difference was a capture outside the lookbehind (steps 4 and
+  2.b) are fixed; the 7 left are 3 not caused by the lookbehind (`v` with `i` folding, F5c;
+  a step limit; V8 inside a pair), 3 V8 matches inside a surrogate pair (below) and 1 `v`
+  with `i` (F5c). No fixed-length pattern is `UnsupportedFeature`; 4,298 of the other
+  4,301 are, and the 3 that compile agree with V8. npm: the 29 fixed-length patterns agree
+  with V8 in all 3,262 runs.
+- LookLinear on vs off over the 1,415 corpus patterns with a lookbehind that compile: 1,298
+  with delegated sites (1,912), 0 differences in 298,540 runs. On the lookahead patterns:
+  4,441 -> 4,378 (63 now rejected: a variable-length lookbehind in a `{0}` the old code
+  generator dropped), 0 differences.
+- Binary (`scripts/measure_binary.sh`): ReleaseFast 1,119,168 -> 1,096,112 B (-23,056),
+  ReleaseSmall 711,928 -> 696,504 B (-15,424).
+
+### Known divergence: V8 matches inside a surrogate pair under `u`/`v`
+
+With `u`/`v` and a search that passes over a surrogate pair, V8 reports a match at the
+position between the pair's two units, which the spec doesn't require: under `u`/`v` the
+input is a list of code points and no position falls inside one. zregex follows the spec.
+Known divergence, not fixed. Found by the lookbehind differential of F6b's precheck (F2c
+corpus, UTF-16), four patterns, all zero-width at that position:
+
+| Pattern | Subject, `lastIndex` | V8 | zregex |
+|---|---|---|---|
+| `/(?<!a)/v` | `"a𝌆bé"`, 1 | `[2,2]` | `[3,3]` |
+| `/[0-9a]ß\|(?<n0>(?<!^))+?/mv` | `"😀x😀"`, 0 | `[1,1]` | `[2,2]` |
+| `/é*(…){0,1}?(?<!(?<=\S))/mu` | `"😀x😀"`, 2 | `[4,4]` | no match |
+| `/\B(?<![^\sa]😀\*[^z])/v` (also `/\B/v`) | `"😀x😀"`, 2 | `[4,4]` | `[5,5]` |
 
 ### Fixed in F2b
 
@@ -1636,7 +1841,7 @@ strictness is itself only the unrecognized-escape slice — see above).
 | Alternation (`\|`) | ✅ Working |
 | Capturing / non-capturing groups | ✅ Working |
 | Backreferences `\1`-`\9` | ✅ Working |
-| Lookahead / Lookbehind | ✅ Working |
+| Lookahead / Lookbehind | ✅ Working (lookbehind: fixed length without captures, F6b step 1) |
 | Anchors `^`, `$`, `\b`, `\B` (string-level) | ✅ Working |
 | `case_insensitive` (ASCII) | ✅ Working |
 | ReDoS protection (step/recursion limits) | ✅ Working |

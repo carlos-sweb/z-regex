@@ -184,6 +184,19 @@ pub const Opcode = enum(u8) {
     /// Format: [CLEAR_CAPTURE group:u16]
     CLEAR_CAPTURE = 0x24,
 
+    /// Record where one iteration of a quantifier with a nullable body
+    /// starts, in mark `m` (a hidden slot after the capture groups, undone
+    /// on backtracking like a capture). RepeatMatcher step 2.b (F7a(4)):
+    /// only in programs for the explicit-stack backtracker.
+    /// Format: [REPEAT_MARK m:u16]
+    REPEAT_MARK = 0x25,
+
+    /// Fail if the iteration that `REPEAT_MARK m` opened ends where it
+    /// started: an iteration above the quantifier's minimum that matches
+    /// the empty string fails (RepeatMatcher step 2.b).
+    /// Format: [REPEAT_CHECK m:u16]
+    REPEAT_CHECK = 0x26,
+
     // =========================================================================
     // Backreferences (0x30-0x3F)
     // =========================================================================
@@ -236,13 +249,15 @@ pub const Opcode = enum(u8) {
     /// Format: [NEGATIVE_LOOKAHEAD len:u32 ... LOOKAHEAD_END]
     NEGATIVE_LOOKAHEAD = 0x51,
 
-    /// Positive lookbehind
-    /// Format: [LOOKBEHIND len:u32 ... LOOKBEHIND_END]
-    LOOKBEHIND = 0x52,
+    /// Positive lookbehind of fixed length (F6b step 1, B′): the body
+    /// consumes exactly `len` characters, so it runs forward from `len`
+    /// characters back and must end where the lookbehind stands.
+    /// Format: [LOOKBEHIND_FIXED len:u32 ... LOOKBEHIND_END]
+    LOOKBEHIND_FIXED = 0x52,
 
-    /// Negative lookbehind
-    /// Format: [NEGATIVE_LOOKBEHIND len:u32 ... LOOKBEHIND_END]
-    NEGATIVE_LOOKBEHIND = 0x53,
+    /// Negative lookbehind of fixed length (see LOOKBEHIND_FIXED).
+    /// Format: [NEGATIVE_LOOKBEHIND_FIXED len:u32 ... LOOKBEHIND_END]
+    NEGATIVE_LOOKBEHIND_FIXED = 0x53,
 
     /// End of lookahead assertion
     /// Format: [LOOKAHEAD_END]
@@ -278,10 +293,10 @@ pub const Opcode = enum(u8) {
         return switch (self) {
             .CHAR, .CHAR32, .BYTE, .CHAR2, .CHAR_RANGE, .CHAR_RANGE_INV, .CHAR_CLASS, .CHAR_CLASS_INV, .CHAR_ANY, .CHAR_SET, .CHAR_SET_INV, .UNICODE_PROPERTY, .UNICODE_PROPERTY_INV, .UNICODE_SCRIPT, .UNICODE_SCRIPT_INV, .UNICODE_SCRIPT_EXTENSIONS, .UNICODE_SCRIPT_EXTENSIONS_INV => .character_match,
             .MATCH, .GOTO, .SPLIT, .SPLIT_GREEDY, .SPLIT_LAZY, .SPLIT_POSSESSIVE, .LOOP => .control_flow,
-            .SAVE_START, .SAVE_END, .SAVE_START_NAMED, .SAVE_END_NAMED, .CLEAR_CAPTURE => .capture,
+            .SAVE_START, .SAVE_END, .SAVE_START_NAMED, .SAVE_END_NAMED, .CLEAR_CAPTURE, .REPEAT_MARK, .REPEAT_CHECK => .capture,
             .BACK_REF, .BACK_REF_I => .backreference,
             .LINE_START, .LINE_END, .WORD_BOUNDARY, .NOT_WORD_BOUNDARY, .STRING_START, .STRING_END => .assertion,
-            .LOOKAHEAD, .NEGATIVE_LOOKAHEAD, .LOOKBEHIND, .NEGATIVE_LOOKBEHIND, .LOOKAHEAD_END, .LOOKBEHIND_END => .lookaround,
+            .LOOKAHEAD, .NEGATIVE_LOOKAHEAD, .LOOKBEHIND_FIXED, .NEGATIVE_LOOKBEHIND_FIXED, .LOOKAHEAD_END, .LOOKBEHIND_END => .lookaround,
             .PUSH_POS, .CHECK_POS => .special,
             _ => .unknown,
         };
@@ -294,13 +309,13 @@ pub const Opcode = enum(u8) {
             .CHAR, .CHAR_ANY, .MATCH, .LINE_START, .LINE_END, .WORD_BOUNDARY, .NOT_WORD_BOUNDARY, .STRING_START, .STRING_END, .LOOKAHEAD_END, .LOOKBEHIND_END, .PUSH_POS, .CHECK_POS => 1,
 
             // 3 bytes (opcode + u16 capture group, D9)
-            .SAVE_START, .SAVE_END, .BACK_REF, .BACK_REF_I, .CLEAR_CAPTURE => 3,
+            .SAVE_START, .SAVE_END, .BACK_REF, .BACK_REF_I, .CLEAR_CAPTURE, .REPEAT_MARK, .REPEAT_CHECK => 3,
 
             // 2 bytes (opcode + u8)
             .UNICODE_PROPERTY, .UNICODE_PROPERTY_INV, .UNICODE_SCRIPT, .UNICODE_SCRIPT_INV, .UNICODE_SCRIPT_EXTENSIONS, .UNICODE_SCRIPT_EXTENSIONS_INV, .BYTE => 2,
 
             // 5 bytes (opcode + u32)
-            .CHAR32, .CHAR_SET, .CHAR_SET_INV, .LOOKAHEAD, .NEGATIVE_LOOKAHEAD, .LOOKBEHIND, .NEGATIVE_LOOKBEHIND => 5,
+            .CHAR32, .CHAR_SET, .CHAR_SET_INV, .LOOKAHEAD, .NEGATIVE_LOOKAHEAD, .LOOKBEHIND_FIXED, .NEGATIVE_LOOKBEHIND_FIXED => 5,
 
             // 7 bytes (opcode + u16 + u32)
             .SAVE_START_NAMED, .SAVE_END_NAMED => 7,
