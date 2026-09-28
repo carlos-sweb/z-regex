@@ -1225,19 +1225,21 @@ pattern with `i` and `é`, now on the VM), none new: `diff-F5b.json`.
 | `[À-Ö]` | `u` / `iu` | 1.14 / 1.70 | 0.78 / 1.33 |
 | `k` | `u` / `iu` | 0.63 / 0.98 | 0.40 / 0.60 |
 
-Against `.expert` every case is within §7.2 (<= 2x or <= +2 us). **Against the same
-pattern without `i`, a folded property is not:** `\p{L}` +1.9 us (2.2x), `\p{L}+` +2.7 us,
-`\p{Lu}` +4.2 us (6.6x). The folded property is no longer the property opcode but a set of
-~700-2,000 ranges (union with its precomputed delta, codegen copy, interning). Properties
-whose delta is empty (`\p{Nd}`) keep the property path. The case the F5 plan flagged as
-pathological, `[^\p{L}]` under `iu`, costs +0.7 us over `u`.
+Against `.expert` every case is within §7.2 (<= 2x or <= +2 us): `\p{L}` under `iu` at
+3.51 us is 1.22x `.expert`, `\p{Lu}` under `iu` at 4.99 us is 1.08x. Against the same
+property without `i` it goes up by +2 to +4 us (`\p{L}` +1.9, `\p{L}+` +2.7, `\p{Lu}`
++4.2): the folded property is no longer the property opcode but a set of ~700-2,000 ranges
+(union with its precomputed delta, codegen copy, interning). Properties whose delta is
+empty (`\p{Nd}`) keep the property path. The case the F5 plan flagged as pathological,
+`[^\p{L}]` under `iu`, costs +0.7 us over `u`. **Accepted.**
 
-**Binary** (`.so`, stripped): ReleaseFast 974,304 -> 1,112,272 B (+137,968 B, +14.2 %),
-ReleaseSmall 575,480 -> 708,520 B (+133,040 B, +23.1 %) for Parts 1, 1b and 2 together,
-above the plan's +70 KB. `.rodata` +114 KB: the class tables (~69 KB, both modes) and the
-property deltas (~45 KB, 5,647 ranges, almost all in the 25 case-related properties:
-`Lu`, `Ll`, `Uppercase`, `Lowercase`, `Changes_When_*`...); `.data.rel.ro` +8.5 KB (the
-delta slices); `.text` +12 KB.
+**Binary** (`.so`, stripped), Parts 1, 1b and 2 together: +138 KB, ReleaseFast 974,304 ->
+1,112,272 B (+14.2 %), ReleaseSmall 575,480 -> 708,520 B (+23.1 %), above the plan's
++70 KB. Breakdown: 69 KB of class tables (both modes), 45 KB of property deltas (5,647
+ranges, almost all in the 25 case-related properties: `Lu`, `Ll`, `Uppercase`,
+`Lowercase`, `Changes_When_*`...), 8.5 KB of pointers (the delta slices) and 12 KB of
+code. **Accepted.** If a consumer needs a smaller binary, the folding tables can move to
+a separate module (noted for F7).
 
 ### test262 baseline (F0b)
 

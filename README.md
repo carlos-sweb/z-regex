@@ -242,7 +242,8 @@ The full list, with measurements: [docs/KNOWN_LIMITATIONS.md](docs/KNOWN_LIMITAT
 - **T0: done** (F4a, F4b; v0.3.0; v0.3.1 adds the SIMD literal search; v0.3.2 adds `Regex.iterator`).
 - **F5, T1 (Unicode):** F5a done (`u` and `\p{…}` on the VM, every UCD property name);
   F5b done (full case folding under `i`); F5c (full `v`) pending.
-- **F6a, T2 without lookbehind:** pending.
+- **F6a, T2 without lookbehind: done** (explicit-stack backtracker, capture trail,
+  LookLinear; F6a(1)–(3)).
 - **F6b, lookbehind (or its plan B):** pending.
 
 No dates. Phases and exit criteria: [docs/REGEX_TIERS_PLAN.md](docs/REGEX_TIERS_PLAN.md).
