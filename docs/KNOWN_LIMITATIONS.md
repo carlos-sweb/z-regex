@@ -1051,6 +1051,8 @@ phase product). D5 fallbacks to the backtracker (`two_pass_fallbacks`): 0 in eve
 - **Systemic note.** This is the third layout case in the project (F4a(4), F4b(4) and
   F4a(4)A's prefilter). After T0, decide how to measure without depending on LLVM's
   layout: separate binaries, more runs, or `-fno-llvm` for the bench.
+  **F7-0:** most of this is the environment's noise, not layout; see "Bench noise and the
+  historical layout regressions (F7-0)" below.
 
 ### F5a: `u` and `\p{...}` on T0's VM, every UCD property name
 
@@ -1172,6 +1174,26 @@ side out of line (`noinline`): inlined, its frame cost every T0 call ~25 ns.
 iterations, so a long loop whose body isn't a single atom is quadratic: 5,000 iterations of
 `(?:ab)*` take ~7 ms (for F7 if it matters). The binary
 grows while both executors coexist (until F6b).
+
+### Bench noise and the historical layout regressions (F7-0)
+
+The bench's precision was measured in F7-0 (`docs/BENCHMARKS.md`, "Precision (F7-0)"): in
+this environment one case moves 20–45% from one process to the next, ASLR off and a 2 MiB
+aligned input don't reduce it, and with 10 rounds the median can't see changes under ~20%
+(the minimum time per case can, to ~4%). The three "layout regressions" below were measured
+with the median of 10 rounds, inside that noise. They are not reopened; they are noted here
+so nobody investigates them again:
+
+- **F4a(4):** the backtracker cases lost 11.3% (`<(\w+)>.*?<\/\1>`) to 18.6%
+  (`(?<=\$)\d+`) in `findAll`, with instruction counts unchanged (callgrind, +2%). Possibly
+  part noise.
+- **F4b(4):** the capture-less path lost 7–14% in `execAt`, "resolved" by moving the tagged
+  VM to its own file (`090678e`). Possibly part noise; the recovery was measured the same
+  way.
+- **F6a:** the regression that led to the `noinline` `execBacktracker` and to
+  `initScratchInto` may have included noise, but the fixes are real: callgrind gives 1,644
+  -> 1,537 instructions per short exec (base 1,435), and `t0_literal`'s short exec went
+  20.6 -> 45.5 -> 20.0 ns (`5c34af3`).
 
 ### F5b: full case folding under `i` (F5b closed)
 

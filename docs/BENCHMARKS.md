@@ -24,6 +24,31 @@ rounds, with the min–max band** in parentheses. Harness, corpora and runner:
 `bench/compare/` (`prepare.sh` builds everything, `run.mjs` only runs, `analyze.mjs` writes
 `bench/results.json`, the raw aggregated numbers).
 
+**Precision (F7-0).** Two series of 5 interleaved rounds of the same z-regex binary differ
+by more than 5% in 35 to 45 of the 66 throughput metrics, whatever was tried:
+
+| Setup (same binary, series A vs B, 5 rounds each) | Metrics with \|A−B\| > 5% | Median \|A−B\| | Max \|A−B\| |
+|---|---|---|---|
+| Samples of ≥ 100 ms instead of one pass (tried in F7-0, not kept) | 45 / 66 | 7.3% | 33.8% |
+| ASLR off (`setarch -R`), one pass per sample | 35 / 66 | 5.7% | 42.8% |
+| ASLR off and the input 2 MiB-aligned | 36 / 66 | 5.8% | 35.5% |
+
+With the same address layout in every process the spread doesn't drop, so it isn't layout:
+it is the shared VM's timing noise, which moves one case by 20–45% from one process to the
+next (each whole run stays within 0.91–1.01 of the median). A bootstrap over the 10 ASLR-off
+runs gives how two series of n rounds compare, per estimator of a case:
+
+| Estimator | n = 5 | n = 10 | n = 20 |
+|---|---|---|---|
+| Median of the rounds: metrics > 5%, p90 \|A−B\| | 52%, 32.0% | 44%, 20.0% | 31%, 14.8% |
+| Best round (minimum time = the max MB/s of the band): metrics > 5%, p90 \|A−B\| | 21%, 7.9% | 8%, 4.2% | 2%, 2.1% |
+
+**In this environment the bench cannot detect changes under ~20% with 10 rounds using the
+median; §7.2's 10% gate is applied with this precision.** Comparing the minimum time per case
+(the max MB/s of the min–max band, already in `bench/results.json`), the precision with 10
+rounds is ~4% (p90): regression checks compare the minimum. Changes finer than that are
+measured with callgrind or a dedicated probe, not with this bench.
+
 **Metrics.**
 - *findAll MB/s*: every match through each engine's allocating convenience API (z-regex
   `Regex.findAll`, JS `String.prototype.matchAll`, Rust `find_iter`/`captures_iter` collected,
