@@ -753,8 +753,8 @@ starts inside a character. That also fixes captures that were silently wrong:
   callback); in safe builds using one twice at once panics.
 - **Still code points everywhere:** until F3d a pattern without `u` also decodes code
   points, in both encodings. `CompileResult.mode` already records what F3d will use.
-- **`ExecLimits`** is the old `ExecOptions`: the step budget is still per start position
-  (F6a, D11).
+- **`ExecLimits`** was the old `ExecOptions` until F6a, which gave it its own fields
+  (see the F6a section); the step budget is still per start position.
 - **Byte-offset facade:** `findAt` at an offset inside a character returns `null` (it used
   to start there). New `Regex.findFrom(input, start)` searches from `start`.
 - **C API:** `zregex_exec_wtf8`, `zregex_exec_utf16`, `zregex_advance_index_wtf8` and
@@ -1115,6 +1115,63 @@ backlog.
 - `\u{...}` without `u`/`v` is read as a code point escape (`/\u{1F600}/` matches
   `😀`); ECMA-262 (Annex B) and V8 read `\u` as the letter `u` followed by `{1F600}`
   as text (and `/\u{2}/` as `uu`). Found while verifying the bug A fix; not fixed.
+
+### F6a: explicit-stack backtracker, capture trail, LookLinear
+
+**Explicit stack (F6a(1)).** T2 patterns without a lookbehind run on
+`src/tier2/executor/backtrack.zig`: the same bytecode, order and step count as the
+recursive matcher, with pending alternatives on a heap stack of choicepoints. The caller's
+stack no longer decides whether a match answers (D14 closed) and `()\1{1000}` gives the
+spec's empty match (D15 closed). Loops whose body isn't a single atom no longer stop at
+~330 iterations (`RecursionLimitExceeded` before; `(x)(?:ab)*\1` over 5,000 `ab` now
+matches). Patterns with a lookbehind stay on the recursive matcher until F6b, with its
+depth limit of 1000 (`RecursionLimitExceeded`).
+
+**Capture trail (F6a(2)).** Capture writes go to a trail, undone to each choicepoint's
+height. Fixed on the way (bug F, docs/F6A_PRECHECK.md): once a positive lookahead
+succeeded, its captures survived a later backtrack past it (`/(?:(?=(a))ab|ac)/` on "ac"
+gave group 1 = "a"; V8: undefined). The capture of a discarded empty iteration is still
+not reset (the recursive matcher's known limitation, kept).
+
+**LookLinear (F6a(3)).** A lookahead whose body has no captures, backreferences or nested
+lookarounds, and that T0's VM takes, is answered by `tier0.existsAnchoredMatch` with a
+2-bit-per-position memo per execution (docs/REGEX_TIERS_PLAN.md §4.4). Not delegated: `v`
+patterns (F5c), `i` in `u` mode (F5b's folding), lookbehind (F6b). On the F2c and npm
+corpora, 2,463 of the 4,441 patterns with a lookahead have delegated sites; on and off
+give the same slots in all 566,490 runs.
+
+**Limits (`ExecLimits`, D11).**
+- `max_steps` (default 1,000,000): per start position, as before; the VM's steps for a
+  delegated lookahead come out of the same budget.
+- `max_backtrack_stack_bytes` (default 64 MiB): choicepoints, trail, loop guards and star
+  positions together; past it, `error.BacktrackStackExhausted` (C API:
+  `ZREGEXP_ERROR_RECURSION_LIMIT`).
+- `max_memo_bytes` (default 1 MiB): a memo table that doesn't fit isn't an error, that
+  lookahead runs without memo; 0 turns the memo off.
+- `max_recursion_depth` is gone (API change): only the recursive matcher had one.
+- The C API still doesn't take limits per execution (no ABI change).
+
+**Bench** (10 interleaved rounds of `zregex_xbench` against `66a9d60`, median `execAt`
+MB/s; the backtracker cases):
+
+| Case | Before | After | |
+|---|---|---|---|
+| `t2_lookahead` `(?=.*[a-z])(?=.*[A-Z]).{8,}` | 3.78 | 9.77 | x2.58 (LookLinear) |
+| `t2_backref` `<(\w+)>.*?<\/\1>` | 36.18 | 35.36 | -2.3 % |
+| `t2_book_backref` `\b(\w+) \1\b` | 11.01 | 11.25 | +2.1 % |
+| `t2_lookbehind` `(?<=\$)\d+` (recursive matcher) | 0.745 | 0.763 | +2.4 % |
+| `t1_vset` (backtracker) | 25.94 | 22.65 | -12.7 % |
+| `t0_az_bt` `[a-z]+` forced to the backtracker | 37.47 | 36.00 | -3.9 % |
+
+`(a+)+b` and `(a|aa)*c` forced to the backtracker still give `StepLimitExceeded`, in 26.4
+and 22.3 ms (29.0 and 24.8 before). Compiling a pattern with delegated lookaheads costs
+their T0 programs (`t2_lookahead`: 3.5 -> 4.9 us). `Regex.exec` keeps the backtracker's
+side out of line (`noinline`): inlined, its frame cost every T0 call ~25 ns.
+
+**Known costs.** The zero-progress loop guard is still a linear search over the active
+iterations, so a long loop whose body isn't a single atom is quadratic: 5,000 iterations of
+`(?:ab)*` take ~7 ms (for F7 if it matters). The binary
+grows while both executors coexist (until F6b).
 
 ### test262 baseline (F0b)
 

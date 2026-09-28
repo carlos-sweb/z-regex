@@ -22,7 +22,9 @@ pub const layers = [_]Layer{
     .{ .name = "frontend", .root = "src/frontend/root.zig", .deps = &.{ "ir", "unicode" } },
     .{ .name = "tier0", .root = "src/tier0/root.zig", .deps = &.{ "ir", "utils", "subject" } },
     .{ .name = "tier1", .root = "src/tier1/root.zig", .deps = &.{ "ir", "unicode", "utils", "subject", "tier0" } },
-    .{ .name = "tier2", .root = "src/tier2/root.zig", .deps = &.{ "ir", "unicode", "utils", "subject" } },
+    // tier2 -> tier0 (F6a): lookaheads without captures run on T0's VM
+    // (`existsAnchoredMatch`, docs/REGEX_TIERS_PLAN.md §4.4 D-B).
+    .{ .name = "tier2", .root = "src/tier2/root.zig", .deps = &.{ "ir", "unicode", "utils", "subject", "tier0" } },
     .{ .name = "zregex", .root = "src/main.zig", .deps = &.{ "ir", "unicode", "utils", "subject", "frontend", "tier0", "tier1", "tier2", "build_options" } },
 };
 
@@ -107,6 +109,13 @@ const canaries = [_]Canary{
         .bad = "pub fn f() usize {\n    return @sizeOf(@import(\"tier2\").ExecOptions);\n}\n",
         .good = "pub fn f() usize {\n    return @sizeOf(@import(\"tier0\").hir.Flags);\n}\n",
         .expect = "no module named 'tier2' available within module 'tier1'",
+    },
+    .{
+        // F6a's edge goes down only: tier2 may import tier0, not back.
+        .layer = "tier0",
+        .bad = "pub fn f() usize {\n    return @sizeOf(@import(\"tier2\").ExecLimits);\n}\n",
+        .good = "pub fn f() usize {\n    return @sizeOf(@import(\"utils\").budget.Budget);\n}\n",
+        .expect = "no module named 'tier2' available within module 'tier0'",
     },
     .{
         .layer = "tier0",

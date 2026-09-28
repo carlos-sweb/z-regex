@@ -35,6 +35,9 @@ const std = @import("std");
 const Allocator = std.mem.Allocator;
 const format = @import("../bytecode/format.zig");
 const recursive = @import("recursive_matcher.zig");
+const tier0 = @import("tier0");
+const Budget = @import("utils").budget.Budget;
+const LinearSite = @import("../program.zig").LinearSite;
 
 const CaptureGroup = recursive.CaptureGroup;
 const LoopState = recursive.LoopState;
@@ -51,6 +54,43 @@ pub const DEFAULT_MAX_BACKTRACK_STACK_BYTES: usize = 64 << 20;
 pub const ExecLimits = struct {
     max_steps: usize = recursive.DEFAULT_MAX_STEPS,
     max_backtrack_stack_bytes: usize = DEFAULT_MAX_BACKTRACK_STACK_BYTES,
+    /// The most a LookLinear memo table may take, per delegated lookahead
+    /// (2 bits per position of the subject). Not an error when a table
+    /// doesn't fit: that lookahead runs without memo. 0 turns the memo off.
+    max_memo_bytes: usize = DEFAULT_MAX_MEMO_BYTES,
+};
+
+/// Default `ExecLimits.max_memo_bytes`: memo for subjects up to 4 Mi units.
+pub const DEFAULT_MAX_MEMO_BYTES: usize = 1 << 20;
+
+/// LookLinear's memo for one delegated program (§4.4): 2 bits per position,
+/// `00` not evaluated, `01` no anchored match there, `10` one. Valid for
+/// one execution (`gen`); a new one clears only the range the last one
+/// touched, so an execution never pays for more of it than it used.
+pub const LookMemo = struct {
+    bits: std.ArrayListUnmanaged(u8) = .empty,
+    lo: usize = std.math.maxInt(usize),
+    hi: usize = 0,
+    gen: u32 = 0,
+
+    fn begin(self: *LookMemo, gen: u32) void {
+        if (self.lo <= self.hi) @memset(self.bits.items[self.lo / 4 .. self.hi / 4 + 1], 0);
+        self.lo = std.math.maxInt(usize);
+        self.hi = 0;
+        self.gen = gen;
+    }
+
+    fn get(self: *const LookMemo, pos: usize) ?bool {
+        const v = (self.bits.items[pos / 4] >> @intCast(pos % 4 * 2)) & 3;
+        std.debug.assert(v != 3);
+        return if (v == 0) null else v == 2;
+    }
+
+    fn put(self: *LookMemo, pos: usize, found: bool) void {
+        self.bits.items[pos / 4] |= @as(u8, if (found) 2 else 1) << @intCast(pos % 4 * 2);
+        self.lo = @min(self.lo, pos);
+        self.hi = @max(self.hi, pos);
+    }
 };
 
 /// A capture slot's value before a write: undone on backtracking.
@@ -95,24 +135,40 @@ pub fn BacktrackerFor(comptime Unit: type) type {
         steps: usize = 0,
         /// Index + 1 of the innermost lookahead barrier in `stack` (0: none).
         look_top: u32 = 0,
+        scratch: *Scratch,
+        /// LookLinear's sites and programs (`CompileResult.linear`).
+        linear: []const LinearSite = &.{},
+        programs: []const tier0.Program = &.{},
 
         const Core = recursive.RecursiveMatcherFor(Unit);
         const Self = @This();
 
         pub const MatchError = Core.MatchError || error{BacktrackStackExhausted};
 
-        /// A backtracker on `scratch`'s buffers; hand them back with
-        /// `releaseScratch`.
-        pub fn initScratch(bytecode: []const u8, input: []const Unit, limits: ExecLimits, capture_slots: usize, scratch: *Scratch) Allocator.Error!Self {
+        /// A backtracker on `scratch`'s buffers, built in place (the core
+        /// is a few hundred bytes, and this runs per execution); hand them
+        /// back with `releaseScratch`.
+        pub fn initScratchInto(self: *Self, bytecode: []const u8, input: []const Unit, limits: ExecLimits, capture_slots: usize, scratch: *Scratch) Allocator.Error!void {
             // The core's own limits stay off: it never runs `matchFrom`.
-            const core = try Core.initScratch(bytecode, input, .unlimited(), capture_slots, scratch);
-            var stack = scratch.choices;
-            var trail = scratch.trail;
+            try self.core.initScratchInto(bytecode, input, .unlimited(), capture_slots, scratch);
+            self.stack = scratch.choices;
+            self.trail = scratch.trail;
             scratch.choices = .empty;
             scratch.trail = .empty;
-            stack.clearRetainingCapacity();
-            trail.clearRetainingCapacity();
-            return .{ .core = core, .stack = stack, .trail = trail, .limits = limits };
+            self.stack.clearRetainingCapacity();
+            self.trail.clearRetainingCapacity();
+            self.limits = limits;
+            self.steps = 0;
+            self.look_top = 0;
+            self.scratch = scratch;
+            self.linear = &.{};
+            self.programs = &.{};
+            // A new execution: the memo tables from the last one are stale.
+            scratch.look_gen +%= 1;
+            if (scratch.look_gen == 0) {
+                for (scratch.look_memo.items) |*m| m.begin(0);
+                scratch.look_gen = 1;
+            }
         }
 
         pub fn releaseScratch(self: *Self, scratch: *Scratch) void {
@@ -396,6 +452,16 @@ pub fn BacktrackerFor(comptime Unit: type) type {
                 },
 
                 .LOOKAHEAD, .NEGATIVE_LOOKAHEAD => {
+                    // LookLinear: T0's VM (or the memo) says whether the
+                    // body matches here; it has no captures, so nothing
+                    // goes on the trail and no barrier is needed.
+                    if (self.linearSite(pc)) |site| {
+                        if (try self.lookLinear(site, pos)) |found| {
+                            if (found == (inst.opcode == .NEGATIVE_LOOKAHEAD)) return false;
+                            pc_ptr.* = site.end + 1;
+                            return true;
+                        }
+                    }
                     const end_pc = try self.core.findLookaheadEnd(next);
                     var c = self.choice(.look, end_pc + 1, pos);
                     c.a = @intFromBool(inst.opcode == .NEGATIVE_LOOKAHEAD);
@@ -440,6 +506,54 @@ pub fn BacktrackerFor(comptime Unit: type) type {
             }
             pc_ptr.* = next;
             return true;
+        }
+
+        /// The LookLinear site of the lookahead at `pc`, if any.
+        fn linearSite(self: *const Self, pc: usize) ?LinearSite {
+            if (self.linear.len == 0) return null;
+            const i = std.sort.binarySearch(LinearSite, self.linear, pc, struct {
+                fn order(key: usize, site: LinearSite) std.math.Order {
+                    return std.math.order(key, site.pc);
+                }
+            }.order) orelse return null;
+            return self.linear[i];
+        }
+
+        /// Whether the delegated body of `site` matches anchored at `pos`:
+        /// the memo, or T0's VM on the same step budget. Null if the VM
+        /// can't answer (never expected: `pos` is always a position), and
+        /// the backtracker evaluates the body itself.
+        fn lookLinear(self: *Self, site: LinearSite, pos: usize) MatchError!?bool {
+            const s = self.scratch;
+            const memo = try self.memoFor(site.program);
+            if (memo) |m| if (m.get(pos)) |found| {
+                s.look_memo_hits += 1;
+                return found;
+            };
+            var budget: Budget = if (self.limits.max_steps > 0) .init(self.limits.max_steps - self.steps) else .unlimited;
+            const before = budget.remaining;
+            const found = tier0.existsAnchoredMatch(&self.programs[site.program], self.core.subject(), self.core.mode, pos, .forward, &s.look_vm, &budget) catch |err| switch (err) {
+                error.OutOfMemory => return error.OutOfMemory,
+                error.StepLimitExceeded => return error.StepLimitExceeded,
+                error.InvalidIndex, error.Unsupported => return null,
+            };
+            if (self.limits.max_steps > 0) self.steps += @intCast(before - budget.remaining);
+            s.look_evals += 1;
+            if (memo) |m| m.put(pos, found);
+            return found;
+        }
+
+        /// The memo of program `index` for this execution, or null when its
+        /// table wouldn't fit in `max_memo_bytes`.
+        fn memoFor(self: *Self, index: usize) MatchError!?*LookMemo {
+            const bytes = self.core.input.len / 4 + 1;
+            if (bytes > self.limits.max_memo_bytes) return null;
+            const s = self.scratch;
+            if (s.look_memo.items.len < self.programs.len) try s.look_memo.appendNTimes(s.gpa, .{}, self.programs.len - s.look_memo.items.len);
+            const m = &s.look_memo.items[index];
+            if (m.gen != s.look_gen) m.begin(s.look_gen);
+            if (m.bits.items.len < bytes) try m.bits.appendNTimes(s.gpa, 0, bytes - m.bits.items.len);
+            return m;
         }
 
         /// Repeat the starred atom at `pc_atom` from `pos` while it matches

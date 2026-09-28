@@ -348,3 +348,93 @@ test "regression: a WTF-8 surrogate or an escaped non-ASCII character in the pat
     const e = (try esc.find("\u{E9}\u{E9}")) orelse return error.TestExpectedMatch;
     e.deinit();
 }
+
+/// One `execAt` of `pattern` on the backtracker (`force_tier = .expert`),
+/// with LookLinear on or off: the slots, how many delegated sites the
+/// pattern has and how often the VM and the memo answered.
+const LookRun = struct { found: bool, slots: [4]?usize, sites: usize, evals: u64, memo_hits: u64 };
+
+fn lookRun(pattern: []const u8, input: []const u8, look_linear: bool, limits: zregex.ExecLimits) !LookRun {
+    const a = testing.allocator;
+    var re = try zregex.Regex.compileWithOptions(a, pattern, .{ .force_tier = .expert, .t2_look_linear = look_linear });
+    defer re.deinit();
+    var scratch = zregex.Scratch.init(a);
+    defer scratch.deinit();
+    var r: LookRun = .{ .found = false, .slots = @splat(null), .sites = re.compiled.linear.len, .evals = 0, .memo_hits = 0 };
+    var out: zregex.MatchSlots = .{ .slots = r.slots[0..re.slotCount()] };
+    r.found = try re.execAt(.{ .wtf8 = input }, 0, &scratch, &out, limits);
+    r.evals = scratch.bt.look_evals;
+    r.memo_hits = scratch.bt.look_memo_hits;
+    return r;
+}
+
+// LookLinear (F6a, docs/REGEX_TIERS_PLAN.md §4.4 D-B): the switch, both
+// ways. On, the lookahead is a delegated site and T0's VM answers it; off,
+// there is no site and the VM never runs. Same answer (V8's) either way.
+test "LookLinear: t2_look_linear on delegates the lookahead to T0's VM" {
+    const r = try lookRun("(?=\\d{3})\\d+", "ab12x12345", true, .{});
+    try testing.expect(r.found);
+    try testing.expectEqual(@as(usize, 1), r.sites);
+    try testing.expect(r.evals > 0);
+    try testing.expectEqualSlices(?usize, &.{ 5, 10 }, r.slots[0..2]);
+}
+
+test "LookLinear: t2_look_linear off leaves the lookahead to the backtracker" {
+    const r = try lookRun("(?=\\d{3})\\d+", "ab12x12345", false, .{});
+    try testing.expect(r.found);
+    try testing.expectEqual(@as(usize, 0), r.sites);
+    try testing.expectEqual(@as(u64, 0), r.evals);
+    try testing.expectEqualSlices(?usize, &.{ 5, 10 }, r.slots[0..2]);
+}
+
+test "LookLinear: which lookaheads are delegated" {
+    const Case = struct { pattern: []const u8, input: []const u8, sites: usize, want: ?[2]usize };
+    const cases = [_]Case{
+        .{ .pattern = "(?=foo)\\w+", .input = "a foobar", .sites = 1, .want = .{ 2, 8 } },
+        .{ .pattern = "(?!\\$)\\d+", .input = "$12 34", .sites = 1, .want = .{ 1, 3 } },
+        // A capture, a backreference or a nested lookaround in the body:
+        // the backtracker (only the inner, capture-free lookahead goes).
+        .{ .pattern = "(?=(a))a", .input = "ba", .sites = 0, .want = .{ 1, 2 } },
+        .{ .pattern = "(a)(?=\\1)a", .input = "aa", .sites = 0, .want = .{ 0, 2 } },
+        .{ .pattern = "(?=(?=a)a)a", .input = "ba", .sites = 1, .want = .{ 1, 2 } },
+        // Lookbehind: the recursive matcher until F6b, no site.
+        .{ .pattern = "(?<!\\$)\\d+", .input = "$12 34", .sites = 0, .want = .{ 2, 3 } },
+    };
+    for (cases) |c| {
+        const on = try lookRun(c.pattern, c.input, true, .{});
+        const off = try lookRun(c.pattern, c.input, false, .{});
+        try testing.expectEqual(c.sites, on.sites);
+        try testing.expectEqual(on.found, off.found);
+        try testing.expectEqualSlices(?usize, &on.slots, &off.slots);
+        const want = c.want orelse {
+            try testing.expect(!on.found);
+            continue;
+        };
+        try testing.expect(on.found);
+        try testing.expectEqualSlices(?usize, &.{ want[0], want[1] }, on.slots[0..2]);
+    }
+}
+
+test "LookLinear: the memo answers repeated positions, and off gives the same" {
+    // Every start position re-walks the `a`s, asking the lookahead at the
+    // same positions again (V8: no match; with the `c`, [2, 6]).
+    for ([_][]const u8{ "aaaaaaaab", "abaaac" }) |input| {
+        const memo = try lookRun("(?:(?=a)[ab])*c", input, true, .{});
+        const no_memo = try lookRun("(?:(?=a)[ab])*c", input, true, .{ .max_memo_bytes = 0 });
+        try testing.expect(memo.memo_hits > 0);
+        try testing.expectEqual(@as(u64, 0), no_memo.memo_hits);
+        try testing.expect(no_memo.evals > memo.evals);
+        try testing.expectEqual(memo.found, no_memo.found);
+        try testing.expectEqualSlices(?usize, &memo.slots, &no_memo.slots);
+    }
+    const hit = try lookRun("(?:(?=a)[ab])*c", "abaaac", true, .{});
+    try testing.expectEqualSlices(?usize, &.{ 2, 6 }, hit.slots[0..2]);
+}
+
+test "LookLinear: the step budget covers the VM too" {
+    const long = "a" ** 2000;
+    try testing.expectError(error.StepLimitExceeded, lookRun("(?=a+b)", long, true, .{ .max_steps = 500 }));
+    try testing.expectError(error.StepLimitExceeded, lookRun("(?=a+b)", long, false, .{ .max_steps = 500 }));
+    const r = try lookRun("(?=a+b)", long, true, .{});
+    try testing.expect(!r.found);
+}

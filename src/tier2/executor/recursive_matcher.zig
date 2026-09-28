@@ -23,6 +23,8 @@ const Mode = subject_mod.Mode;
 const Opcode = opcodes.Opcode;
 const Choice = @import("backtrack.zig").Choice;
 const TrailEntry = @import("backtrack.zig").TrailEntry;
+const LookMemo = @import("backtrack.zig").LookMemo;
+const tier0 = @import("tier0");
 const Instruction = format.Instruction;
 
 /// Capture slots kept inline in the matcher (no allocation); patterns with
@@ -107,10 +109,18 @@ pub const Scratch = struct {
     choices: std.ArrayListUnmanaged(Choice) = .empty,
     /// Its capture trail.
     trail: std.ArrayListUnmanaged(TrailEntry) = .empty,
+    /// LookLinear (F6a): T0's VM for the lookaheads it answers, their memo
+    /// (one per program, valid for one execution: `look_gen`), and how many
+    /// times the VM ran or the memo answered (tests and the bench).
+    look_vm: tier0.VmScratch,
+    look_memo: std.ArrayListUnmanaged(LookMemo) = .empty,
+    look_gen: u32 = 0,
+    look_evals: u64 = 0,
+    look_memo_hits: u64 = 0,
     in_use: bool = false,
 
     pub fn init(gpa: Allocator) Scratch {
-        return .{ .gpa = gpa };
+        return .{ .gpa = gpa, .look_vm = .init(gpa) };
     }
 
     pub fn deinit(self: *Scratch) void {
@@ -120,6 +130,9 @@ pub const Scratch = struct {
         self.positions.deinit(self.gpa);
         self.choices.deinit(self.gpa);
         self.trail.deinit(self.gpa);
+        self.look_vm.deinit();
+        for (self.look_memo.items) |*m| m.bits.deinit(self.gpa);
+        self.look_memo.deinit(self.gpa);
         self.* = undefined;
     }
 
@@ -226,7 +239,16 @@ pub fn RecursiveMatcherFor(comptime Unit: type) type {
         /// A matcher that runs on `scratch`'s buffers: nothing is allocated
         /// unless a buffer has to grow. Hand them back with `releaseScratch`.
         pub fn initScratch(bytecode: []const u8, input: []const Unit, options: ExecOptions, capture_slots: usize, scratch: *Scratch) Allocator.Error!Self {
-            var self = Self.initWithSlots(scratch.gpa, bytecode, input, options, capture_slots);
+            var self: Self = undefined;
+            try self.initScratchInto(bytecode, input, options, capture_slots, scratch);
+            return self;
+        }
+
+        /// `initScratch` into `self`, without copying the matcher (its
+        /// inline captures make it a few hundred bytes; F6a's backtracker
+        /// embeds one and runs this per execution).
+        pub fn initScratchInto(self: *Self, bytecode: []const u8, input: []const Unit, options: ExecOptions, capture_slots: usize, scratch: *Scratch) Allocator.Error!void {
+            self.* = Self.initWithSlots(scratch.gpa, bytecode, input, options, capture_slots);
             if (capture_slots > INLINE_CAPTURES) {
                 if (scratch.captures.len < capture_slots) {
                     scratch.gpa.free(scratch.captures);
@@ -246,7 +268,6 @@ pub fn RecursiveMatcherFor(comptime Unit: type) type {
             scratch.loop_guard = .empty;
             scratch.positions = .empty;
             self.borrowed = true;
-            return self;
         }
 
         /// Ready the matcher for another start position: captures unset and
@@ -686,7 +707,7 @@ pub fn RecursiveMatcherFor(comptime Unit: type) type {
         }
 
         /// The subject: WTF-8 bytes or UTF-16 units, as `Unit` says.
-        fn subject(self: *const Self) Subject {
+        pub fn subject(self: *const Self) Subject {
             return subjectOf(self.input);
         }
 

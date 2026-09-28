@@ -28,6 +28,8 @@ pub const CharSet = charset_mod.CharSet;
 /// Compilation result: the backtracker's program (`tier2/program.zig`).
 pub const CompileResult = program_mod.CompileResult;
 const freeCharSets = program_mod.freeCharSets;
+const LinearSite = program_mod.LinearSite;
+const hir = @import("ir").hir;
 
 /// Compiler options
 pub const CompileOptions = struct {
@@ -101,6 +103,11 @@ pub const CompileOptions = struct {
     /// (`tier0/prefilter.zig`). Off, the VM runs plain, to measure it and to
     /// compare the two.
     t0_prefilters: bool = true,
+
+    /// Only for tests and the bench: LookLinear (F6a), the backtracker
+    /// handing lookaheads without captures to T0's VM. Off, it evaluates
+    /// them itself, to measure it and to compare the two.
+    t2_look_linear: bool = true,
 };
 
 /// Why `force_tier` can't be honored.
@@ -134,7 +141,7 @@ pub fn compile(allocator: Allocator, pattern: []const u8, options: CompileOption
     // both, and the parser, die when this function returns.
     const fe = try frontend(allocator, pattern, options);
     defer fe.deinit();
-    return generate(allocator, fe, options);
+    return generate(allocator, fe, options, options.t2_look_linear);
 }
 
 /// Both programs, from one front end (F4a): the dispatcher classifies the
@@ -146,7 +153,8 @@ pub fn compileTiers(allocator: Allocator, pattern: []const u8, options: CompileO
     const fe = try frontend(allocator, pattern, options);
     defer fe.deinit();
     const program = try route(fe, options);
-    const bt = try generate(allocator, fe, options);
+    // LookLinear's programs only when the backtracker runs the pattern.
+    const bt = try generate(allocator, fe, options, options.t2_look_linear and program == .backtracker);
     errdefer bt.deinit();
     // `route` ran the check `compileAccepted` asserts. The VM uses the
     // prefilters in code-unit mode only (`tier0.exec`), so a `u`/`v` pattern
@@ -230,7 +238,7 @@ fn unavailable(options: CompileOptions, reason: TierUnavailable) error{TierUnava
 }
 
 /// Phases 4-5 over the HIR: the backtracker's bytecode.
-fn generate(allocator: Allocator, fe: *const lower_mod.Frontend, options: CompileOptions) !CompileResult {
+fn generate(allocator: Allocator, fe: *const lower_mod.Frontend, options: CompileOptions, look_linear: bool) !CompileResult {
     const parser = &fe.parser;
 
     // Phase 4: Code generation, from the HIR only
@@ -266,15 +274,65 @@ fn generate(allocator: Allocator, fe: *const lower_mod.Frontend, options: Compil
     const charsets = try generator.takeCharSets();
     errdefer freeCharSets(allocator, charsets);
 
+    var linear: std.ArrayListUnmanaged(LinearSite) = .empty;
+    errdefer linear.deinit(allocator);
+    var programs: std.ArrayListUnmanaged(tier0.Program) = .empty;
+    errdefer {
+        for (programs.items) |p| p.deinit(allocator);
+        programs.deinit(allocator);
+    }
+    if (look_linear) try linearSites(allocator, generator.look_sites.items, options, &linear, &programs);
+    const linear_owned = try linear.toOwnedSlice(allocator);
+    errdefer allocator.free(linear_owned);
+    const programs_owned = try programs.toOwnedSlice(allocator);
+    errdefer {
+        for (programs_owned) |p| p.deinit(allocator);
+        allocator.free(programs_owned);
+    }
+
     return CompileResult{
         .bytecode = optimized,
         .named_groups = try named_groups.toOwnedSlice(allocator),
         .group_count = parser.group_counter,
         .charsets = charsets,
         .mode = if (options.unicode or options.v) .code_point else .code_unit,
-        .has_lookbehind = @import("tier2").program.hasLookbehind(optimized),
+        .has_lookbehind = program_mod.hasLookbehind(optimized),
+        .linear = linear_owned,
+        .linear_programs = programs_owned,
         .allocator = allocator,
     };
+}
+
+/// LookLinear (F6a, docs/REGEX_TIERS_PLAN.md §4.4 D-B): the lookaheads
+/// whose body T0's VM answers, and their programs. A body qualifies when
+/// `tier0.check` takes it with the flags in effect there (no captures,
+/// backreferences, lookarounds or iterated nullable bodies), outside `v`
+/// (F5c) and outside `i` in code-point mode (F5b's folding). Sites that are
+/// copies of one HIR node with the same flags share a program. The
+/// generator's sites are in bytecode order, so `linear` is sorted by pc.
+fn linearSites(allocator: Allocator, sites: []const CodeGenerator.LookSite, options: CompileOptions, linear: *std.ArrayListUnmanaged(LinearSite), programs: *std.ArrayListUnmanaged(tier0.Program)) !void {
+    if (options.v) return;
+    const Key = struct { body: *const hir.Node, flags: hir.Flags };
+    var keys: std.ArrayListUnmanaged(Key) = .empty;
+    defer keys.deinit(allocator);
+    for (sites) |site| {
+        if (options.unicode and site.flags.ignore_case) continue;
+        const key: Key = .{ .body = site.body, .flags = site.flags };
+        const index = for (keys.items, 0..) |k, i| {
+            if (k.body == key.body and std.meta.eql(k.flags, key.flags)) break i;
+        } else blk: {
+            const scope: hir.Node = .{ .modifier_scope = .{ .flags = site.flags, .body = site.body } };
+            if (tier0.check(&scope) != null) continue;
+            const prog = try tier0.compileAccepted(allocator, &scope, .{ .prefilters = false });
+            programs.append(allocator, prog) catch |err| {
+                prog.deinit(allocator);
+                return err;
+            };
+            try keys.append(allocator, key);
+            break :blk keys.items.len - 1;
+        };
+        try linear.append(allocator, .{ .pc = site.pc, .end = site.end, .program = @intCast(index) });
+    }
 }
 
 /// Compile with default options

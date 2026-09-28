@@ -122,6 +122,9 @@ pub const Matcher = struct {
     /// Runs on the recursive matcher (lookbehind, until F6b) instead of the
     /// explicit-stack backtracker.
     has_lookbehind: bool = false,
+    /// LookLinear's sites and programs (`CompileResult.linear`, F6a).
+    linear: []const program_mod.LinearSite = &.{},
+    linear_programs: []const @import("tier0").Program = &.{},
 
     const Self = @This();
 
@@ -167,6 +170,8 @@ pub const Matcher = struct {
             .charsets = compiled.charsets,
             .mode = compiled.mode,
             .has_lookbehind = compiled.has_lookbehind,
+            .linear = compiled.linear,
+            .linear_programs = compiled.linear_programs,
         };
     }
 
@@ -211,9 +216,12 @@ pub const Matcher = struct {
             return false;
         }
 
-        var b = try BacktrackerFor(Unit).initScratch(self.bytecode, input, limits, self.capture_slots, scratch);
+        var b: BacktrackerFor(Unit) = undefined;
+        try b.initScratchInto(self.bytecode, input, limits, self.capture_slots, scratch);
         b.core.charsets = self.charsets;
         b.core.mode = self.mode;
+        b.linear = self.linear;
+        b.programs = self.linear_programs;
         defer b.releaseScratch(scratch);
         var pos = index;
         while (pos <= input.len) : (pos = subject.advanceIndex(self.mode, pos)) {

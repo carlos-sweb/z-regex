@@ -362,6 +362,14 @@ pub const Regex = struct {
                 else => |e| return e,
             }
         }
+        return self.execBacktracker(subject, index, sticky, scratch, slots, limits);
+    }
+
+    /// The backtracker's side of `exec`, kept out of line: inlined, its
+    /// frame (the matcher's inline captures, LookLinear's VM call) was paid
+    /// on every call, T0's included (F6a(3): +25 ns per `execAt` on a
+    /// short literal).
+    noinline fn execBacktracker(self: *const Self, subject: Subject, index: usize, sticky: bool, scratch: *Scratch, slots: []?usize, limits: ExecLimits) ExecError!bool {
         const m = Matcher.initCompiled(self.allocator, self.compiled);
         return switch (subject) {
             .wtf8 => |s| m.exec(u8, s, index, sticky, &scratch.bt, slots, limits),

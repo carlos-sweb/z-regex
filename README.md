@@ -169,7 +169,7 @@ const re = try zregex.Regex.compileWithOptions(allocator, "^hello$", .{
     .multiline = true,
 });
 defer re.deinit();
-const limits: zregex.ExecLimits = .{ .max_steps = 100_000, .max_recursion_depth = 500 };
+const limits: zregex.ExecLimits = .{ .max_steps = 100_000, .max_backtrack_stack_bytes = 1 << 20 };
 const found = try re.execAt(.{ .wtf8 = "say\nHELLO" }, 0, &scratch, &out, limits);
 ```
 
