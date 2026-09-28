@@ -92,6 +92,14 @@ pub const CodeGenerator = struct {
     node_charset: std.AutoHashMapUnmanaged(*const Node, u32) = .empty,
     /// CharSet node -> its CHAR_CLASS bits, for the same reason.
     node_bitmap: std.AutoHashMapUnmanaged(*const Node, [32]u8) = .empty,
+    /// Every lookahead, in bytecode order (F6a): where it is, its body and
+    /// the flags in effect, so `compile` can hand the ones without
+    /// captures to T0's VM (`CompileResult.linear`).
+    look_sites: std.ArrayListUnmanaged(LookSite) = .empty,
+
+    /// A lookahead of the bytecode: LOOKAHEAD/NEGATIVE_LOOKAHEAD at `pc`,
+    /// its LOOKAHEAD_END at `end`.
+    pub const LookSite = struct { pc: u32, end: u32, body: *const Node, flags: hir.Flags };
 
     const Self = @This();
 
@@ -113,6 +121,7 @@ pub const CodeGenerator = struct {
         self.charset_index.deinit(self.allocator);
         self.node_charset.deinit(self.allocator);
         self.node_bitmap.deinit(self.allocator);
+        self.look_sites.deinit(self.allocator);
     }
 
     /// Hand the CharSet table over to the caller (`CompileResult.charsets`);
@@ -683,12 +692,15 @@ pub const CodeGenerator = struct {
 
         // For simplicity, we don't use the length field for now
         // The executor will find the END marker by scanning forward
+        const pc = self.writer.offset();
         try self.writer.emit1(opcode, 0);
 
         // Generate the lookaround pattern
         try self.generateNode(l.body);
 
         // Emit end marker
+        const end = self.writer.offset();
         try self.writer.emitSimple(if (l.behind) .LOOKBEHIND_END else .LOOKAHEAD_END);
+        if (!l.behind) try self.look_sites.append(self.allocator, .{ .pc = @intCast(pc), .end = @intCast(end), .body = l.body, .flags = self.flags });
     }
 };

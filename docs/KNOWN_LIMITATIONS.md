@@ -5,7 +5,7 @@ zregex regex engine. Every claim below was checked by direct execution against t
 current source tree (compiling small probe programs against the `zregex` module and
 observing the actual result), not inferred from design docs or past status reports.
 
-## Version: 0.3.2 (0.3.0 plus the SIMD pairwise literal search in the literal fast path, 0.3.1, and `Regex.iterator`, 0.3.2). 0.3.0 closed T0: F4a and F4b, test262 2856/3017; see "F4a" and "F4b" below. v0.2.0 was F1 (test262 2846/3017, see "F1 closed" below). The rest of this
+## Version: 0.4.0 (F5a: `u` and `\p{...}` on T0's VM; F6a: explicit-stack backtracker, capture trail, LookLinear; F5b: full case folding under `i`; test262 2978/3017; see "F5a", "F6a" and "F5b" below). 0.3.2 was 0.3.0 plus the SIMD pairwise literal search in the literal fast path (0.3.1) and `Regex.iterator` (0.3.2). 0.3.0 closed T0: F4a and F4b, test262 2856/3017; see "F4a" and "F4b" below. v0.2.0 was F1 (test262 2846/3017, see "F1 closed" below). The rest of this
 header describes the earlier state: 402/402 unit/integration tests passing, 168/168 (100%) on a test262-derived
 conformance sample (Phases 0, 1, 2 (now including duplicate named groups across
 mutually exclusive alternation branches, e.g. `(?<x>a)|(?<x>b)`, matching JS exactly),
@@ -753,8 +753,8 @@ starts inside a character. That also fixes captures that were silently wrong:
   callback); in safe builds using one twice at once panics.
 - **Still code points everywhere:** until F3d a pattern without `u` also decodes code
   points, in both encodings. `CompileResult.mode` already records what F3d will use.
-- **`ExecLimits`** is the old `ExecOptions`: the step budget is still per start position
-  (F6a, D11).
+- **`ExecLimits`** was the old `ExecOptions` until F6a, which gave it its own fields
+  (see the F6a section); the step budget is still per start position.
 - **Byte-offset facade:** `findAt` at an offset inside a character returns `null` (it used
   to start there). New `Regex.findFrom(input, start)` searches from `start`.
 - **C API:** `zregex_exec_wtf8`, `zregex_exec_utf16`, `zregex_advance_index_wtf8` and
@@ -1052,6 +1052,195 @@ phase product). D5 fallbacks to the backtracker (`two_pass_fallbacks`): 0 in eve
   F4a(4)A's prefilter). After T0, decide how to measure without depending on LLVM's
   layout: separate binaries, more runs, or `-fno-llvm` for the bench.
 
+### F5a: `u` and `\p{...}` on T0's VM, every UCD property name
+
+**Property names (F5a(1), F5a(2)).** Tables regenerated from UCD 17.0.0 (pinned; the
+Unicode Consortium's `unicodetools` copy of `Public/17.0.0/ucd`), now also from
+`PropertyAliases.txt` and `DerivedNormalizationProps.txt`: binary property short names
+(`\p{Alpha}`, `\p{space}`, ...), every General_Category value alias (`LC`, `cntrl`,
+`digit`, `punct`, `Combining_Mark`, ...), every Script alias (`Qaac`, `Qaai`),
+`Changes_When_NFKC_Casefolded`, `Cn`/`Unassigned`, `C` with Cn, and `Script=Unknown`
+(`sc`/`scx`). test262: the 118 non-passing entries of `property-escapes/generated` pass,
+2856 -> 2974/3017, the same in UTF-16 and WTF-8.
+
+**Routing (F5a(3)).** A T1 pattern whose T1 features are only `u` mode and `\p{...}`
+runs on T0's VM (plain or tagged), in code-point mode; `force_tier = .unicode` asks for
+that route. Still on the backtracker: Unicode case folding (`i` with `u`/`v` or non-ASCII
+content, F5b), `v` (F5c; its 275 test262 entries are still skipped by
+`scripts/test262/features.json`), and large counted repeats. Corpus coverage: 6,716 of
+the 14,061 T1 patterns of the F2c and F0c (npm) corpora move to the VM.
+
+**Differential.** VM against the backtracker on those 6,716 patterns, every slot, every
+index, sticky and not, UTF-16 and WTF-8 (5.5 M runs): 29 patterns differ, in 3,260 runs
+per encoding. V8, as the arbiter, sides with the VM in every case it can judge (2,698
+directly, and the 1,643 runs of `\p` without `u` it can re-judge with `u`; 627 have
+astral subjects or aren't valid with `u`) and never with the
+backtracker: the backtracker's known iteration semantics (captures not reset per
+iteration, empty iterations accepted), as on T0 in F4b. The rest are artifacts of the
+arbitration, identical in both zregex engines: `\p{...}` without `u` (below) and an
+index in the middle of a surrogate pair with `u` (V8 moves it back to the pair's start).
+`differential-v8`: 6 divergences gone (T1 patterns with `u`), none new: `diff-F5a.json`
+(471 + 17 `StepLimitExceeded`: 470 T2, 1 T1).
+
+**Throughput** (10 interleaved rounds of `zregex_xbench` against F5a(2), execAt MB/s):
+`\p{L}+` 29.8 -> 49.6 (+67%), `\p{Script=Greek}+` 31.6 -> 66.8 (+111%),
+`\p{General_Category=Lu}` 26.2 -> 56.7 (+117%), book `\p{L}+` 24.2 -> 48.0 (+98%); ns
+per short exec -28% to -51%. `[\p{L}--[a-z]]` (`v`) stays on the backtracker, unchanged.
+No other case moved more than 5.2% (the worst: the book title pattern, -5.2% execAt).
+
+**Compile time: accepted above 2x.** The VM's `Program` has a fixed cost of ~0.4-0.9 us;
+on a minimal pattern that is more than the backtracker's whole compile. Median of 31 x
+200 compiles against `.expert`: `\p{L}` 0.81 vs 0.37 us (2.2x), `\p{L}+` 1.50 vs 0.58
+(2.6x), `\p{General_Category=Lu}` 0.86 vs 0.41 (2.1x); larger patterns 1.2-1.9x
+(`[\p{L}\p{N}_]+` 1.2x, `\p{Script=Greek}+` 1.6-1.9x). Not the property table: cloning
+a 684-range set costs 0.05 us. Patterns in `u`/`v` mode skip the prefilter analysis (the
+VM uses prefilters in code-unit mode only), which took `\p{L}` from 2.93 to 0.81 us. The
+same excess existed on T0 since F4a, unmeasured by its gate (three cases): `\d` 1.15 vs
+0.42 us (2.72x), `[^a]` 1.85x. Decision: accept the fixed cost for +67-117% execAt; the
+limit in `REGEX_TIERS_PLAN.md` §7.2 is now "<= 2x against `.expert`, or <= +2 us
+absolute". Reducing `tier0.compile`'s fixed cost (closure tables, `follow`) is in F7's
+backlog.
+
+**Bugs found in F5a (pre-existing, both engines):**
+- **Fixed after F5a (bug A):** `\p{...}` without `u`/`v` was read as a property
+  escape. It is now Annex B's IdentityEscape, as in V8: `/\p{L}/` is the text `p{L}`,
+  `/\p{Bogus}/` compiles, `[\p{L}]` holds `p { L }`, and `[\p{L}-z]` is a SyntaxError
+  (the range `}-z` is out of order). Such a `\p` no longer makes a pattern T1.
+- **Fixed after F5a (bug C):** `gc=`/`General_Category=` takes only General_Category
+  values and their aliases (`\p{gc=Cn}`, `\p{gc=LC}`, `\p{gc=punct}`, ...);
+  `\p{gc=Alphabetic}`, `\p{gc=Alpha}`, `\p{gc=ASCII}`, `\p{gc=Any}`,
+  `\p{gc=Assigned}` are SyntaxErrors, as in V8.
+- With `v`, `[\p{L}--a]` (a single character as a subtraction operand) is
+  `InvalidClassSetOperand`; V8 accepts it. For F5c.
+- `\u{...}` without `u`/`v` is read as a code point escape (`/\u{1F600}/` matches
+  `😀`); ECMA-262 (Annex B) and V8 read `\u` as the letter `u` followed by `{1F600}`
+  as text (and `/\u{2}/` as `uu`). Found while verifying the bug A fix; not fixed.
+
+### F6a: explicit-stack backtracker, capture trail, LookLinear
+
+**Explicit stack (F6a(1)).** T2 patterns without a lookbehind run on
+`src/tier2/executor/backtrack.zig`: the same bytecode, order and step count as the
+recursive matcher, with pending alternatives on a heap stack of choicepoints. The caller's
+stack no longer decides whether a match answers (D14 closed) and `()\1{1000}` gives the
+spec's empty match (D15 closed). Loops whose body isn't a single atom no longer stop at
+~330 iterations (`RecursionLimitExceeded` before; `(x)(?:ab)*\1` over 5,000 `ab` now
+matches). Patterns with a lookbehind stay on the recursive matcher until F6b, with its
+depth limit of 1000 (`RecursionLimitExceeded`).
+
+**Capture trail (F6a(2)).** Capture writes go to a trail, undone to each choicepoint's
+height. Fixed on the way (bug F, docs/F6A_PRECHECK.md): once a positive lookahead
+succeeded, its captures survived a later backtrack past it (`/(?:(?=(a))ab|ac)/` on "ac"
+gave group 1 = "a"; V8: undefined). The capture of a discarded empty iteration is still
+not reset (the recursive matcher's known limitation, kept).
+
+**LookLinear (F6a(3)).** A lookahead whose body has no captures, backreferences or nested
+lookarounds, and that T0's VM takes, is answered by `tier0.existsAnchoredMatch` with a
+2-bit-per-position memo per execution (docs/REGEX_TIERS_PLAN.md §4.4). Not delegated: `v`
+patterns (F5c), `i` in `u` mode (F5b's folding), lookbehind (F6b). On the F2c and npm
+corpora, 2,463 of the 4,441 patterns with a lookahead have delegated sites; on and off
+give the same slots in all 566,490 runs.
+
+**Limits (`ExecLimits`, D11).**
+- `max_steps` (default 1,000,000): per start position, as before; the VM's steps for a
+  delegated lookahead come out of the same budget.
+- `max_backtrack_stack_bytes` (default 64 MiB): choicepoints, trail, loop guards and star
+  positions together; past it, `error.BacktrackStackExhausted` (C API:
+  `ZREGEXP_ERROR_RECURSION_LIMIT`).
+- `max_memo_bytes` (default 1 MiB): a memo table that doesn't fit isn't an error, that
+  lookahead runs without memo; 0 turns the memo off.
+- `max_recursion_depth` is gone (API change): only the recursive matcher had one.
+- The C API still doesn't take limits per execution (no ABI change).
+
+**Bench** (10 interleaved rounds of `zregex_xbench` against `66a9d60`, median `execAt`
+MB/s; the backtracker cases):
+
+| Case | Before | After | |
+|---|---|---|---|
+| `t2_lookahead` `(?=.*[a-z])(?=.*[A-Z]).{8,}` | 3.78 | 9.77 | x2.58 (LookLinear) |
+| `t2_backref` `<(\w+)>.*?<\/\1>` | 36.18 | 35.36 | -2.3 % |
+| `t2_book_backref` `\b(\w+) \1\b` | 11.01 | 11.25 | +2.1 % |
+| `t2_lookbehind` `(?<=\$)\d+` (recursive matcher) | 0.745 | 0.763 | +2.4 % |
+| `t1_vset` (backtracker) | 25.94 | 22.65 | -12.7 % |
+| `t0_az_bt` `[a-z]+` forced to the backtracker | 37.47 | 36.00 | -3.9 % |
+
+`(a+)+b` and `(a|aa)*c` forced to the backtracker still give `StepLimitExceeded`, in 26.4
+and 22.3 ms (29.0 and 24.8 before). Compiling a pattern with delegated lookaheads costs
+their T0 programs (`t2_lookahead`: 3.5 -> 4.9 us). `Regex.exec` keeps the backtracker's
+side out of line (`noinline`): inlined, its frame cost every T0 call ~25 ns.
+
+**Known costs.** The zero-progress loop guard is still a linear search over the active
+iterations, so a long loop whose body isn't a single atom is quadratic: 5,000 iterations of
+`(?:ab)*` take ~7 ms (for F7 if it matters). The binary
+grows while both executors coexist (until F6b).
+
+### F5b: full case folding under `i` (F5b closed)
+
+**What folds.** With `i` and without `v`, every set is closed under the spec's
+Canonicalize at compile time (`src/frontend/lower/lower.zig`):
+- **With `u`:** simple case folding (CaseFolding.txt 17.0.0, statuses C and S):
+  1,482 equivalence classes, 2,994 code points. `k` matches `K` (U+212A), `s` matches `ſ`,
+  `ß` matches `ẞ`, `ᾀ` matches `ᾈ`, `σ`/`ς`/`Σ` fold together, and so do Deseret pairs.
+- **Without `u`:** the legacy rule, full `toUppercase` (SpecialCasing unconditional
+  mappings) kept only if it is one code unit and never maps >= 128 to < 128: 1,144
+  classes, 2,313 code points. `ẞ` doesn't match `ß`, `ᾀ` doesn't match `ᾈ`, `K` (U+212A)
+  doesn't match `k`.
+- **Literals, ranges, classes, `\w`/`\W` and `\p{...}`/`\P{...}`** (standalone and in
+  classes; a negated class is the complement of the closure). `[À-Ö]` matches `à`;
+  `\p{Lu}` matches `a` under `iu`; `[\W]` under `iu` doesn't match `ſ` or `K`.
+- **At run time:** backreferences (`checkBackRef`, shared by both backtrackers) and
+  `\b`/`\B`, whose word characters under `i` in code-point mode add U+017F and U+212A
+  (the fold closure of the ASCII word characters; `/a\b/iu` on "aſ" doesn't match).
+- Class tables were checked against V8 (Node 22, ICU 78.2 = Unicode 17.0) on every code
+  point in both modes: 0 mismatches. A per-code-point differential (`^c$`, `^[c]$`,
+  `^[^c]$`, `i` and `iu`, WTF-8 and UTF-16; 117,966 cases over 14,446 code points)
+  also gives 0 mismatches.
+
+**Not covered.** Full case mappings (`ß` ~ `ss`, `ﬁ` ~ `fi`: never, the spec uses simple
+folding), the Turkic mappings (`İ`, `ı`: never), `v` with `i` on sets (F5c: under `v` sets
+fold with the old rule; `\P{Lu}` under `iv` differs from `iu` in V8), `\q{...}` (F5c).
+
+**Routing.** Patterns whose only T1 features are `u`, `\p{...}` and Unicode case
+folding now run on T0's VM (`vmTakesUnicode`). On the F2c corpus 2,757 more patterns
+reach the VM (18,435 -> 21,192), with the same 382 known bound differences against the
+backtracker and identical slots; on the T1 corpora, V8 sides with the VM in all 1,002
+arbitrable runs of the 13 differing patterns (the 2 new ones are the backtracker's known
+empty-iteration issue under `{0,1}`/`?`). A delegated lookahead (LookLinear) is still
+skipped under `i` with `u`, as in F6a.
+
+**test262:** 2974 -> 2978 of 3017 (UTF-16 and WTF-8): `unicode_full_case_folding.js`
+and `u-case-mapping.js`, sloppy and strict. `differential-v8`: 1 divergence gone (a T1
+pattern with `i` and `é`, now on the VM), none new: `diff-F5b.json`.
+
+**Compile cost** (`cprobe`, median of 31 x 200, us):
+
+| Pattern | Flags | Default | `.expert` |
+|---|---|---|---|
+| `\p{L}` | `u` / `iu` | 1.56 / 3.51 | 0.36 / 2.87 |
+| `\p{L}+` | `u` / `iu` | 1.56 / 4.22 | 0.62 / 3.09 |
+| `\p{Lu}` | `u` / `iu` | 0.76 / 4.99 | 0.37 / 4.60 |
+| `\p{Nd}` | `iu` | 0.83 | 0.39 |
+| `[^\p{L}]` | `u` / `iu` | 4.37 / 5.09 | 3.98 / 4.29 |
+| `[^a]` | `u` / `iu` | 1.30 / 1.86 | 0.93 / 1.35 |
+| `[À-Ö]` | none / `i` | 1.65 / 2.24 | 0.75 / 1.23 |
+| `[À-Ö]` | `u` / `iu` | 1.14 / 1.70 | 0.78 / 1.33 |
+| `k` | `u` / `iu` | 0.63 / 0.98 | 0.40 / 0.60 |
+
+Against `.expert` every case is within §7.2 (<= 2x or <= +2 us): `\p{L}` under `iu` at
+3.51 us is 1.22x `.expert`, `\p{Lu}` under `iu` at 4.99 us is 1.08x. Against the same
+property without `i` it goes up by +2 to +4 us (`\p{L}` +1.9, `\p{L}+` +2.7, `\p{Lu}`
++4.2): the folded property is no longer the property opcode but a set of ~700-2,000 ranges
+(union with its precomputed delta, codegen copy, interning). Properties whose delta is
+empty (`\p{Nd}`) keep the property path. The case the F5 plan flagged as pathological,
+`[^\p{L}]` under `iu`, costs +0.7 us over `u`. **Accepted.**
+
+**Binary** (`.so`, stripped), Parts 1, 1b and 2 together: +138 KB, ReleaseFast 974,304 ->
+1,112,272 B (+14.2 %), ReleaseSmall 575,480 -> 708,520 B (+23.1 %), above the plan's
++70 KB. Breakdown: 69 KB of class tables (both modes), 45 KB of property deltas (5,647
+ranges, almost all in the 25 case-related properties: `Lu`, `Ll`, `Uppercase`,
+`Lowercase`, `Changes_When_*`...), 8.5 KB of pointers (the delta slices) and 12 KB of
+code. **Accepted.** If a consumer needs a smaller binary, the folding tables can move to
+a separate module (noted for F7).
+
 ### test262 baseline (F0b)
 
 The real test262 measurement that replaces the sample above as the semantic
@@ -1146,18 +1335,19 @@ the code space), which dominate run time:
 
 **Root causes worth knowing before reading the failures:**
 
-- **`UnknownUnicodeProperty`: short aliases of binary properties** (`\p{Alpha}`,
-  `\p{AHex}`, `\p{Bidi_C}`, `\p{CWU}`, `\p{Dia}`, ...) and
-  `Changes_When_NFKC_Casefolded` are not recognized. One root cause, not 114
-  bugs: a fix in F5 unblocks ~114 entries (57 patterns) of
-  `property-escapes/generated`. **When F5 fixes it, those entries will run
-  `testPropertyEscapes`' per-symbol loop (up to ~1.1 M calls) for the first
-  time, so the first run of that group may take longer and hit timeouts;
-  today's ~57 s for the group is not representative of the gate's cost
-  from F5 on.**
-- **`\p{General_Category=Other}` doesn't include unassigned code points
-  (Cn)** (e.g. U+038B): a bug in the generated Unicode tables, not in the
-  `\p{}` logic (tracked in F5 with pinning the Unicode version).
+- **Fixed in F5a(1): property names.** Short names of the binary properties
+  (`\p{Alpha}`, `\p{AHex}`, `\p{space}`, ...), every General_Category value alias
+  (`LC`/`Cased_Letter`, `cntrl`, `digit`, `punct`, `Combining_Mark`), the extra
+  Script aliases (`Qaac`, `Qaai`) and `Changes_When_NFKC_Casefolded` now resolve
+  (tables regenerated from UCD 17.0.0 with `PropertyAliases.txt` and
+  `DerivedNormalizationProps.txt`): 110 entries of `property-escapes/generated` went
+  from `zregex_compile_error` to pass. The group's run time stayed short (the whole
+  UTF-16 run took 67 s), not the long first run the per-symbol loop suggested.
+- **Fixed in F5a(2): unassigned code points.** `\p{General_Category=Other}` now
+  includes Cn (e.g. U+038B), `\p{Cn}`/`\p{Unassigned}` exist, and
+  `\p{Script=Unknown}`/`Zzzz` (`sc` and `scx`) is every code point no script has;
+  `Katakana_Or_Hiragana` (Hrkt) is a valid, empty Script value. The last 8 entries
+  of `property-escapes/generated` pass.
 - Known ECMA-262 deviations of the parser/matcher show up as expected:
   non-`u` `.` consuming a whole supplementary character and lone surrogate
   halves (D6) and lookbehind (D7). The rest of what this baseline showed
@@ -1342,31 +1532,11 @@ incorrect examples in this repository's own README and doc comments.
 
 ## Genuinely unimplemented
 
-### Unicode Case Folding — non-ASCII character *ranges*
+### Unicode case folding under `v` (F5c)
 
-```zig
-const options = CompileOptions{ .case_insensitive = true };
-var re = try Regex.compileWithOptions(allocator, "[\xc3\x80-\xc3\x96]", options); // [À-Ö]
-try re.test_("à"); // false — the range itself isn't case-folded, only individual members
-```
-
-`case_insensitive` folds ASCII `a-z`/`A-Z` standalone, in ranges and in classes whose
-members are all ASCII — **but not an ASCII range inside a class that also has a non-ASCII
-or `\p{...}` member**: `[a-z]` under `i` matches `A`, `[a-zé]` doesn't (confirmed while
-building the F2c lowering, which reproduces it as is; the per-path folding rule is in
-`src/lower/lower.zig`, and F3's case-folding work replaces it with the spec's). And
-— as of a same-session Phase 4 follow-up — a literal non-ASCII character's simple
-case-fold pair too, both standalone (`café` also matches `CAFÉ`) and as a single
-character-class member (`[é]` also matches `É`; mixed ASCII/non-ASCII members like
-`[aé]` fold both). Quantifiers over a case-folded non-ASCII literal work correctly
-(`é+` still repeats the whole atomic character, matching either case per repetition).
-What's still not folded: non-ASCII character *ranges* (`[À-Ö]`) — unlike ASCII's uniform
-+32 shift, Unicode case mappings aren't a simple offset over an arbitrary range, so
-folding one would need per-codepoint expansion rather than the single-pair-per-member
-mechanism the literal/class-member case uses; and `\p{...}`-in-a-class members (a
-property's *set* of codepoints doesn't have a single "case-fold pair" to add the way one
-literal character does). See `docs/ECMASCRIPT_COMPATIBILITY_PLAN.md` Phase 4 for the
-mechanism and the reasoning behind what's covered vs. not.
+Fixed in F5b for `i` with and without `u` (see "F5b" above: ranges, classes and
+`\p{...}` fold). Under `v`, sets still fold with the pre-F5b rule (ASCII letters and a
+literal's simple pair); `v` with `i` is F5c.
 
 ### `u` (Unicode mode) flag — partial; `v` (Unicode Sets mode) flag — partial
 
@@ -1488,7 +1658,8 @@ strictness is itself only the unrecognized-escape slice — see above).
 | `\p{Script_Extensions=Name}`/`\p{scx=Name}` | ✅ Implemented (Phase 3) |
 | `\p{...}`/`\P{...}` as a character-class member (`[\p{L}\d]`, up to 4 tests) | ✅ Implemented (Phase 3) |
 | Unicode case folding: literal non-ASCII char (standalone or single class member) | ✅ Implemented (Phase 4) |
-| Unicode case folding: non-ASCII character ranges (`[À-Ö]`) / `\p{...}`-in-a-class | ❌ Not implemented |
+| Unicode case folding: non-ASCII ranges (`[À-Ö]`), `\p{...}`, `\w`/`\W`, backreferences, `\b` (`i`, `iu`) | ✅ Implemented (F5b) |
+| Unicode case folding under `v` (`iv` sets) | ❌ Not implemented (F5c) |
 | `sticky` option (`y` flag) + `Regex.findAt` | ✅ Added (Phase 5a) |
 | `getCaptureIndices`/`getNamedCaptureIndices` (`d` flag equivalent) | ✅ Added (Phase 5a) |
 | `u` flag (`CompileOptions.unicode`): strict unrecognized-escape rejection | ✅ Implemented (Phase 5b) |

@@ -516,9 +516,10 @@ test "§8.2 (F2d): a known deviation still reports its complete feature set" {
 
 test "a property keeps its Tier and feature even when its set is ASCII (F2d)" {
     // The HIR's set for [\p{ASCII}] is ASCII-only; its analysis_origin keeps
-    // it a property, which needs the Unicode tables under i.
-    try expectTier("[\\p{ASCII}]", "i", .unicode);
-    const a = try classify("[\\p{ASCII}]", "i");
+    // it a property. (Without `u`/`v`, `\p` is the letter `p` since the
+    // bug-A fix, so a property only exists with them.)
+    try expectTier("[\\p{ASCII}]", "iu", .unicode);
+    const a = try classify("[\\p{ASCII}]", "iu");
     try testing.expect(a.features.contains(.property_escape));
     try testing.expect(a.features.contains(.ignore_case_unicode));
     const v = try classify("[[a]--[b]]", "iv");

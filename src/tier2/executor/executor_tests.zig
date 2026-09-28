@@ -7,4 +7,5 @@ test {
     _ = @import("thread.zig");
     _ = @import("recursive_matcher.zig");
     _ = @import("matcher.zig");
+    _ = @import("backtrack.zig");
 }

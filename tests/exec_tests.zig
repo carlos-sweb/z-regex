@@ -186,6 +186,9 @@ test "execAt with a warm scratch doesn't allocate (the bench's cases)" {
         .{ .pattern = "[\\p{L}--\\p{Lu}]", .opts = .{ .v = true }, .input = "Ωμέγα abc" },
         .{ .pattern = "<(\\w+)>.*?<\\/\\1>", .input = "<p>x</p> <b>y</b>" },
         .{ .pattern = "(?<=\\$)\\d+", .input = "cost $12 and $345" },
+        // LookLinear (F6a): delegated lookaheads, the VM's scratch and the memo.
+        .{ .pattern = "(?=.*[a-z])(?=.*[A-Z]).{8,}", .input = "short Secret123x and PASSword99" },
+        .{ .pattern = "(?:(?=a)[ab])*c", .input = "aaaab abaaac" },
         .{ .pattern = "(a+)+b", .input = "aaaaaaaaaaaaab" },
         .{ .pattern = "(a)(b)(c)(d)(e)(f)(g)(h)(i)(j)(k)(l)(m)(n)(o)(p)(q)(r)", .input = "xabcdefghijklmnopqr" },
     };

@@ -7,8 +7,10 @@ pub const lexer = @import("parser/lexer.zig");
 pub const ast = @import("parser/ast.zig");
 pub const parser = @import("parser/parser.zig");
 pub const lower = @import("lower/lower.zig");
+pub const fold = @import("lower/fold.zig");
 
 test {
     _ = @import("parser/parser_tests.zig");
     _ = lower;
+    _ = fold;
 }

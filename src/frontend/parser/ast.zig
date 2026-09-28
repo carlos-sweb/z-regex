@@ -87,6 +87,12 @@ pub const Node = struct {
     /// Whether this is an inverted/negated character class
     inverted: bool = false,
 
+    /// A `char_range` spliced into a class by a `\W` member (the complement
+    /// of `[0-9A-Za-z_]`): under `u` + `i` the lowering replaces it with the
+    /// complement of the extended WordCharacters (F5b), which folding the
+    /// ranges themselves wouldn't give.
+    not_word: bool = false,
+
     const Self = @This();
 
     /// Create a character node

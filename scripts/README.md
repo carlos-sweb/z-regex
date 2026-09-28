@@ -46,10 +46,10 @@ current list, 50 properties total), `Scripts.txt` (174 scripts, emitted as the
 constants -- see `src/unicode/README.md` for why), `PropertyValueAliases.txt`
 (`sc ; <short> ; <long>` lines, e.g. `sc ; Grek ; Greek`, resolved at generation time
 against `SCRIPT_NAMES` and emitted as `SCRIPT_ALIAS_NAMES`/`SCRIPT_ALIAS_INDICES` so
-`\p{Script=Grek}` works the same as `\p{Script=Greek}`; two aliases are always skipped
-and printed as `script_aliases_skipped=2` on stderr --
-`Zzzz -> Unknown` and `Hrkt -> Katakana_Or_Hiragana`, neither of which `Scripts.txt`
-actually assigns to any codepoint, so there's no `SCRIPT_NAMES` entry to point at), and
+`\p{Script=Grek}` works the same as `\p{Script=Greek}`; since F5a every Script value
+the file names has a `SCRIPT_NAMES` entry, including `Unknown` (Zzzz: every code point
+no other script has) and `Katakana_Or_Hiragana` (Hrkt: empty), so stderr prints
+`script_aliases_skipped=0`), and
 `ScriptExtensions.txt` (a few hundred codepoints, per UAX24, whose Script_Extensions
 set differs from their single-valued Script -- e.g. combining accents that are
 `Script=Inherited` but `scx` includes every script they're actually combined with;
@@ -70,17 +70,31 @@ never matching any `wanted_names` entry and losing that line's data with no erro
 caught previously by the extracted range count looking implausibly small, not by a
 crash. If you edit `RANGE_LINE_RE`, sanity-check the per-property range counts again.
 
-To regenerate against the latest UCD release:
+To regenerate (UCD 17.0.0, pinned). The files come from the Unicode Consortium's
+`unicodetools` repository, which holds the same `ucd/17.0.0` files as unicode.org's
+`Public/17.0.0/ucd` (unicode.org itself isn't reachable from every environment). Since
+F5a the script also reads `PropertyAliases.txt` (short names of the binary properties:
+`\p{Alpha}`, `\p{space}`, ...) and `DerivedNormalizationProps.txt`
+(`Changes_When_NFKC_Casefolded`), emits every General_Category value alias of
+`PropertyValueAliases.txt` (`cntrl`, `digit`, `punct`, `Combining_Mark`, ...) and every
+Script alias including the extra fields (`Qaac`, `Qaai`), and the `LC` table
+(Lu | Ll | Lt). Since F5b it also reads `CaseFolding.txt` and `SpecialCasing.txt`: the
+case-folding classes of `i` with `u` (simple folding, statuses C and S) and without it
+(ECMA-262's Canonicalize: the full `toUppercase` when it is one code unit and doesn't
+take a code point >= 128 below 128), each property's closure delta, and, with
+`--word-out`, `src/ir/word_fold.zig` (the non-ASCII word characters of `u` + `i`). A
+regeneration from the same files must reproduce both files byte for byte.
 
 ```bash
-curl -o /tmp/UnicodeData.txt https://www.unicode.org/Public/UCD/latest/ucd/UnicodeData.txt
-curl -o /tmp/PropList.txt https://www.unicode.org/Public/UCD/latest/ucd/PropList.txt
-curl -o /tmp/DerivedCoreProperties.txt https://www.unicode.org/Public/UCD/latest/ucd/DerivedCoreProperties.txt
-curl -o /tmp/emoji-data.txt https://unicode.org/Public/UCD/latest/ucd/emoji/emoji-data.txt
-curl -o /tmp/Scripts.txt https://www.unicode.org/Public/UCD/latest/ucd/Scripts.txt
-curl -o /tmp/PropertyValueAliases.txt https://www.unicode.org/Public/UCD/latest/ucd/PropertyValueAliases.txt
-curl -o /tmp/ScriptExtensions.txt https://www.unicode.org/Public/UCD/latest/ucd/ScriptExtensions.txt
-python3 scripts/gen_unicode_tables.py /tmp/UnicodeData.txt /tmp/PropList.txt /tmp/DerivedCoreProperties.txt /tmp/emoji-data.txt /tmp/Scripts.txt /tmp/PropertyValueAliases.txt /tmp/ScriptExtensions.txt > src/unicode/tables.zig
+B=https://raw.githubusercontent.com/unicode-org/unicodetools/main/unicodetools/data/ucd/17.0.0
+cd /tmp && for f in UnicodeData.txt PropList.txt DerivedCoreProperties.txt emoji/emoji-data.txt \
+    Scripts.txt PropertyValueAliases.txt ScriptExtensions.txt PropertyAliases.txt DerivedNormalizationProps.txt \
+    CaseFolding.txt SpecialCasing.txt; do
+  curl -sSfo "$(basename $f)" "$B/$f"; done; cd -
+python3 scripts/gen_unicode_tables.py /tmp/UnicodeData.txt /tmp/PropList.txt /tmp/DerivedCoreProperties.txt \
+  /tmp/emoji-data.txt /tmp/Scripts.txt /tmp/PropertyValueAliases.txt /tmp/ScriptExtensions.txt \
+  /tmp/PropertyAliases.txt /tmp/DerivedNormalizationProps.txt /tmp/CaseFolding.txt /tmp/SpecialCasing.txt \
+  --word-out src/ir/word_fold.zig > src/unicode/tables.zig
 zig build test
 ```
 

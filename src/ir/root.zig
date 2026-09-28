@@ -4,9 +4,11 @@
 
 pub const charset = @import("charset.zig");
 pub const hir = @import("hir.zig");
+pub const word = @import("word.zig");
 pub const CharSet = charset.CharSet;
 
 test {
     _ = charset;
     _ = hir;
+    _ = word;
 }

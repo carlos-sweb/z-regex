@@ -1094,7 +1094,9 @@ pub const Parser = struct {
             },
             .not_word => {
                 var buf: [WORD_RANGES.len + 1][2]u32 = undefined;
+                const first = class.children.items.len;
                 try self.appendRangesToClass(class, complementRanges(&WORD_RANGES, &buf));
+                for (class.children.items[first..]) |range| range.not_word = true;
             },
             .not_whitespace => {
                 var buf: [WHITESPACE_RANGES.len + 1][2]u32 = undefined;

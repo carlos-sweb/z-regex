@@ -24,6 +24,7 @@
 //! groups (F4b).
 
 const std = @import("std");
+const word = @import("ir").word;
 const Allocator = std.mem.Allocator;
 const subject_mod = @import("subject");
 const Subject = subject_mod.Subject;
@@ -444,8 +445,10 @@ pub fn Vm(comptime Unit: type) type {
         }
 
         fn isWordBoundary(self: Self, pos: usize) bool {
-            const before = if (self.decodeBefore(pos)) |d| isWordChar(d.value) else false;
-            const after = if (self.decodeAt(pos)) |d| isWordChar(d.value) else false;
+            // WordCharacters (`ir.word`): extended under `u`/`v` + `i`.
+            const extended = self.prog.word_ci and self.mode == .code_point;
+            const before = if (self.decodeBefore(pos)) |d| word.isWordChar(d.value, extended) else false;
+            const after = if (self.decodeAt(pos)) |d| word.isWordChar(d.value, extended) else false;
             return before != after;
         }
     };
@@ -454,11 +457,6 @@ pub fn Vm(comptime Unit: type) type {
 /// ECMA-262 LineTerminator: LF, CR, LS and PS (what `^`/`$` look for under `m`).
 fn isLineTerminator(c: u32) bool {
     return c == '\n' or c == '\r' or c == 0x2028 or c == 0x2029;
-}
-
-/// `\w` without `u`+`i`: ASCII letters, digits and `_`.
-fn isWordChar(c: u32) bool {
-    return (c >= 'a' and c <= 'z') or (c >= 'A' and c <= 'Z') or (c >= '0' and c <= '9') or c == '_';
 }
 
 // ------------------------------------------------------------------ tests

@@ -1021,6 +1021,13 @@ pub const Lexer = struct {
     fn parseUnicodeProperty(self: *Self, negated: bool, start_pos: usize) error{InvalidEscape}!Token {
         const saved_pos = self.pos;
         const fallback_char: u32 = if (negated) 'P' else 'p';
+        // Without `u`/`v`, `\p` is Annex B's IdentityEscape even before a
+        // well-formed `{Name}`: `/\p{L}/` is the text "p{L}", and `{L}` is
+        // read as literal text by the caller. `code_units` is the pattern's
+        // own "no `u`/`v`" (set once by `lower.Frontend`); `unicode_mode`
+        // isn't: the parser clears it for its lookahead after `[`, and `v`
+        // doesn't set it.
+        if (self.code_units) return Token.escaped(fallback_char, start_pos);
 
         if (self.pos >= self.pattern.len or self.pattern[self.pos] != '{') {
             if (self.unicode_mode) return error.InvalidEscape;

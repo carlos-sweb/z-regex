@@ -10,10 +10,14 @@ const format_mod = @import("../bytecode/format.zig");
 
 const RecursiveMatcher = recursive_mod.RecursiveMatcher;
 const RecursiveMatcherFor = recursive_mod.RecursiveMatcherFor;
+const backtrack_mod = @import("backtrack.zig");
+const BacktrackerFor = backtrack_mod.BacktrackerFor;
 const Capture = thread_mod.Capture;
 const nextSearchStart = RecursiveMatcher.nextSearchStart;
 pub const Scratch = recursive_mod.Scratch;
 pub const ExecOptions = recursive_mod.ExecOptions;
+/// Execution limits (D11): see `backtrack.ExecLimits`.
+pub const ExecLimits = backtrack_mod.ExecLimits;
 const Subject = @import("subject").Subject;
 const Mode = @import("subject").Mode;
 
@@ -22,9 +26,10 @@ const Mode = @import("subject").Mode;
 /// `slots` shorter than two per group plus two for the match.
 pub const ExecError = MatchError || error{ InvalidIndex, SlotsTooSmall };
 /// What the byte-offset facade (`find`, `findAt`, ...) can fail with.
-pub const MatchError = RecursiveMatcher.MatchError;
+pub const MatchError = RecursiveMatcher.MatchError || error{BacktrackStackExhausted};
 pub const NamedGroup = format_mod.NamedGroup;
-const CompileResult = @import("../program.zig").CompileResult;
+const program_mod = @import("../program.zig");
+const CompileResult = program_mod.CompileResult;
 const CharSet = @import("ir").charset.CharSet;
 
 /// A capture's [start, end) byte offsets into the matched input (the JS `d`
@@ -114,6 +119,14 @@ pub const Matcher = struct {
     /// Code units or code points (`CompileResult.mode`, F3d). Bytecode
     /// without a `CompileResult` (`init`) keeps the pre-F3d code points.
     mode: Mode = .code_point,
+    /// Runs on the recursive matcher (lookbehind, until F6b) instead of the
+    /// explicit-stack backtracker.
+    has_lookbehind: bool = false,
+    /// `CompileResult.word_fold` (F5b).
+    word_fold: bool = false,
+    /// LookLinear's sites and programs (`CompileResult.linear`, F6a).
+    linear: []const program_mod.LinearSite = &.{},
+    linear_programs: []const @import("tier0").Program = &.{},
 
     const Self = @This();
 
@@ -124,6 +137,7 @@ pub const Matcher = struct {
             .allocator = allocator,
             .bytecode = bytecode,
             .capture_slots = RecursiveMatcher.captureSlotsIn(bytecode),
+            .has_lookbehind = program_mod.hasLookbehind(bytecode),
         };
     }
 
@@ -143,16 +157,25 @@ pub const Matcher = struct {
             .bytecode = bytecode,
             .named_groups = named_groups,
             .capture_slots = @as(usize, group_count) + 1,
+            .has_lookbehind = program_mod.hasLookbehind(bytecode),
         };
     }
 
     /// Everything a `CompileResult` carries: bytecode, named groups, group
     /// count and the CharSet table.
     pub fn initCompiled(allocator: Allocator, compiled: CompileResult) Self {
-        var m = Self.initWithGroups(allocator, compiled.bytecode, compiled.named_groups, compiled.group_count);
-        m.charsets = compiled.charsets;
-        m.mode = compiled.mode;
-        return m;
+        return .{
+            .allocator = allocator,
+            .bytecode = compiled.bytecode,
+            .named_groups = compiled.named_groups,
+            .capture_slots = @as(usize, compiled.group_count) + 1,
+            .charsets = compiled.charsets,
+            .mode = compiled.mode,
+            .has_lookbehind = compiled.has_lookbehind,
+            .word_fold = compiled.word_fold,
+            .linear = compiled.linear,
+            .linear_programs = compiled.linear_programs,
+        };
     }
 
     /// Slots `exec` fills: start and end of the match, then of each group.
@@ -171,7 +194,7 @@ pub const Matcher = struct {
     /// part) and returns true. An `index` past the end is no match; one
     /// inside a character is `error.InvalidIndex`. Allocates only when a
     /// buffer of `scratch` has to grow.
-    pub fn exec(self: Self, comptime Unit: type, input: []const Unit, index: usize, sticky: bool, scratch: *Scratch, slots: []?usize, limits: ExecOptions) ExecError!bool {
+    pub fn exec(self: Self, comptime Unit: type, input: []const Unit, index: usize, sticky: bool, scratch: *Scratch, slots: []?usize, limits: ExecLimits) ExecError!bool {
         if (slots.len < self.slotCount()) return error.SlotsTooSmall;
         if (index > input.len) return false;
         const subject = subjectOf(Unit, input);
@@ -179,26 +202,50 @@ pub const Matcher = struct {
         scratch.acquire();
         defer scratch.release();
 
-        var m = try RecursiveMatcherFor(Unit).initScratch(self.bytecode, input, limits, self.capture_slots, scratch);
-        m.charsets = self.charsets;
-        m.mode = self.mode;
-        defer m.releaseScratch(scratch);
+        if (self.has_lookbehind) {
+            // The recursive matcher (lookbehind, until F6b), with its own
+            // depth limit.
+            var m = try RecursiveMatcherFor(Unit).initScratch(self.bytecode, input, .{ .max_steps = limits.max_steps }, self.capture_slots, scratch);
+            m.charsets = self.charsets;
+            m.mode = self.mode;
+            m.word_fold = self.word_fold;
+            defer m.releaseScratch(scratch);
+            var pos = index;
+            while (pos <= input.len) : (pos = subject.advanceIndex(self.mode, pos)) {
+                if (pos != index) m.reset();
+                const r = try m.matchFrom(0, pos);
+                if (r.matched) return fill(slots, pos, r.end_pos, m.captureSlice());
+                if (sticky) break;
+            }
+            return false;
+        }
+
+        var b: BacktrackerFor(Unit) = undefined;
+        try b.initScratchInto(self.bytecode, input, limits, self.capture_slots, scratch);
+        b.core.charsets = self.charsets;
+        b.core.mode = self.mode;
+        b.core.word_fold = self.word_fold;
+        b.linear = self.linear;
+        b.programs = self.linear_programs;
+        defer b.releaseScratch(scratch);
         var pos = index;
         while (pos <= input.len) : (pos = subject.advanceIndex(self.mode, pos)) {
-            if (pos != index) m.reset();
-            const r = try m.matchFrom(0, pos);
-            if (r.matched) {
-                slots[0] = pos;
-                slots[1] = r.end_pos;
-                for (m.captureSlice()[1..], 1..) |c, g| {
-                    slots[2 * g] = c.start;
-                    slots[2 * g + 1] = c.end;
-                }
-                return true;
-            }
+            if (pos != index) b.reset();
+            if (try b.run(0, pos)) |end| return fill(slots, pos, end, b.captureSlice());
             if (sticky) break;
         }
         return false;
+    }
+
+    /// A match at [start, end) with `captures` (slot 0 unused) into `slots`.
+    fn fill(slots: []?usize, start: usize, end: usize, captures: []const recursive_mod.CaptureGroup) bool {
+        slots[0] = start;
+        slots[1] = end;
+        for (captures[1..], 1..) |c, g| {
+            slots[2 * g] = c.start;
+            slots[2 * g + 1] = c.end;
+        }
+        return true;
     }
 
     /// `exec` into a new `MatchResult` (byte offsets). An index inside a
