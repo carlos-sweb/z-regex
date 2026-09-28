@@ -31,7 +31,7 @@
 const std = @import("std");
 
 // Version information
-pub const version = "0.3.2";
+pub const version = "0.4.0";
 pub const zig_version_required = "0.16.0";
 
 // Utils module exports

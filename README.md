@@ -57,7 +57,7 @@ same whichever runs it.
 With Zig 0.16. Add the dependency (this writes the hash into `build.zig.zon`):
 
 ```sh
-zig fetch --save https://github.com/carlos-sweb/z-regex/archive/refs/tags/v0.3.2.tar.gz
+zig fetch --save https://github.com/carlos-sweb/z-regex/archive/refs/tags/v0.4.0.tar.gz
 ```
 
 In `build.zig`:
@@ -240,6 +240,8 @@ The full list, with measurements: [docs/KNOWN_LIMITATIONS.md](docs/KNOWN_LIMITAT
 ## Roadmap
 
 - **T0: done** (F4a, F4b; v0.3.0; v0.3.1 adds the SIMD literal search; v0.3.2 adds `Regex.iterator`).
+- **v0.4.0:** F5a, F6a and F5b (T1 without `v` on the VM, explicit-stack backtracker,
+  full case folding under `i`; test262 2978/3017).
 - **F5, T1 (Unicode):** F5a done (`u` and `\p{…}` on the VM, every UCD property name);
   F5b done (full case folding under `i`); F5c (full `v`) pending.
 - **F6a, T2 without lookbehind: done** (explicit-stack backtracker, capture trail,
