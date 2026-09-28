@@ -1644,6 +1644,21 @@ process-to-process noise measured in F7-0, which the minimum doesn't fully remov
 base round happens to be fast. Improvements in the second run: compile `t0_email` -48.7%,
 `t2_book_backref` -39.8%, `t1_book_pL` -36.7%, `t1_pL` -29.8%.
 
+### Known divergence: V8 matches inside a surrogate pair under `u`/`v`
+
+With `u`/`v` and a search that passes over a surrogate pair, V8 reports a match at the
+position between the pair's two units, which the spec doesn't require: under `u`/`v` the
+input is a list of code points and no position falls inside one. zregex follows the spec.
+Known divergence, not fixed. Found by the lookbehind differential of F6b's precheck (F2c
+corpus, UTF-16), four patterns, all zero-width at that position:
+
+| Pattern | Subject, `lastIndex` | V8 | zregex |
+|---|---|---|---|
+| `/(?<!a)/v` | `"a𝌆bé"`, 1 | `[2,2]` | `[3,3]` |
+| `/[0-9a]ß\|(?<n0>(?<!^))+?/mv` | `"😀x😀"`, 0 | `[1,1]` | `[2,2]` |
+| `/é*(…){0,1}?(?<!(?<=\S))/mu` | `"😀x😀"`, 2 | `[4,4]` | no match |
+| `/\B(?<![^\sa]😀\*[^z])/v` (also `/\B/v`) | `"😀x😀"`, 2 | `[4,4]` | `[5,5]` |
+
 ### Fixed in F2b
 
 - **`v` set operation whose last operand is a bracketed class failed under

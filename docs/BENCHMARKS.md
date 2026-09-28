@@ -43,6 +43,15 @@ runs gives how two series of n rounds compare, per estimator of a case:
 | Median of the rounds: metrics > 5%, p90 \|A−B\| | 52%, 32.0% | 44%, 20.0% | 31%, 14.8% |
 | Best round (minimum time = the max MB/s of the band): metrics > 5%, p90 \|A−B\| | 21%, 7.9% | 8%, 4.2% | 2%, 2.1% |
 
+**Regression criterion (since F7b).** A regression is declared when the bench flags it (10
+interleaved rounds, minimum time per case, worse than 10%) **and** callgrind, or a probe
+that reproduces the case's context, confirms it. Bench flag without confirmation: noise of
+this environment, noted and passed. Callgrind flag without the bench: real, fixed. Both
+have to agree to block a commit. Why: at the F7b close two runs of the same code flagged
+disjoint sets of cases (16 and 7 of 110 metrics), every one executing the same instructions
+as the base (callgrind, ±0.73%); and the one real regression of F7b (a compile cost in the
+allocator) was invisible to callgrind and caught by the bench.
+
 **In this environment the bench cannot detect changes under ~20% with 10 rounds using the
 median; §7.2's 10% gate is applied with this precision.** Comparing the minimum time per case
 (the max MB/s of the min–max band, already in `bench/results.json`), the precision with 10
