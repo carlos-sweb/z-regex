@@ -1514,20 +1514,17 @@ incorrect examples in this repository's own README and doc comments.
 
 ## Confirmed bugs (still open)
 
-- **`\u{H+}` without `u`/`v` is read as a code point escape (D17)** *(found in F4b(2) by
-  the V8 arbiter; fix planned with the `u` grammar work of F5)*:
+None. (D17, `\u{H+}` without `u`/`v`, was fixed in F7a: see "Fixed in F7a" below.)
 
-  ```zig
-  Regex.compile(a, "\\u{1F600}"); // matches U+1F600; V8: `u` then the text "{1F600}"
-  Regex.compile(a, "\\u{2}");     // matches U+0002;  V8: "uu" (`u` quantified {2})
-  ```
+### Fixed in F7a
 
-  Annex B reads `\u` not followed by 4 hex digits as the identity escape `u`, and the
-  `{...}` after it as a quantifier when it is one, literal text otherwise.
-  `parseUnicodeEscape` (`lexer.zig`) takes the `{H+}` branch whatever `unicode_mode`
-  says. Inside a group name, `\u{...}` is valid without `u` (ES2020) and works. No
-  test262 test depends on it (its `\u{` without `u` are group names or early errors),
-  and `differential-v8`'s generator never writes `\u{` without `u`, so neither gate saw it.
+- **`\u{H+}` without `u`/`v` was read as a code point escape (D17, bug E)** *(found in
+  F4b(2) by the V8 arbiter)*: now, as in Annex B, `\u` is the letter and the `{...}` after it a
+  quantifier when it forms one, text otherwise. `/\u{2}/` matches "uu", `/\u{1F600}/`
+  matches "u{1F600}" and not U+1F600, and `/[\u{1F600}]/` is the members `u { 1 F 6 0 }`.
+  With `u` or `v` it is the code point escape, as before; inside a group name `\u{...}`
+  stays valid without `u` (ES2020). Tests against V8 in `tests/regression_tests.zig`. It
+  removed the 11 runs of the two F2c-corpus patterns `docs/F5A_CLOSING.md` attributed to it.
 
 ### Fixed in F2b
 

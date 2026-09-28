@@ -122,8 +122,10 @@ test "code_units: the parser's lookahead doesn't split an astral character under
     try testing.expectEqual([2]usize{ 0, 6 }, (try search("[[a]\u{1F600}]", .{}, "a\u{1F600}]")).?);
 }
 
-test "code_units: \\u{...} above U+FFFF without u is its two halves" {
-    try testing.expectEqual([2]usize{ 0, 4 }, (try search("^\\u{1F600}$", .{}, "\u{1F600}")).?);
-    try testing.expect(try hasUnit("\\u{1F600}", .{}, 0xD83D));
+test "code_units: \\u{...} is an escape only with u (F7a, bug E); \\uLead\\uTrail is two halves without u" {
+    // Without `u`, `\\u{1F600}` is `u` and the text "{1F600}" (Annex B).
+    try testing.expect((try search("^\\u{1F600}$", .{}, "\u{1F600}")) == null);
+    try testing.expectEqual([2]usize{ 0, 8 }, (try search("^\\u{1F600}$", .{}, "u{1F600}")).?);
+    try testing.expect(try hasUnit("\\uD83D\\uDE00", .{}, 0xD83D));
     try testing.expectEqual([2]usize{ 0, 4 }, (try search("^\\u{1F600}$", u_opts, "\u{1F600}")).?);
 }

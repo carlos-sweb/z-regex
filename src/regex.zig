@@ -1824,16 +1824,23 @@ test "Regex: \\xHH, \\uHHHH, \\u{...}, \\0 and \\cX escapes" {
         try std.testing.expect(try re.test_("A"));
     }
     {
-        // \u{E9} is 'é', 2 UTF-8 bytes -- must match as a single atomic unit
-        var re = try Regex.compile(allocator, "\\u{E9}");
+        // \u{E9} is 'é' under `u`, 2 UTF-8 bytes -- must match as a single atomic unit
+        var re = try Regex.compileWithOptions(allocator, "\\u{E9}", .{ .unicode = true });
         defer re.deinit();
         try std.testing.expect(try re.test_("\u{E9}"));
     }
     {
-        // \u{1F600} is an emoji, 4 UTF-8 bytes
-        var re = try Regex.compile(allocator, "\\u{1F600}");
+        // \u{1F600} is an emoji under `u`, 4 UTF-8 bytes
+        var re = try Regex.compileWithOptions(allocator, "\\u{1F600}", .{ .unicode = true });
         defer re.deinit();
         try std.testing.expect(try re.test_("\u{1F600}"));
+    }
+    {
+        // Without `u` (F7a, bug E): `\u` is the letter and `{...}` text.
+        var re = try Regex.compile(allocator, "\\u{1F600}");
+        defer re.deinit();
+        try std.testing.expect(!try re.test_("\u{1F600}"));
+        try std.testing.expect(try re.test_("u{1F600}"));
     }
     {
         var re = try Regex.compile(allocator, "\\cA");

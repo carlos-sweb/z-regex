@@ -451,6 +451,7 @@ fn v8Test(pattern: []const u8, flags: []const u8, input: []const u8) !bool {
     var re = try zregex.Regex.compileWithOptions(a, pattern, .{
         .case_insensitive = std.mem.indexOfScalar(u8, flags, 'i') != null,
         .unicode = std.mem.indexOfScalar(u8, flags, 'u') != null,
+        .v = std.mem.indexOfScalar(u8, flags, 'v') != null,
     });
     defer re.deinit();
     var scratch = zregex.Scratch.init(a);
@@ -468,6 +469,36 @@ fn v8Test(pattern: []const u8, flags: []const u8, input: []const u8) !bool {
         return error.TestUnexpectedResult;
     }
     return found16;
+}
+
+test "F7a: \\u{...} is a code point escape only with u or v (bug E, V8)" {
+    const Case = struct { []const u8, []const u8, []const u8, bool };
+    // Values checked with Node 22 (V8). Without `u`/`v`, Annex B reads `\u`
+    // as the letter and `{...}` as a quantifier when it forms one, text
+    // otherwise; inside a class the braces and digits are members.
+    const cases = [_]Case{
+        .{ "\\u{1F600}", "", "u{1F600}", true },
+        .{ "\\u{1F600}", "", "\u{1F600}", false },
+        .{ "^\\u{2}$", "", "uu", true },
+        .{ "^\\u{2}$", "", "\u{2}", false },
+        .{ "^\\u{2,3}$", "", "uuu", true },
+        .{ "^\\u{41}$", "", "u{41}", false },
+        .{ "^[\\u{1F600}]$", "", "u", true },
+        .{ "^[\\u{1F600}]$", "", "{", true },
+        .{ "^[\\u{1F600}]$", "", "F", true },
+        .{ "^[\\u{1F600}]$", "", "}", true },
+        .{ "^[\\u{1F600}]$", "", "\u{1F600}", false },
+        .{ "\\u{1F600}", "u", "\u{1F600}", true },
+        .{ "\\u{1F600}", "v", "\u{1F600}", true },
+        .{ "^[\\u{1F600}]$", "u", "\u{1F600}", true },
+    };
+    for (cases) |c| {
+        const got = try v8Test(c[0], c[1], c[2]);
+        if (got != c[3]) {
+            std.debug.print("/{s}/{s} on \"{s}\": got {}, V8 {}\n", .{ c[0], c[1], c[2], got, c[3] });
+            return error.TestUnexpectedResult;
+        }
+    }
 }
 
 test "F5b: backreferences under i canonicalize (V8)" {
