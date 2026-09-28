@@ -128,10 +128,14 @@ test "u: malformed \\c, \\x and \\u escapes are SyntaxErrors" {
 // --- class ranges with class escapes ---
 
 test "u: a class escape can't be a range endpoint; Annex B makes the hyphen literal" {
-    for ([_][]const u8{ "[\\d-a]", "[\\s-\\d]", "[%-\\d]", "[--\\d]", "[\\p{L}-z]" }) |p| {
+    for ([_][]const u8{ "[\\d-a]", "[\\s-\\d]", "[%-\\d]", "[--\\d]" }) |p| {
         try expectRejected(p, u);
         try expectAccepted(p, annex_b);
     }
+    // Without `u`, `\p` is the letter `p` (Annex B), so `[\p{L}-z]` holds
+    // the reversed range `}-z`: rejected in both modes, as in V8.
+    try expectRejected("[\\p{L}-z]", u);
+    try expectRejected("[\\p{L}-z]", annex_b);
     try expectMatch("[\\d-a]+", annex_b, "x1-a", "1-a");
     try expectMatch("[%-\\d]+", annex_b, "x%-5", "%-5");
     // A hyphen before `]` stays literal in both modes.

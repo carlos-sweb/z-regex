@@ -147,6 +147,9 @@ pub fn resolveUnicodeProperty(raw_name: []const u8) ?UnicodeProperty {
     }
 
     if (std.meta.stringToEnum(UnicodeProperty, name)) |cat| {
+        // After `gc=`/`General_Category=`, only a General_Category value
+        // (`\p{gc=Alphabetic}` is a SyntaxError in ECMA-262).
+        if (prefixed and !isGeneralCategory(cat)) return null;
         return cat;
     }
     if (binarySearchNames(tables.GC_ALIAS_NAMES, name)) |i| {
@@ -157,6 +160,12 @@ pub fn resolveUnicodeProperty(raw_name: []const u8) ?UnicodeProperty {
         return std.meta.stringToEnum(UnicodeProperty, tables.BINARY_ALIAS_TARGETS[i]);
     }
     return null;
+}
+
+/// Whether `cat` is a General_Category value (major, minor, `LC`, `Cn`)
+/// rather than a binary property.
+pub fn isGeneralCategory(cat: UnicodeProperty) bool {
+    return @intFromEnum(cat) <= @intFromEnum(UnicodeProperty.Cs) or cat == .LC or cat == .Cn;
 }
 
 /// If `raw_name` has a `Script=`/`sc=` prefix (JS's syntax for
@@ -423,6 +432,42 @@ test "properties: resolveUnicodeProperty short and long General_Category forms" 
     try std.testing.expectEqual(UnicodeProperty.Lu, resolveUnicodeProperty("General_Category=Lu").?);
     try std.testing.expect(resolveUnicodeProperty("Bogus") == null);
     try std.testing.expect(resolveUnicodeProperty("Script=Greek") == null);
+}
+
+test "properties: gc= takes only General_Category values" {
+    const valid = [_][]const u8{
+        "Lu", "Ll", "Lt", "Lm", "Lo", "L",  "LC", "Mn", "Mc", "Me", "M",  "Nd", "Nl", "No", "N",
+        "Pc", "Pd", "Ps", "Pe", "Pi", "Pf", "Po", "P",  "Sm", "Sc", "Sk", "So", "S",  "Zs", "Zl",
+        "Zp", "Z",  "Cc", "Cf", "Cs", "Co", "Cn", "C",
+    };
+    for (valid) |v| {
+        for ([_][]const u8{ "gc=", "General_Category=" }) |prefix| {
+            var buf: [64]u8 = undefined;
+            const name = try std.fmt.bufPrint(&buf, "{s}{s}", .{ prefix, v });
+            const cat = resolveUnicodeProperty(name) orelse return error.TestUnexpectedResult;
+            try std.testing.expectEqual(resolveUnicodeProperty(v).?, cat);
+            try std.testing.expect(isGeneralCategory(cat));
+        }
+    }
+    // Long names and aliases of General_Category values.
+    try std.testing.expectEqual(UnicodeProperty.L, resolveUnicodeProperty("gc=Letter").?);
+    try std.testing.expectEqual(UnicodeProperty.LC, resolveUnicodeProperty("gc=Cased_Letter").?);
+    try std.testing.expectEqual(UnicodeProperty.P, resolveUnicodeProperty("gc=punct").?);
+    try std.testing.expectEqual(UnicodeProperty.Cn, resolveUnicodeProperty("gc=Unassigned").?);
+    // Binary properties (by name or alias), `ASCII`, `Any` and `Assigned`
+    // aren't General_Category values: bare they resolve, after `gc=` not.
+    for ([_][]const u8{ "Alphabetic", "Alpha", "ASCII", "Any", "Assigned", "White_Space", "space" }) |b| {
+        try std.testing.expect(resolveUnicodeProperty(b) != null);
+        var buf: [64]u8 = undefined;
+        try std.testing.expect(resolveUnicodeProperty(try std.fmt.bufPrint(&buf, "gc={s}", .{b})) == null);
+        try std.testing.expect(resolveUnicodeProperty(try std.fmt.bufPrint(&buf, "General_Category={s}", .{b})) == null);
+    }
+    // Every enum value is either a General_Category value or resolves only bare.
+    for (std.enums.values(UnicodeProperty)) |cat| {
+        var buf: [64]u8 = undefined;
+        const r = resolveUnicodeProperty(try std.fmt.bufPrint(&buf, "gc={s}", .{@tagName(cat)}));
+        try std.testing.expectEqual(isGeneralCategory(cat), r != null);
+    }
 }
 
 test "properties: resolveUnicodeProperty binary properties" {

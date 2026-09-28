@@ -40,6 +40,15 @@ Compilación de los T1 enrutados: 2,1–2,6× frente a `.expert` en los patrones
 - **Severidad:** baja en uso, alta en conformidad (cambia el resultado de un patrón válido
   y rechaza otros válidos).
 - **Fase:** fix menor antes de F5b, o dentro de F5b (toca la clasificación de T1).
+- **Estado: corregido antes de F6a** (commit "fix: \p without u is an identity escape;
+  gc= takes only General_Category values"). Sin `u`/`v`, el lexer devuelve el escape de
+  identidad antes de leer `{…}`. La condición es `code_units` (el "sin `u`/`v`" del
+  patrón), no `unicode_mode`: el parser lo apaga en su lectura especulativa tras `[` y
+  tras un `]` anidado, y `v` no lo activa. En los corpus de F2c (12.005 filas con
+  `\p`/`\P` sin `u`/`v`): 4.471 pasan de T1 a T0; 31 pasan a SyntaxError (`[\p{L}-z]`,
+  `[É-\p{Lu}]`…: el rango queda invertido, y V8 rechaza los 31 con "Range out of
+  order"); 669 siguen en T1 por otra razón (661 `i` Unicode, 8 contadores grandes). En
+  npm (F0c), 0. Los 18 patrones sin `u` de las 29 divergencias de §3 pasan a T0.
 
 ### Bug B: `[\p{L}--a]` con `v` se rechaza
 
@@ -67,6 +76,9 @@ Compilación de los T1 enrutados: 2,1–2,6× frente a `.expert` en los patrones
   `property-escapes` pasan.
 - **Severidad:** baja.
 - **Fase:** fix menor, F5c o antes.
+- **Estado: corregido antes de F6a** (el mismo commit que A). Con prefijo solo se aceptan
+  valores de General_Category y sus alias (`LC`, `Cn`/`Unassigned`, `Letter`, `punct`…,
+  como V8); las binarias, `ASCII`, `Any` y `Assigned` dan SyntaxError.
 
 ### Punto D: índice en mitad de un par de surrogates con `u`
 
@@ -81,6 +93,26 @@ Compilación de los T1 enrutados: 2,1–2,6× frente a `.expert` en los patrones
   mide ningún gate actual.
 - **Fase:** por decidir (es contrato de `execAt`, F3; candidato a F7 o antes si un host
   lo pide).
+
+### Punto E: `\u{…}` sin `u` se lee como escape de code point
+
+Encontrado al verificar el fix de A (diferencial de slots del corpus de F2c, árbitro
+V8), no corregido.
+
+- **Sintaxis:** `/\u{1F600}/`, `/\u{2}/`, sin `u` ni `v`.
+- **zregex hoy (los dos motores):** `lexer.zig:1126` (`parseUnicodeEscape`) acepta
+  `\u{H+}` como code point también sin `u`: `/\u{1F600}/` iguala `😀`.
+- **V8 y spec:** sin `u`, `\u{` no es RegExpUnicodeEscapeSequence; `\u` es la letra `u`
+  (Annex B, IdentityEscape) y `{1F600}` es texto; `{2}` sí es un cuantificador:
+  `/\u{2}/.test("uu")` es `true`, `/\u{1F600}/.test("u{1F600}")` es `true`.
+- **Dónde se vio:** 11 ejecuciones de 2 patrones del corpus de F2c:
+  `/\u{1F600}|(\p{Script=Greek}|…)*ß/m` (7; pasa a T0 con el fix de A) y
+  `/[a-f0-9\w\s]\u{1F600}(?<n0>\B)*/` (4; ya era T0 y ya salían antes del fix). Los dos
+  motores leen `😀` y V8 no (en el primero el backtracker agota pasos; en el segundo
+  difieren solo en la captura vacía de `(\B)*`, la clase de iteración vacía ya
+  conocida).
+- **Severidad:** la misma clase que A (conformidad; uso real probablemente bajo).
+- **Fase:** fix menor, como A, cuando se decida.
 
 ## 3. Las 29 divergencias VM contra backtracker
 
@@ -149,7 +181,8 @@ Los 29 patrones (flags tras la barra; "directo", "clase" y "par" = paso del arbi
 | `/[^--\d]{0}(\p{scx=Latin}\|)*/` | 170 | clase |
 
 (Un patrón aparece abreviado con `…`; completo en la salida de `t1diff`.) 18 de los 29
-no tienen `u`: son T1 solo por el bug A.
+no tienen `u`: eran T1 solo por el bug A, y con su fix pasan a T0 (`t1diff` queda en
+11 patrones, los 11 con `u`).
 
 ## 4. Qué queda para F5b
 
@@ -169,7 +202,7 @@ Folding Unicode con `i`, que hoy sigue en el backtracker:
   `scripts/test262/features.json` (`"regexp-v-flag": "F5"`);
 - `\q{…}` (no existe en el parser) y propiedades de strings (`RGI_Emoji`, …), con datos
   de `emoji-sequences.txt` y `emoji-zwj-sequences.txt`;
-- el bug B, y el bug C si no se corrige antes;
+- el bug B (el C se corrigió antes de F6a);
 - el patrón T1 que queda en `diff-F5a.json` (1 de 471).
 
 ## 6. Qué queda para F7

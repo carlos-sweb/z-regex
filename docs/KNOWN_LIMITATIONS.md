@@ -1101,14 +1101,20 @@ limit in `REGEX_TIERS_PLAN.md` §7.2 is now "<= 2x against `.expert`, or <= +2 u
 absolute". Reducing `tier0.compile`'s fixed cost (closure tables, `follow`) is in F7's
 backlog.
 
-**Bugs found, not fixed (pre-existing, both engines):**
-- `\p{...}` without `u` is read as a property escape; ECMA-262 (Annex B) and V8 read
-  `\p` as the letter `p` (`/\p{L}/.test("p{L}")` is true in V8). Such patterns are T1 by
-  `analyze()` and, since F5a, run on the VM with the same (wrong) reading.
+**Bugs found in F5a (pre-existing, both engines):**
+- **Fixed after F5a (bug A):** `\p{...}` without `u`/`v` was read as a property
+  escape. It is now Annex B's IdentityEscape, as in V8: `/\p{L}/` is the text `p{L}`,
+  `/\p{Bogus}/` compiles, `[\p{L}]` holds `p { L }`, and `[\p{L}-z]` is a SyntaxError
+  (the range `}-z` is out of order). Such a `\p` no longer makes a pattern T1.
+- **Fixed after F5a (bug C):** `gc=`/`General_Category=` takes only General_Category
+  values and their aliases (`\p{gc=Cn}`, `\p{gc=LC}`, `\p{gc=punct}`, ...);
+  `\p{gc=Alphabetic}`, `\p{gc=Alpha}`, `\p{gc=ASCII}`, `\p{gc=Any}`,
+  `\p{gc=Assigned}` are SyntaxErrors, as in V8.
 - With `v`, `[\p{L}--a]` (a single character as a subtraction operand) is
   `InvalidClassSetOperand`; V8 accepts it. For F5c.
-- A binary property's full name is accepted after `gc=` (`\p{gc=Alphabetic}`), which
-  ECMA-262 rejects.
+- `\u{...}` without `u`/`v` is read as a code point escape (`/\u{1F600}/` matches
+  `😀`); ECMA-262 (Annex B) and V8 read `\u` as the letter `u` followed by `{1F600}`
+  as text (and `/\u{2}/` as `uu`). Found while verifying the bug A fix; not fixed.
 
 ### test262 baseline (F0b)
 

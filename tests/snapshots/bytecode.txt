@@ -166,7 +166,7 @@ error:InvalidEscape	u	5c704c	\\pL
 cedc142ce7311d00		5b5c707b7d5d	[\\p{}]
 error:InvalidEscape	u	5b5c707b7d5d	[\\p{}]
 7cc712a85a548123	u	5c707b4c7d	\\p{L}
-7cc712a85a548123		5c707b4c7d	\\p{L}
+9956ac34d90f1254		5c707b4c7d	\\p{L}
 fa12ce387be00aa2		61283f3d62293f	a(?=b)?
 error:InvalidQuantifier	u	61283f3d62293f	a(?=b)?
 0e9b485841bd59bc		283f3c613e78295c6b3c613e	(?<a>x)\\k<a>
@@ -398,13 +398,13 @@ error:IncompatibleFlags	uv	5b5b615d26265b615d5d	[[a]&&[a]]
 bec72ce4ce278230		5b5b615d26265b615d5d	[[a]&&[a]]
 error:UnmatchedBracket	u	5b5b615d26265b615d5d	[[a]&&[a]]
 error:IncompatibleFlags	uv	5b5c707b4c7d26265b615d5d	[\\p{L}&&[a]]
-d73154115db53b20		5b5c707b4c7d26265b615d5d	[\\p{L}&&[a]]
+71865ce4e5261950		5b5c707b4c7d26265b615d5d	[\\p{L}&&[a]]
 error:UnmatchedBracket	u	5b5c707b4c7d26265b615d5d	[\\p{L}&&[a]]
 error:IncompatibleFlags	uv	5b5b615d2d2d5c707b4c757d5d	[[a]--\\p{Lu}]
-865aff94f7c64b83		5b5b615d2d2d5c707b4c757d5d	[[a]--\\p{Lu}]
+59d62e284f28f65d		5b5b615d2d2d5c707b4c757d5d	[[a]--\\p{Lu}]
 error:UnmatchedBracket	u	5b5b615d2d2d5c707b4c757d5d	[[a]--\\p{Lu}]
 error:IncompatibleFlags	uv	5b5c707b4c7d2d2d5b5e612d7a5d5d	[\\p{L}--[^a-z]]
-d449c6f8d50f04ba		5b5c707b4c7d2d2d5b5e612d7a5d5d	[\\p{L}--[^a-z]]
+336848cd1d07e7a4		5b5c707b4c7d2d2d5b5e612d7a5d5d	[\\p{L}--[^a-z]]
 error:InvalidCharRange	u	5b5c707b4c7d2d2d5b5e612d7a5d5d	[\\p{L}--[^a-z]]
 error:UnmatchedBracket	u	5b615d5d	[a]]
 df9fb13dd1de4261		5b615d5d	[a]]
@@ -512,7 +512,7 @@ b73da3ef044b56a9	v	5b252d5c645d	[%-\\d]
 9475e375b57376dd		5b2d2d5c645d	[--\\d]
 error:InvalidCharRange	u	5b2d2d5c645d	[--\\d]
 error:InvalidClassSetOperand	v	5b2d2d5c645d	[--\\d]
-46b463093aa81012		5b5c707b4c7d2d7a5d	[\\p{L}-z]
+error:InvalidCharRange		5b5c707b4c7d2d7a5d	[\\p{L}-z]
 error:InvalidCharRange	u	5b5c707b4c7d2d7a5d	[\\p{L}-z]
 46b463093aa81012	v	5b5c707b4c7d2d7a5d	[\\p{L}-z]
 62164679a717bd9a		09	\t

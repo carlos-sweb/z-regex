@@ -2197,11 +2197,11 @@ test "Regex: a class with more than four \\p{...} members (F2b)" {
     // Before F2b a class held at most 4 property tests
     // (error.TooManyClassProperties).
     const allocator = std.testing.allocator;
-    var re = try Regex.compile(allocator, "^[\\p{L}\\p{N}\\p{P}\\p{S}\\p{Z}]+$");
+    var re = try Regex.compileWithOptions(allocator, "^[\\p{L}\\p{N}\\p{P}\\p{S}\\p{Z}]+$", .{ .unicode = true });
     defer re.deinit();
     try std.testing.expect(try re.test_("a1.+ \u{E9}\u{660}\u{3000}"));
     try std.testing.expect(!try re.test_("a\x01"));
-    var inv = try Regex.compile(allocator, "^[^\\p{L}\\p{N}\\p{P}\\p{S}\\p{Z}]$");
+    var inv = try Regex.compileWithOptions(allocator, "^[^\\p{L}\\p{N}\\p{P}\\p{S}\\p{Z}]$", .{ .unicode = true });
     defer inv.deinit();
     try std.testing.expect(try inv.test_("\x01"));
     try std.testing.expect(!try inv.test_("a"));
@@ -2228,7 +2228,7 @@ test "Regex: CHAR_SET class edge cases keep their pre-F2b meaning" {
     const allocator = std.testing.allocator;
     // `[^\P{L}]` is \p{L}: the member's negation goes into the set, the
     // class's own `[^...]` stays in the opcode.
-    var not_not_l = try Regex.compile(allocator, "^[^\\P{L}]$");
+    var not_not_l = try Regex.compileWithOptions(allocator, "^[^\\P{L}]$", .{ .unicode = true });
     defer not_not_l.deinit();
     try std.testing.expect(try not_not_l.test_("\u{E9}"));
     try std.testing.expect(!try not_not_l.test_("1"));
@@ -2263,9 +2263,9 @@ test "Regex: CHAR_SET class edge cases keep their pre-F2b meaning" {
 test "Regex: the CharSet table is deterministic and interned (F2b)" {
     const allocator = std.testing.allocator;
     const pattern = "[\u{E9}][\\p{L}]x[\u{E9}][\\p{N}\u{E9}][\\p{L}]";
-    var a = try Regex.compile(allocator, pattern);
+    var a = try Regex.compileWithOptions(allocator, pattern, .{ .unicode = true });
     defer a.deinit();
-    var b = try Regex.compile(allocator, pattern);
+    var b = try Regex.compileWithOptions(allocator, pattern, .{ .unicode = true });
     defer b.deinit();
     try std.testing.expectEqualSlices(u8, a.compiled.bytecode, b.compiled.bytecode);
     try std.testing.expectEqual(a.compiled.charsets.len, b.compiled.charsets.len);
@@ -2278,7 +2278,7 @@ test "Regex: the CharSet table is deterministic and interned (F2b)" {
 }
 
 test "Regex: an unrolled class repeat materializes its CharSet once (F2b)" {
-    var re = try Regex.compile(std.testing.allocator, "(?:[\\p{L}]){65536}");
+    var re = try Regex.compileWithOptions(std.testing.allocator, "(?:[\\p{L}]){65536}", .{ .unicode = true });
     defer re.deinit();
     try std.testing.expectEqual(@as(usize, 1), re.compiled.charsets.len);
 }
@@ -2294,9 +2294,9 @@ test "Regex: the CharSet table counts toward PatternTooLarge (F2b)" {
         const piece = try std.fmt.bufPrint(pattern[len..], "[\\p{{L}}\\u{{{X}}}]", .{0xE000 + i});
         len += piece.len;
     }
-    try std.testing.expectError(error.PatternTooLarge, Regex.compile(allocator, pattern[0..len]));
+    try std.testing.expectError(error.PatternTooLarge, Regex.compileWithOptions(allocator, pattern[0..len], .{ .unicode = true }));
     // A codegen failure after a class was materialized frees the table.
-    try std.testing.expectError(error.PatternTooLarge, Regex.compile(allocator, "[\\p{L}](?:a{65536}){52}"));
+    try std.testing.expectError(error.PatternTooLarge, Regex.compileWithOptions(allocator, "[\\p{L}](?:a{65536}){52}", .{ .unicode = true }));
 }
 
 test "Regex: compiling classes leaks nothing on any allocation failure (F2b)" {
@@ -2727,7 +2727,7 @@ test "Regex: a positive lookahead's captures leak out on success (spec'd behavio
 test "Regex: \\p{L}+ matches Unicode letters, including non-ASCII, and stops at non-letters" {
     const allocator = std.testing.allocator;
 
-    var re = try Regex.compile(allocator, "\\p{L}+");
+    var re = try Regex.compileWithOptions(allocator, "\\p{L}+", .{ .unicode = true });
     defer re.deinit();
 
     const m = (try re.find("h\u{E9}llo123")).?;
@@ -2738,7 +2738,7 @@ test "Regex: \\p{L}+ matches Unicode letters, including non-ASCII, and stops at 
 test "Regex: \\p{N}+ matches Unicode digits" {
     const allocator = std.testing.allocator;
 
-    var re = try Regex.compile(allocator, "\\p{N}+");
+    var re = try Regex.compileWithOptions(allocator, "\\p{N}+", .{ .unicode = true });
     defer re.deinit();
 
     const m = (try re.find("abc4567def")).?;
@@ -2749,7 +2749,7 @@ test "Regex: \\p{N}+ matches Unicode digits" {
 test "Regex: \\P{L} (negated Unicode property) matches non-letters" {
     const allocator = std.testing.allocator;
 
-    var re = try Regex.compile(allocator, "\\P{L}+");
+    var re = try Regex.compileWithOptions(allocator, "\\P{L}+", .{ .unicode = true });
     defer re.deinit();
 
     const m = (try re.find("abc!!!def")).?;
@@ -2760,7 +2760,7 @@ test "Regex: \\P{L} (negated Unicode property) matches non-letters" {
 test "Regex: \\p{Lu} matches only uppercase letters" {
     const allocator = std.testing.allocator;
 
-    var re = try Regex.compile(allocator, "\\p{Lu}");
+    var re = try Regex.compileWithOptions(allocator, "\\p{Lu}", .{ .unicode = true });
     defer re.deinit();
 
     const m = (try re.find("aB")).?;
@@ -2771,7 +2771,7 @@ test "Regex: \\p{Lu} matches only uppercase letters" {
 test "Regex: \\p{Letter} accepts the long-form General_Category alias and matches CJK ideographs" {
     const allocator = std.testing.allocator;
 
-    var re = try Regex.compile(allocator, "\\p{Letter}+");
+    var re = try Regex.compileWithOptions(allocator, "\\p{Letter}+", .{ .unicode = true });
     defer re.deinit();
 
     const input = "\u{65E5}\u{672C}\u{8A9E}123"; // "日本語123"
@@ -2783,19 +2783,19 @@ test "Regex: \\p{Letter} accepts the long-form General_Category alias and matche
 test "Regex: \\p{gc=Lu} and \\p{General_Category=Lu} prefix forms both work" {
     const allocator = std.testing.allocator;
 
-    var re1 = try Regex.compile(allocator, "\\p{gc=Lu}");
+    var re1 = try Regex.compileWithOptions(allocator, "\\p{gc=Lu}", .{ .unicode = true });
     defer re1.deinit();
     try std.testing.expect(try re1.test_("B"));
     try std.testing.expect(!try re1.test_("b"));
 
-    var re2 = try Regex.compile(allocator, "\\p{General_Category=Lu}");
+    var re2 = try Regex.compileWithOptions(allocator, "\\p{General_Category=Lu}", .{ .unicode = true });
     defer re2.deinit();
     try std.testing.expect(try re2.test_("B"));
 }
 
 test "Regex: unknown \\p{...} property name is a compile error, not silently ignored" {
     const allocator = std.testing.allocator;
-    try std.testing.expectError(error.UnknownUnicodeProperty, Regex.compile(allocator, "\\p{Bogus}"));
+    try std.testing.expectError(error.UnknownUnicodeProperty, Regex.compileWithOptions(allocator, "\\p{Bogus}", .{ .unicode = true }));
 }
 
 test "Regex: \\p{...} by any UCD name: binary property short names and General_Category value aliases (F5a)" {
@@ -2835,7 +2835,7 @@ test "Regex: \\p{...} by any UCD name: binary property short names and General_C
 test "Regex: \\p{...} alone inside a character class matches the same as standalone" {
     const allocator = std.testing.allocator;
 
-    var re = try Regex.compile(allocator, "[\\p{L}]+");
+    var re = try Regex.compileWithOptions(allocator, "[\\p{L}]+", .{ .unicode = true });
     defer re.deinit();
 
     const input = "123abc456";
@@ -2847,7 +2847,7 @@ test "Regex: \\p{...} alone inside a character class matches the same as standal
 test "Regex: \\p{...} mixed with ordinary members in a class is a union (e.g. [\\p{L}\\d])" {
     const allocator = std.testing.allocator;
 
-    var re = try Regex.compile(allocator, "[\\p{L}\\d]+");
+    var re = try Regex.compileWithOptions(allocator, "[\\p{L}\\d]+", .{ .unicode = true });
     defer re.deinit();
 
     const input = "!!!abc123\u{3B1}\u{3B2}###"; // letters, digits, Greek alpha/beta
@@ -2862,7 +2862,7 @@ test "Regex: \\P{...} as a class member contributes its own complement to the un
     // [\P{L}\d] means "not-a-letter, OR a digit" -- since digits aren't
     // letters anyway this reduces to "not a letter", but it must NOT behave
     // like [^\p{L}\d] (which would additionally reject digits too).
-    var re = try Regex.compile(allocator, "[\\P{L}\\d]+");
+    var re = try Regex.compileWithOptions(allocator, "[\\P{L}\\d]+", .{ .unicode = true });
     defer re.deinit();
 
     const input = "abc123!!!xyz";
@@ -2874,7 +2874,7 @@ test "Regex: \\P{...} as a class member contributes its own complement to the un
 test "Regex: [^\\p{L}\\d] (whole-class negation) rejects both letters and digits" {
     const allocator = std.testing.allocator;
 
-    var re = try Regex.compile(allocator, "[^\\p{L}\\d]+");
+    var re = try Regex.compileWithOptions(allocator, "[^\\p{L}\\d]+", .{ .unicode = true });
     defer re.deinit();
 
     const input = "abc123!!!xyz789";
@@ -2886,14 +2886,14 @@ test "Regex: [^\\p{L}\\d] (whole-class negation) rejects both letters and digits
 test "Regex: \\p{Script=...} and \\p{Script_Extensions=...} work as class members too" {
     const allocator = std.testing.allocator;
 
-    var sc = try Regex.compile(allocator, "[\\p{Script=Greek}\\d]+");
+    var sc = try Regex.compileWithOptions(allocator, "[\\p{Script=Greek}\\d]+", .{ .unicode = true });
     defer sc.deinit();
     const input1 = "abc\u{3B1}\u{3B2}123xyz";
     const m1 = (try sc.find(input1)).?;
     defer m1.deinit();
     try std.testing.expectEqualStrings("\u{3B1}\u{3B2}123", m1.group(input1));
 
-    var scx = try Regex.compile(allocator, "[\\p{Script_Extensions=Latin}]+");
+    var scx = try Regex.compileWithOptions(allocator, "[\\p{Script_Extensions=Latin}]+", .{ .unicode = true });
     defer scx.deinit();
     // U+0301 is in Latin's Script_Extensions (see the earlier
     // Script_Extensions tests) even though its own Script is Inherited.
@@ -2907,6 +2907,66 @@ test "Regex: malformed \\p (no braces) falls back to a literal 'p'" {
     defer re.deinit();
     try std.testing.expect(try re.test_("p"));
     try std.testing.expect(!try re.test_("q"));
+}
+
+test "Regex: \\p{...} without u/v is the identity escape `p` followed by literal text (Annex B)" {
+    const allocator = std.testing.allocator;
+
+    // Without `u`: the text "p{L}", not the property.
+    var no_u = try Regex.compile(allocator, "^\\p{L}$");
+    defer no_u.deinit();
+    try std.testing.expect(try no_u.test_("p{L}"));
+    try std.testing.expect(!try no_u.test_("a"));
+
+    // With `u`: the property.
+    var u = try Regex.compileWithOptions(allocator, "^\\p{L}$", .{ .unicode = true });
+    defer u.deinit();
+    try std.testing.expect(try u.test_("a"));
+    try std.testing.expect(try u.test_("\u{E9}"));
+    try std.testing.expect(!try u.test_("p{L}"));
+
+    // An unknown name: literal text without `u`, SyntaxError with `u`/`v`.
+    var bogus = try Regex.compile(allocator, "^\\p{Bogus}$");
+    defer bogus.deinit();
+    try std.testing.expect(try bogus.test_("p{Bogus}"));
+    try std.testing.expectError(error.UnknownUnicodeProperty, Regex.compileWithOptions(allocator, "\\p{Bogus}", .{ .unicode = true }));
+    try std.testing.expectError(error.UnknownUnicodeProperty, Regex.compileWithOptions(allocator, "\\p{Bogus}", .{ .v = true }));
+
+    // `\P` the same way.
+    var neg = try Regex.compile(allocator, "^\\P{L}$");
+    defer neg.deinit();
+    try std.testing.expect(try neg.test_("P{L}"));
+    try std.testing.expect(!try neg.test_("1"));
+
+    // In a class, `\p` is the letter `p` and `{`, `L`, `}` are members.
+    var class = try Regex.compile(allocator, "^[\\p{L}]$");
+    defer class.deinit();
+    for ([_][]const u8{ "p", "{", "L", "}" }) |s| try std.testing.expect(try class.test_(s));
+    try std.testing.expect(!try class.test_("a"));
+
+    // With `v`, `\p{L}` stays the property, in and out of a class.
+    var v = try Regex.compileWithOptions(allocator, "^[\\p{L}]\\p{L}$", .{ .v = true });
+    defer v.deinit();
+    try std.testing.expect(try v.test_("a\u{E9}"));
+    try std.testing.expect(!try v.test_("p{"));
+
+    // Other identity escapes are unchanged.
+    var q = try Regex.compile(allocator, "^\\q\\p$");
+    defer q.deinit();
+    try std.testing.expect(try q.test_("qp"));
+}
+
+test "Regex: \\p{gc=...} rejects non-General_Category values" {
+    const allocator = std.testing.allocator;
+    for ([_][]const u8{ "\\p{gc=Alphabetic}", "\\p{gc=Alpha}", "\\p{General_Category=Alphabetic}", "\\p{gc=ASCII}", "\\p{gc=Any}", "\\p{gc=Assigned}" }) |p| {
+        try std.testing.expectError(error.UnknownUnicodeProperty, Regex.compileWithOptions(allocator, p, .{ .unicode = true }));
+        try std.testing.expectError(error.UnknownUnicodeProperty, Regex.compileWithOptions(allocator, p, .{ .v = true }));
+    }
+    // `gc=Cn` is a General_Category value; bare `Alphabetic` is a binary property.
+    for ([_][]const u8{ "\\p{gc=Cn}", "\\p{gc=Unassigned}", "\\p{gc=LC}", "\\p{Alphabetic}", "\\p{Cn}" }) |p| {
+        var re = try Regex.compileWithOptions(allocator, p, .{ .unicode = true });
+        re.deinit();
+    }
 }
 
 test "Regex: replace() supports $N numbered capture substitution" {
@@ -3015,7 +3075,7 @@ test "Regex: replace() prefers the two-digit group number when it exists ($10 vs
 test "Regex: \\p{White_Space} matches Unicode whitespace, including non-ASCII" {
     const allocator = std.testing.allocator;
 
-    var re = try Regex.compile(allocator, "\\p{White_Space}+");
+    var re = try Regex.compileWithOptions(allocator, "\\p{White_Space}+", .{ .unicode = true });
     defer re.deinit();
 
     const m = (try re.find("abc   def")).?;
@@ -3029,7 +3089,7 @@ test "Regex: \\p{White_Space} matches Unicode whitespace, including non-ASCII" {
 test "Regex: \\p{Alphabetic} matches letters (broader than General_Category L in principle, ASCII-equal in practice)" {
     const allocator = std.testing.allocator;
 
-    var re = try Regex.compile(allocator, "\\p{Alphabetic}+");
+    var re = try Regex.compileWithOptions(allocator, "\\p{Alphabetic}+", .{ .unicode = true });
     defer re.deinit();
 
     const m = (try re.find("abc123")).?;
@@ -3040,13 +3100,13 @@ test "Regex: \\p{Alphabetic} matches letters (broader than General_Category L in
 test "Regex: \\p{Uppercase} and \\p{Lowercase} match case-specific letters" {
     const allocator = std.testing.allocator;
 
-    var upper_re = try Regex.compile(allocator, "\\p{Uppercase}+");
+    var upper_re = try Regex.compileWithOptions(allocator, "\\p{Uppercase}+", .{ .unicode = true });
     defer upper_re.deinit();
     const m1 = (try upper_re.find("abcDEFghi")).?;
     defer m1.deinit();
     try std.testing.expectEqualStrings("DEF", m1.group("abcDEFghi"));
 
-    var lower_re = try Regex.compile(allocator, "\\p{Lowercase}+");
+    var lower_re = try Regex.compileWithOptions(allocator, "\\p{Lowercase}+", .{ .unicode = true });
     defer lower_re.deinit();
     const m2 = (try lower_re.find("ABCdefGHI")).?;
     defer m2.deinit();
@@ -3056,13 +3116,13 @@ test "Regex: \\p{Uppercase} and \\p{Lowercase} match case-specific letters" {
 test "Regex: \\p{ASCII} and \\p{Any} trivial properties" {
     const allocator = std.testing.allocator;
 
-    var ascii_re = try Regex.compile(allocator, "\\p{ASCII}+");
+    var ascii_re = try Regex.compileWithOptions(allocator, "\\p{ASCII}+", .{ .unicode = true });
     defer ascii_re.deinit();
     const m1 = (try ascii_re.find("abc\u{E9}def")).?;
     defer m1.deinit();
     try std.testing.expectEqualStrings("abc", m1.group("abc\u{E9}def"));
 
-    var any_re = try Regex.compile(allocator, "\\p{Any}+");
+    var any_re = try Regex.compileWithOptions(allocator, "\\p{Any}+", .{ .unicode = true });
     defer any_re.deinit();
     const input = "abc\u{E9}def";
     const m2 = (try any_re.find(input)).?;
@@ -3073,7 +3133,7 @@ test "Regex: \\p{ASCII} and \\p{Any} trivial properties" {
 test "Regex: \\P{Alphabetic} (negated binary property) matches non-letters" {
     const allocator = std.testing.allocator;
 
-    var re = try Regex.compile(allocator, "\\P{Alphabetic}+");
+    var re = try Regex.compileWithOptions(allocator, "\\P{Alphabetic}+", .{ .unicode = true });
     defer re.deinit();
 
     const m = (try re.find("abc   def")).?;
@@ -3084,24 +3144,24 @@ test "Regex: \\P{Alphabetic} (negated binary property) matches non-letters" {
 test "Regex: expanded Unicode binary properties (Hex_Digit, Dash, Math, Quotation_Mark)" {
     const allocator = std.testing.allocator;
 
-    var hex_re = try Regex.compile(allocator, "\\p{Hex_Digit}+");
+    var hex_re = try Regex.compileWithOptions(allocator, "\\p{Hex_Digit}+", .{ .unicode = true });
     defer hex_re.deinit();
     const m1 = (try hex_re.find("xyzABCdef123ghi")).?;
     defer m1.deinit();
     try std.testing.expectEqualStrings("ABCdef123", m1.group("xyzABCdef123ghi"));
 
-    var dash_re = try Regex.compile(allocator, "\\p{Dash}+");
+    var dash_re = try Regex.compileWithOptions(allocator, "\\p{Dash}+", .{ .unicode = true });
     defer dash_re.deinit();
     const m2 = (try dash_re.find("a--b")).?;
     defer m2.deinit();
     try std.testing.expectEqualStrings("--", m2.group("a--b"));
 
-    var math_re = try Regex.compile(allocator, "\\p{Math}+");
+    var math_re = try Regex.compileWithOptions(allocator, "\\p{Math}+", .{ .unicode = true });
     defer math_re.deinit();
     try std.testing.expect(try math_re.test_("+"));
     try std.testing.expect(!try math_re.test_("a"));
 
-    var quote_re = try Regex.compile(allocator, "\\p{Quotation_Mark}");
+    var quote_re = try Regex.compileWithOptions(allocator, "\\p{Quotation_Mark}", .{ .unicode = true });
     defer quote_re.deinit();
     try std.testing.expect(try quote_re.test_("\""));
 }
@@ -3124,7 +3184,7 @@ test "Regex: \\p{Emoji} matches a real emoji codepoint, not ASCII text" {
 test "Regex: \\p{Extended_Pictographic} matches U+00A9 (line with no space before '#' in emoji-data.txt)" {
     const allocator = std.testing.allocator;
 
-    var re = try Regex.compile(allocator, "\\p{Extended_Pictographic}");
+    var re = try Regex.compileWithOptions(allocator, "\\p{Extended_Pictographic}", .{ .unicode = true });
     defer re.deinit();
 
     try std.testing.expect(try re.test_("\u{A9}")); // COPYRIGHT SIGN
@@ -3133,7 +3193,7 @@ test "Regex: \\p{Extended_Pictographic} matches U+00A9 (line with no space befor
 test "Regex: \\p{Script=Greek} matches Greek letters, not Latin ones" {
     const allocator = std.testing.allocator;
 
-    var re = try Regex.compile(allocator, "\\p{Script=Greek}+");
+    var re = try Regex.compileWithOptions(allocator, "\\p{Script=Greek}+", .{ .unicode = true });
     defer re.deinit();
 
     const input = "abc\u{3B1}\u{3B2}\u{3B3}def"; // abc + alpha,beta,gamma + def
@@ -3145,7 +3205,7 @@ test "Regex: \\p{Script=Greek} matches Greek letters, not Latin ones" {
 test "Regex: \\p{sc=Latin} (short prefix form) matches Latin letters" {
     const allocator = std.testing.allocator;
 
-    var re = try Regex.compile(allocator, "\\p{sc=Latin}+");
+    var re = try Regex.compileWithOptions(allocator, "\\p{sc=Latin}+", .{ .unicode = true });
     defer re.deinit();
 
     const input = "\u{3B1}abcXYZ\u{3B2}"; // alpha + abcXYZ + beta
@@ -3157,7 +3217,7 @@ test "Regex: \\p{sc=Latin} (short prefix form) matches Latin letters" {
 test "Regex: \\P{Script=Latin} (negated script) matches non-Latin codepoints" {
     const allocator = std.testing.allocator;
 
-    var re = try Regex.compile(allocator, "\\P{Script=Latin}");
+    var re = try Regex.compileWithOptions(allocator, "\\P{Script=Latin}", .{ .unicode = true });
     defer re.deinit();
 
     try std.testing.expect(try re.test_("\u{3B1}")); // Greek alpha
@@ -3167,7 +3227,7 @@ test "Regex: \\P{Script=Latin} (negated script) matches non-Latin codepoints" {
 test "Regex: \\p{Script=Han} matches CJK ideographs" {
     const allocator = std.testing.allocator;
 
-    var re = try Regex.compile(allocator, "\\p{Script=Han}+");
+    var re = try Regex.compileWithOptions(allocator, "\\p{Script=Han}+", .{ .unicode = true });
     defer re.deinit();
 
     const input = "abc\u{4E2D}\u{6587}xyz"; // abc + 中文 + xyz
@@ -3178,18 +3238,18 @@ test "Regex: \\p{Script=Han} matches CJK ideographs" {
 
 test "Regex: unknown \\p{Script=...} value is a compile error, not silently ignored" {
     const allocator = std.testing.allocator;
-    try std.testing.expectError(error.UnknownUnicodeProperty, Regex.compile(allocator, "\\p{Script=Bogus}"));
+    try std.testing.expectError(error.UnknownUnicodeProperty, Regex.compileWithOptions(allocator, "\\p{Script=Bogus}", .{ .unicode = true }));
 }
 
 test "Regex: a bare script name without Script=/sc= prefix is rejected (not valid JS syntax)" {
     const allocator = std.testing.allocator;
-    try std.testing.expectError(error.UnknownUnicodeProperty, Regex.compile(allocator, "\\p{Greek}"));
+    try std.testing.expectError(error.UnknownUnicodeProperty, Regex.compileWithOptions(allocator, "\\p{Greek}", .{ .unicode = true }));
 }
 
 test "Regex: \\p{Script=Grek} (short script alias) matches the same as \\p{Script=Greek}" {
     const allocator = std.testing.allocator;
 
-    var re = try Regex.compile(allocator, "\\p{Script=Grek}+");
+    var re = try Regex.compileWithOptions(allocator, "\\p{Script=Grek}+", .{ .unicode = true });
     defer re.deinit();
 
     const input = "abc\u{3B1}\u{3B2}\u{3B3}def"; // abc + alpha,beta,gamma + def
@@ -3201,7 +3261,7 @@ test "Regex: \\p{Script=Grek} (short script alias) matches the same as \\p{Scrip
 test "Regex: \\p{sc=Hani} (short alias with sc= prefix) matches CJK ideographs" {
     const allocator = std.testing.allocator;
 
-    var re = try Regex.compile(allocator, "\\p{sc=Hani}+");
+    var re = try Regex.compileWithOptions(allocator, "\\p{sc=Hani}+", .{ .unicode = true });
     defer re.deinit();
 
     const input = "abc\u{4E2D}\u{6587}xyz"; // abc + 中文 + xyz
@@ -3213,7 +3273,7 @@ test "Regex: \\p{sc=Hani} (short alias with sc= prefix) matches CJK ideographs" 
 test "Regex: \\P{Script=Latn} (negated short alias) matches non-Latin codepoints" {
     const allocator = std.testing.allocator;
 
-    var re = try Regex.compile(allocator, "\\P{Script=Latn}");
+    var re = try Regex.compileWithOptions(allocator, "\\P{Script=Latn}", .{ .unicode = true });
     defer re.deinit();
 
     try std.testing.expect(try re.test_("\u{3B1}")); // Greek alpha
@@ -3227,11 +3287,11 @@ test "Regex: \\p{Script_Extensions=Latin} matches a combining accent that \\p{Sc
     // Script_Extensions includes Latin (it's used to write e.g. "e" + accent
     // in several Latin-script orthographies) -- the whole reason
     // Script_Extensions exists as a separate, broader property.
-    var scx = try Regex.compile(allocator, "\\p{Script_Extensions=Latin}");
+    var scx = try Regex.compileWithOptions(allocator, "\\p{Script_Extensions=Latin}", .{ .unicode = true });
     defer scx.deinit();
     try std.testing.expect(try scx.test_("\u{301}"));
 
-    var sc = try Regex.compile(allocator, "\\p{Script=Latin}");
+    var sc = try Regex.compileWithOptions(allocator, "\\p{Script=Latin}", .{ .unicode = true });
     defer sc.deinit();
     try std.testing.expect(!try sc.test_("\u{301}"));
 }
@@ -3239,7 +3299,7 @@ test "Regex: \\p{Script_Extensions=Latin} matches a combining accent that \\p{Sc
 test "Regex: \\p{scx=Grek} (short prefix + short alias) matches Greek letters" {
     const allocator = std.testing.allocator;
 
-    var re = try Regex.compile(allocator, "\\p{scx=Grek}+");
+    var re = try Regex.compileWithOptions(allocator, "\\p{scx=Grek}+", .{ .unicode = true });
     defer re.deinit();
 
     const input = "abc\u{3B1}\u{3B2}\u{3B3}def"; // abc + alpha,beta,gamma + def
@@ -3251,7 +3311,7 @@ test "Regex: \\p{scx=Grek} (short prefix + short alias) matches Greek letters" {
 test "Regex: \\P{Script_Extensions=Latin} (negated) rejects a Latin-extension combining accent" {
     const allocator = std.testing.allocator;
 
-    var re = try Regex.compile(allocator, "\\P{Script_Extensions=Latin}");
+    var re = try Regex.compileWithOptions(allocator, "\\P{Script_Extensions=Latin}", .{ .unicode = true });
     defer re.deinit();
 
     try std.testing.expect(!try re.test_("\u{301}")); // in Latin's Script_Extensions
@@ -3265,7 +3325,7 @@ test "Regex: \\p{Script_Extensions=...} still matches ordinary single-script cod
     // For the overwhelming majority of codepoints (anything
     // ScriptExtensions.txt doesn't explicitly list), Script_Extensions is
     // identical to Script.
-    var re = try Regex.compile(allocator, "\\p{Script_Extensions=Han}+");
+    var re = try Regex.compileWithOptions(allocator, "\\p{Script_Extensions=Han}+", .{ .unicode = true });
     defer re.deinit();
 
     const input = "abc\u{4E2D}\u{6587}xyz"; // abc + 中文 + xyz
@@ -3276,13 +3336,13 @@ test "Regex: \\p{Script_Extensions=...} still matches ordinary single-script cod
 
 test "Regex: unknown \\p{Script_Extensions=...} value is a compile error, not silently ignored" {
     const allocator = std.testing.allocator;
-    try std.testing.expectError(error.UnknownUnicodeProperty, Regex.compile(allocator, "\\p{Script_Extensions=Bogus}"));
+    try std.testing.expectError(error.UnknownUnicodeProperty, Regex.compileWithOptions(allocator, "\\p{Script_Extensions=Bogus}", .{ .unicode = true }));
 }
 
 test "Regex: \\p{Bidi_Mirrored} matches mirrored punctuation like parens and braces" {
     const allocator = std.testing.allocator;
 
-    var re = try Regex.compile(allocator, "\\p{Bidi_Mirrored}+");
+    var re = try Regex.compileWithOptions(allocator, "\\p{Bidi_Mirrored}+", .{ .unicode = true });
     defer re.deinit();
 
     const input = "abc(){}def";
@@ -3296,12 +3356,12 @@ test "Regex: \\p{Bidi_Mirrored} matches mirrored punctuation like parens and bra
 test "Regex: \\p{Assigned} / \\P{Assigned} distinguish assigned codepoints from noncharacters" {
     const allocator = std.testing.allocator;
 
-    var assigned_re = try Regex.compile(allocator, "\\p{Assigned}+");
+    var assigned_re = try Regex.compileWithOptions(allocator, "\\p{Assigned}+", .{ .unicode = true });
     defer assigned_re.deinit();
     try std.testing.expect(try assigned_re.test_("a"));
     try std.testing.expect(try assigned_re.test_("\u{1F600}"));
 
-    var unassigned_re = try Regex.compile(allocator, "\\P{Assigned}");
+    var unassigned_re = try Regex.compileWithOptions(allocator, "\\P{Assigned}", .{ .unicode = true });
     defer unassigned_re.deinit();
     try std.testing.expect(try unassigned_re.test_("\u{FFFF}")); // noncharacter
     try std.testing.expect(!try unassigned_re.test_("a"));
