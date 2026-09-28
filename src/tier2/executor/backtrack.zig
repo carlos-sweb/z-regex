@@ -126,6 +126,12 @@ pub const Choice = struct {
 /// `u16` UTF-16). `core` is the recursive matcher's state and atom checks
 /// (captures, subject, CharSets, decoding), reused as they are; only its
 /// control flow (`matchFrom`) isn't used.
+/// Loop guards past this many are mirrored in a hash set (F7a(3)): the
+/// zero-progress check of a long loop was a scan of every active guard,
+/// quadratic in the iterations (5,000 of `(?:ab)*` took ~13 ms). Below it
+/// the scan is cheaper than hashing.
+const guard_set_min = 64;
+
 pub fn BacktrackerFor(comptime Unit: type) type {
     return struct {
         core: Core,
@@ -157,6 +163,7 @@ pub fn BacktrackerFor(comptime Unit: type) type {
             scratch.trail = .empty;
             self.stack.clearRetainingCapacity();
             self.trail.clearRetainingCapacity();
+            scratch.guard_set.clearRetainingCapacity();
             self.limits = limits;
             self.steps = 0;
             self.look_top = 0;
@@ -195,6 +202,7 @@ pub fn BacktrackerFor(comptime Unit: type) type {
             self.stack.clearRetainingCapacity();
             self.trail.clearRetainingCapacity();
             self.core.loop_guard.clearRetainingCapacity();
+            self.scratch.guard_set.clearRetainingCapacity();
             self.core.positions.clearRetainingCapacity();
             self.look_top = 0;
         }
@@ -210,6 +218,7 @@ pub fn BacktrackerFor(comptime Unit: type) type {
             const bytes = self.stack.items.len * @sizeOf(Choice) +
                 self.trail.items.len * @sizeOf(TrailEntry) +
                 self.core.loop_guard.items.len * @sizeOf(LoopState) +
+                self.scratch.guard_set.count() * @sizeOf(LoopState) +
                 self.core.positions.items.len * @sizeOf(usize);
             if (bytes > limit) return error.BacktrackStackExhausted;
         }
@@ -236,12 +245,46 @@ pub fn BacktrackerFor(comptime Unit: type) type {
         /// that made no progress (the recursive matcher's `matchBackEdge`).
         /// False: refused.
         fn enterBackEdge(self: *Self, target_pc: usize, pos: usize) MatchError!bool {
-            for (self.core.loop_guard.items) |g| {
-                if (g.pc == target_pc and g.pos == pos) return false;
+            const entry: LoopState = .{ .pc = target_pc, .pos = pos };
+            if (self.guarded(entry)) return false;
+            try self.core.loop_guard.append(self.gpa(), entry);
+            const guards = self.core.loop_guard.items;
+            if (guards.len == guard_set_min + 1) {
+                // Just past the threshold: the mirror starts with them all.
+                for (guards) |g| try self.scratch.guard_set.put(self.gpa(), g, {});
+            } else if (guards.len > guard_set_min + 1) {
+                try self.scratch.guard_set.put(self.gpa(), entry, {});
             }
-            try self.core.loop_guard.append(self.gpa(), .{ .pc = target_pc, .pos = pos });
             try self.checkBytes();
             return true;
+        }
+
+        /// Whether `entry` is an active loop guard. The guards are unique
+        /// (`enterBackEdge` refuses a second one), so past `guard_set_min`
+        /// the set mirroring them answers; below it a scan is cheaper.
+        fn guarded(self: *const Self, entry: LoopState) bool {
+            const guards = self.core.loop_guard.items;
+            if (guards.len > guard_set_min) return self.scratch.guard_set.contains(entry);
+            for (guards) |g| {
+                if (g.pc == entry.pc and g.pos == entry.pos) return true;
+            }
+            return false;
+        }
+
+        /// Drop the loop guards above height `h` (a choicepoint's), keeping
+        /// the set in step: empty at or below `guard_set_min`, the same
+        /// entries as the stack above it.
+        fn truncateGuards(self: *Self, h: usize) void {
+            const guards = self.core.loop_guard.items;
+            if (h >= guards.len) return;
+            if (guards.len > guard_set_min) {
+                if (h <= guard_set_min) {
+                    self.scratch.guard_set.clearRetainingCapacity();
+                } else for (guards[h..]) |g| {
+                    _ = self.scratch.guard_set.remove(g);
+                }
+            }
+            self.core.loop_guard.shrinkRetainingCapacity(h);
         }
 
         /// Record `slot`'s value on the trail, then set it.
@@ -266,7 +309,7 @@ pub fn BacktrackerFor(comptime Unit: type) type {
         /// stays: undoing it is the caller's choice.
         fn cutTo(self: *Self, idx: usize) void {
             const b = self.stack.items[idx];
-            self.core.loop_guard.shrinkRetainingCapacity(b.guard_h);
+            self.truncateGuards(b.guard_h);
             self.core.positions.shrinkRetainingCapacity(b.pos_h);
             self.look_top = b.look_top;
             self.stack.shrinkRetainingCapacity(idx);
@@ -278,7 +321,7 @@ pub fn BacktrackerFor(comptime Unit: type) type {
             while (self.stack.items.len > 0) {
                 const top = &self.stack.items[self.stack.items.len - 1];
                 self.undoTo(top.trail_h);
-                self.core.loop_guard.shrinkRetainingCapacity(top.guard_h);
+                self.truncateGuards(top.guard_h);
                 self.look_top = top.look_top;
                 switch (top.kind) {
                     .alt => {

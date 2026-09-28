@@ -550,6 +550,47 @@ test "F7a: an index inside a surrogate pair with u starts at the pair (bug D, V8
     }
 }
 
+test "F7a: long loops through the loop-guard set agree with the VM (guard)" {
+    // The backtracker mirrors its loop guards in a set past 64 of them
+    // (F7a(3)). Loops with nullable bodies that iterate, backtrack and cut
+    // across that threshold: the forced backtracker must give the VM's
+    // slots (T0 patterns, where the VM is right by construction; with
+    // `-Dforce-backtracker` both are the backtracker, and still agree).
+    const a = testing.allocator;
+    const patterns = [_][]const u8{ "(?:a|b|)*c", "(?:(a)|b|)*$", "(?:ab|a|)*?b$", "^(?:(a)|(ab)|)*", "(?:(ab)|b|)*x", "^(?:a|b|)*?a$" };
+    var input: [300]u8 = undefined;
+    for (&input, 0..) |*ch, i| ch.* = if (i % 7 == 3) 'b' else 'a';
+    for (patterns) |p| {
+        var vm = try zregex.Regex.compile(a, p);
+        defer vm.deinit();
+        var bt = try zregex.Regex.compileWithOptions(a, p, .{ .force_tier = .expert });
+        defer bt.deinit();
+        var scratch = zregex.Scratch.init(a);
+        defer scratch.deinit();
+        const n = vm.slotCount();
+        const s1 = try a.alloc(?usize, n);
+        defer a.free(s1);
+        const s2 = try a.alloc(?usize, n);
+        defer a.free(s2);
+        var o1: zregex.MatchSlots = .{ .slots = s1 };
+        var o2: zregex.MatchSlots = .{ .slots = s2 };
+        for ([_]usize{ 40, 63, 64, 65, 66, 100, 200, 300 }) |len| {
+            for ([_]u8{ 'c', 'x', 'a' }) |last| {
+                var buf: [301]u8 = undefined;
+                @memcpy(buf[0..len], input[0..len]);
+                buf[len] = last;
+                const subj: zregex.Subject = .{ .wtf8 = buf[0 .. len + 1] };
+                const f1 = try vm.execAt(subj, 0, &scratch, &o1, .{});
+                const f2 = try bt.execAt(subj, 0, &scratch, &o2, .{ .max_steps = 100_000_000 });
+                if (f1 != f2 or (f1 and !std.mem.eql(?usize, s1, s2))) {
+                    std.debug.print("/{s}/ len {d} last '{c}': VM {} {any}, backtracker {} {any}\n", .{ p, len, last, f1, s1, f2, s2 });
+                    return error.TestUnexpectedResult;
+                }
+            }
+        }
+    }
+}
+
 test "F5b: backreferences under i canonicalize (V8)" {
     const Case = struct { []const u8, []const u8, []const u8, bool };
     const cases = [_]Case{

@@ -1170,9 +1170,11 @@ and 22.3 ms (29.0 and 24.8 before). Compiling a pattern with delegated lookahead
 their T0 programs (`t2_lookahead`: 3.5 -> 4.9 us). `Regex.exec` keeps the backtracker's
 side out of line (`noinline`): inlined, its frame cost every T0 call ~25 ns.
 
-**Known costs.** The zero-progress loop guard is still a linear search over the active
-iterations, so a long loop whose body isn't a single atom is quadratic: 5,000 iterations of
-`(?:ab)*` take ~7 ms (for F7 if it matters). The binary
+**Known costs.** The zero-progress loop guard was a linear search over the active
+iterations, so a long loop whose body isn't a single atom was quadratic. **Fixed in F7a(3):**
+past 64 active guards the backtracker mirrors them in a hash set. `(x)(?:ab)*\1` over 5,000
+iterations: 13.3 -> 0.46 ms, 92.7 M -> 6.8 M instructions (callgrind); 50,000: 882 -> 4.9 ms.
+Loops of up to 64 iterations keep the scan (the set costs more below ~70). The binary
 grows while both executors coexist (until F6b).
 
 ### Bench noise and the historical layout regressions (F7-0)

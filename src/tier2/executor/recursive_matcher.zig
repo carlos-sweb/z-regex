@@ -104,6 +104,9 @@ pub const Scratch = struct {
     captures: []CaptureGroup = &.{},
     snapshots: std.ArrayListUnmanaged(CaptureGroup) = .empty,
     loop_guard: std.ArrayListUnmanaged(LoopState) = .empty,
+    /// The explicit-stack backtracker's mirror of its loop guards once they
+    /// pass `backtrack.zig`'s `guard_set_min` (F7a(3)): membership in O(1).
+    guard_set: std.AutoHashMapUnmanaged(LoopState, void) = .empty,
     /// Positions of the greedy star fast path (a stack: nested stars push
     /// above the outer one's).
     positions: std.ArrayListUnmanaged(usize) = .empty,
@@ -129,6 +132,7 @@ pub const Scratch = struct {
         self.gpa.free(self.captures);
         self.snapshots.deinit(self.gpa);
         self.loop_guard.deinit(self.gpa);
+        self.guard_set.deinit(self.gpa);
         self.positions.deinit(self.gpa);
         self.choices.deinit(self.gpa);
         self.trail.deinit(self.gpa);
