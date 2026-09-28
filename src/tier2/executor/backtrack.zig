@@ -1,17 +1,17 @@
 //! The explicit-stack backtracker (F6a, docs/REGEX_TIERS_PLAN.md §4.4).
 //!
-//! It runs the same bytecode as `recursive_matcher.zig`, in the same order,
-//! but keeps every pending alternative on a heap stack of choicepoints
-//! instead of the native call stack. The recursive matcher spends a stack
-//! frame per instruction on the path (it's continuation-passing), so how
-//! far a match can go depended on the caller's stack (D14) and its depth
-//! limit was never calibrated against bytes (D15). Here the only stack is
-//! `Scratch.choices`, with the capture trail and the loop guards and star
-//! positions the recursive matcher already kept on the heap, all bounded
-//! together by `ExecLimits.max_backtrack_stack_bytes`.
+//! It runs the tier's bytecode in the order the recursive matcher it
+//! replaced did (F6a), but keeps every pending alternative on a heap stack
+//! of choicepoints instead of the native call stack: the recursive matcher
+//! spent a stack frame per instruction on the path, so how far a match
+//! could go depended on the caller's stack (D14) and its depth limit was
+//! never calibrated against bytes (D15). Here the only stack is
+//! `Scratch.choices`, with the capture trail, the loop guards and the star
+//! positions, all bounded together by `ExecLimits.max_backtrack_stack_bytes`.
+//! Since B′ (F6b step 1) it runs every pattern; `core.zig` holds its state
+//! and the checks of single atoms.
 //!
-//! Exploration order and step counting are the recursive matcher's,
-//! instruction for instruction:
+//! Exploration order and step counting (one step per instruction):
 //! - a SPLIT pushes its second branch and continues with the first;
 //! - SAVE_START/SAVE_END/CLEAR_CAPTURE write the slot's previous value to
 //!   the trail (docs/REGEX_TIERS_PLAN.md §4.4 D-D); every choicepoint
@@ -28,20 +28,24 @@
 //!   captures stay and a later backtrack past it still undoes them (the
 //!   recursive matcher kept them: bug F, F6A_PRECHECK.md). A negative one
 //!   always undoes the trail to its barrier.
-//! Lookbehind isn't here: patterns with one stay on the recursive matcher
-//! until F6b.
+//! - a lookbehind (B′: fixed length `L`, no captures; `compile` rejects any
+//!   other) steps `L` characters back and runs its body forward from there,
+//!   under the same barrier as a lookahead; its end must be exactly where
+//!   the lookbehind stands. A body of fixed length always ends there, and
+//!   without captures the direction it's matched in can't show. Variable
+//!   length and captures need matching backward (full F6b).
 
 const std = @import("std");
 const Allocator = std.mem.Allocator;
 const format = @import("../bytecode/format.zig");
-const recursive = @import("recursive_matcher.zig");
+const core_mod = @import("core.zig");
 const tier0 = @import("tier0");
 const Budget = @import("utils").budget.Budget;
 const LinearSite = @import("../program.zig").LinearSite;
 
-const CaptureGroup = recursive.CaptureGroup;
-const LoopState = recursive.LoopState;
-const Scratch = recursive.Scratch;
+const CaptureGroup = core_mod.CaptureGroup;
+const LoopState = core_mod.LoopState;
+const Scratch = core_mod.Scratch;
 
 /// Default `ExecLimits.max_backtrack_stack_bytes`: far above what the step
 /// budget lets a match push (one choicepoint per step at most), so by
@@ -52,7 +56,7 @@ pub const DEFAULT_MAX_BACKTRACK_STACK_BYTES: usize = 64 << 20;
 /// position, and the bytes its stacks may take. 0 means unlimited.
 /// T0's VM is linear and ignores both.
 pub const ExecLimits = struct {
-    max_steps: usize = recursive.DEFAULT_MAX_STEPS,
+    max_steps: usize = core_mod.DEFAULT_MAX_STEPS,
     max_backtrack_stack_bytes: usize = DEFAULT_MAX_BACKTRACK_STACK_BYTES,
     /// The most a LookLinear memo table may take, per delegated lookahead
     /// (2 bits per position of the subject). Not an error when a table
@@ -105,7 +109,7 @@ pub const Choice = struct {
     /// `alt`: the resumed branch jumps backward (through the loop guard).
     back: bool = false,
     /// `alt`: the branch to resume. `star_greedy`/`star_lazy`: the pattern
-    /// after the star. `look`: the pc after LOOKAHEAD_END.
+    /// after the star. `look`: the pc after the lookaround's END.
     pc: u32,
     trail_h: u32,
     guard_h: u32,
@@ -113,7 +117,7 @@ pub const Choice = struct {
     look_top: u32,
     /// `alt`: where to resume. `star_greedy`: the index in `positions` to
     /// try next. `star_lazy`: the position reached so far. `look`: where
-    /// the lookahead started.
+    /// the lookaround stands (a lookbehind's body must end there).
     pos: usize,
     /// `star_greedy`: the star's first index in `positions`. `star_lazy`:
     /// the pc of the starred atom. `look`: 1 for a negative lookahead.
@@ -123,9 +127,8 @@ pub const Choice = struct {
 };
 
 /// The explicit-stack backtracker over a subject of `Unit`s (`u8` WTF-8,
-/// `u16` UTF-16). `core` is the recursive matcher's state and atom checks
-/// (captures, subject, CharSets, decoding), reused as they are; only its
-/// control flow (`matchFrom`) isn't used.
+/// `u16` UTF-16). `core` is its state and atom checks (captures, subject,
+/// CharSets, decoding; `core.zig`).
 /// Loop guards past this many are mirrored in a hash set (F7a(3)): the
 /// zero-progress check of a long loop was a scan of every active guard,
 /// quadratic in the iterations (5,000 of `(?:ab)*` took ~13 ms). Below it
@@ -146,7 +149,7 @@ pub fn BacktrackerFor(comptime Unit: type) type {
         linear: []const LinearSite = &.{},
         programs: []const tier0.Program = &.{},
 
-        const Core = recursive.RecursiveMatcherFor(Unit);
+        const Core = core_mod.CoreFor(Unit);
         const Self = @This();
 
         pub const MatchError = Core.MatchError || error{BacktrackStackExhausted};
@@ -155,8 +158,7 @@ pub fn BacktrackerFor(comptime Unit: type) type {
         /// is a few hundred bytes, and this runs per execution); hand them
         /// back with `releaseScratch`.
         pub fn initScratchInto(self: *Self, bytecode: []const u8, input: []const Unit, limits: ExecLimits, capture_slots: usize, scratch: *Scratch) Allocator.Error!void {
-            // The core's own limits stay off: it never runs `matchFrom`.
-            try self.core.initScratchInto(bytecode, input, .unlimited(), capture_slots, scratch);
+            try self.core.initScratchInto(bytecode, input, capture_slots, scratch);
             self.stack = scratch.choices;
             self.trail = scratch.trail;
             scratch.choices = .empty;
@@ -241,7 +243,7 @@ pub fn BacktrackerFor(comptime Unit: type) type {
         }
 
         /// Enter a loop head through a backward edge, refusing an iteration
-        /// that made no progress (the recursive matcher's `matchBackEdge`).
+        /// that made no progress (ECMA-262's empty-iteration rule for loops).
         /// False: refused.
         fn enterBackEdge(self: *Self, target_pc: usize, pos: usize) MatchError!bool {
             const entry: LoopState = .{ .pc = target_pc, .pos = pos };
@@ -386,7 +388,7 @@ pub fn BacktrackerFor(comptime Unit: type) type {
         }
 
         /// Run from `start_pc` at `start_pos`: the end of the first match
-        /// in the recursive matcher's order, or null. The captures are in
+        /// in backtracking order (ECMA-262's priority), or null. The captures are in
         /// `captureSlice` after a match.
         pub fn run(self: *Self, start_pc: usize, start_pos: usize) MatchError!?usize {
             defer self.clearStacks();
@@ -394,8 +396,7 @@ pub fn BacktrackerFor(comptime Unit: type) type {
             var pc = start_pc;
             var pos = start_pos;
             while (true) {
-                // One step per instruction dispatched: the recursive
-                // matcher's one step per `matchFrom`.
+                // One step per instruction dispatched.
                 if (self.limits.max_steps > 0) {
                     self.steps += 1;
                     if (self.steps >= self.limits.max_steps) return error.StepLimitExceeded;
@@ -528,19 +529,47 @@ pub fn BacktrackerFor(comptime Unit: type) type {
                             return true;
                         }
                     }
-                    const end_pc = try self.core.findLookaheadEnd(next);
+                    const end_pc = try self.core.findLookEnd(next, false);
                     var c = self.choice(.look, end_pc + 1, pos);
                     c.a = @intFromBool(inst.opcode == .NEGATIVE_LOOKAHEAD);
                     try self.push(c);
                     self.look_top = @intCast(self.stack.items.len);
                 },
 
-                .LOOKAHEAD_END => {
-                    // Outside a lookahead (malformed bytecode) it matches, as
-                    // the recursive matcher's does.
+                .LOOKBEHIND_FIXED, .NEGATIVE_LOOKBEHIND_FIXED => {
+                    // B′: the body runs forward from `L` characters back.
+                    // Fewer than `L` before `pos`: it can't match.
+                    const negative = inst.opcode == .NEGATIVE_LOOKBEHIND_FIXED;
+                    const start = self.charsBack(pos, inst.operands[0]);
+                    if (self.linearSite(pc)) |site| {
+                        const found: ?bool = if (start) |s| try self.lookLinear(site, s) else false;
+                        if (found) |f| {
+                            if (f == negative) return false;
+                            pc_ptr.* = site.end + 1;
+                            return true;
+                        }
+                    }
+                    const end_pc = try self.core.findLookEnd(next, true);
+                    const from = start orelse {
+                        if (!negative) return false;
+                        pc_ptr.* = end_pc + 1;
+                        return true;
+                    };
+                    var c = self.choice(.look, end_pc + 1, pos);
+                    c.a = @intFromBool(negative);
+                    try self.push(c);
+                    self.look_top = @intCast(self.stack.items.len);
+                    pos_ptr.* = from;
+                },
+
+                .LOOKAHEAD_END, .LOOKBEHIND_END => {
+                    // Outside a lookaround (malformed bytecode) it matches.
                     if (self.look_top == 0) return null;
                     const idx = self.look_top - 1;
                     const b = self.stack.items[idx];
+                    // A lookbehind's body must end where it stands; one of
+                    // fixed length always does (`compile` checks the length).
+                    if (inst.opcode == .LOOKBEHIND_END and pos != b.pos) return false;
                     if (b.a == 1) {
                         // Negative: its body matched, so the assertion
                         // fails, and none of the body's captures stay.
@@ -565,16 +594,24 @@ pub fn BacktrackerFor(comptime Unit: type) type {
                 .WORD_BOUNDARY => if (!self.core.isWordBoundary(pos)) return false,
                 .NOT_WORD_BOUNDARY => if (self.core.isWordBoundary(pos)) return false,
 
-                // Lookbehind runs on the recursive matcher (see the module
-                // doc); anything else the recursive matcher doesn't run
-                // either.
+                // Opcodes the code generator doesn't emit.
                 else => return false,
             }
             pc_ptr.* = next;
             return true;
         }
 
-        /// The LookLinear site of the lookahead at `pc`, if any.
+        /// The position `n` characters before `pos` (code units without
+        /// `u`/`v`, code points with them; `Subject.decodeBefore` keeps a
+        /// pair and WTF-8's `b+2` straight), or null if there are fewer.
+        fn charsBack(self: *const Self, pos: usize, n: u32) ?usize {
+            var p = pos;
+            var i: u32 = 0;
+            while (i < n) : (i += 1) p = (self.core.decodeBefore(p) orelse return null).pos;
+            return p;
+        }
+
+        /// The LookLinear site of the lookaround at `pc`, if any.
         fn linearSite(self: *const Self, pc: usize) ?LinearSite {
             if (self.linear.len == 0) return null;
             const i = std.sort.binarySearch(LinearSite, self.linear, pc, struct {
@@ -585,7 +622,8 @@ pub fn BacktrackerFor(comptime Unit: type) type {
             return self.linear[i];
         }
 
-        /// Whether the delegated body of `site` matches anchored at `pos`:
+        /// Whether the delegated body of `site` matches anchored at `pos`
+        /// (a lookbehind's `pos` is its start, `L` characters back):
         /// the memo, or T0's VM on the same step budget. Null if the VM
         /// can't answer (never expected: `pos` is always a position), and
         /// the backtracker evaluates the body itself.

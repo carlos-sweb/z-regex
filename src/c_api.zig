@@ -59,6 +59,10 @@ pub const ZRegexError = enum(c_int) {
     ZREGEXP_ERROR_UNMATCHED_PAREN = 6,
     ZREGEXP_ERROR_INVALID_RANGE = 7,
     ZREGEXP_ERROR_UNKNOWN = 8,
+    /// A valid pattern this engine can't run yet: a lookbehind of variable
+    /// length or with a capture group inside (F6b step 1, B′). A new value
+    /// at the end: no symbol or struct changes.
+    ZREGEXP_ERROR_UNSUPPORTED = 9,
 };
 
 // =============================================================================
@@ -107,6 +111,7 @@ fn zigErrorToC(err: anytype) ZRegexError {
         error.UnmatchedParen => .ZREGEXP_ERROR_UNMATCHED_PAREN,
         error.InvalidEscape, error.InvalidQuantifier, error.IncompatibleFlags => .ZREGEXP_ERROR_SYNTAX,
         error.InvalidCharRange => .ZREGEXP_ERROR_INVALID_RANGE,
+        error.UnsupportedFeature => .ZREGEXP_ERROR_UNSUPPORTED,
         else => .ZREGEXP_ERROR_UNKNOWN,
     };
 }
@@ -549,6 +554,7 @@ export fn zregex_error_message(err: ZRegexError) [*:0]const u8 {
         .ZREGEXP_ERROR_UNMATCHED_PAREN => "Unmatched parenthesis",
         .ZREGEXP_ERROR_INVALID_RANGE => "Invalid character range",
         .ZREGEXP_ERROR_UNKNOWN => "Unknown error",
+        .ZREGEXP_ERROR_UNSUPPORTED => "Pattern uses a feature not supported yet (lookbehind of variable length or with captures)",
     };
 }
 
@@ -834,6 +840,21 @@ test "zregex_compile / zregex_compile_n carry u and v to CompileResult.mode (F3c
     const plain = zregex_compile("a", null).?;
     defer zregex_free(plain);
     try std.testing.expectEqual(Mode.code_unit, plain.compiled.mode);
+}
+
+test "a lookbehind of variable length is ZREGEXP_ERROR_UNSUPPORTED (B′)" {
+    try std.testing.expect(zregex_compile("(?<=a+)b", null) == null);
+    try std.testing.expectEqual(ZRegexError.ZREGEXP_ERROR_UNSUPPORTED, zregex_last_error());
+    try std.testing.expect(zregex_compile_n("(?<=(a))b", 9, null) == null);
+    try std.testing.expectEqual(ZRegexError.ZREGEXP_ERROR_UNSUPPORTED, zregex_last_error());
+    try std.testing.expectEqualStrings("UnsupportedFeature", std.mem.span(zregex_last_error_name()));
+    // Fixed length, no captures: runs.
+    const re = zregex_compile("(?<=a)b", null).?;
+    defer zregex_free(re);
+    var slots: [2]usize = undefined;
+    const s = "ab";
+    try std.testing.expectEqual(@as(c_int, 1), zregex_exec_wtf8(re, s.ptr, s.len, 0, false, &slots, slots.len));
+    try std.testing.expectEqualSlices(usize, &.{ 1, 2 }, &slots);
 }
 
 test "ZRegexOptions.max_steps reaches every execution (F7b)" {

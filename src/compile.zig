@@ -176,7 +176,7 @@ fn frontend(allocator: Allocator, pattern: []const u8, options: CompileOptions) 
     // ECMA-262: `u` and `v` together are a SyntaxError (the same check as
     // `analysis.Flags.parse`).
     if (options.unicode and options.v) return error.IncompatibleFlags;
-    return lower_mod.Frontend.init(allocator, pattern, .{
+    const fe = try lower_mod.Frontend.init(allocator, pattern, .{
         .unicode = options.unicode,
         .v = options.v,
         .possessive = options.possessive,
@@ -185,6 +185,14 @@ fn frontend(allocator: Allocator, pattern: []const u8, options: CompileOptions) 
         .multiline = options.multiline,
         .dot_all = options.dot_all,
     });
+    // B′ (F6b step 1): the backtracker runs a lookbehind of fixed length
+    // without captures; any other is a valid pattern this engine can't run
+    // yet (not a SyntaxError: the parser's errors came first).
+    if (!hir.lookbehindsFixed(fe.root)) {
+        fe.deinit();
+        return error.UnsupportedFeature;
+    }
+    return fe;
 }
 
 /// Where the pattern runs, or `error.TierUnavailable` when `force_tier`
@@ -251,9 +259,9 @@ fn generate(allocator: Allocator, fe: *const lower_mod.Frontend, options: Compil
 
     var generator = CodeGenerator.init(allocator, &writer);
     defer generator.deinit();
-    // RepeatMatcher step 2.b (F7a(4)) on the explicit-stack backtracker;
-    // a pattern with a lookbehind runs on the recursive matcher (F6b).
-    generator.empty_check = !hir.hasLookbehind(fe.root);
+    // RepeatMatcher step 2.b (F7a(4)): every pattern runs on the
+    // explicit-stack backtracker since B′ (F6b step 1).
+    generator.empty_check = true;
     try generator.generate(fe.root);
 
     // Phase 5 was a no-op `Optimizer` that copied the bytecode (F7b): the
@@ -300,7 +308,6 @@ fn generate(allocator: Allocator, fe: *const lower_mod.Frontend, options: Compil
         .group_count = parser.group_counter,
         .charsets = charsets,
         .mode = if (options.unicode or options.v) .code_point else .code_unit,
-        .has_lookbehind = program_mod.hasLookbehind(bytecode),
         .mark_count = generator.marks,
         .word_fold = options.case_insensitive and (options.unicode or options.v),
         .linear = linear_owned,

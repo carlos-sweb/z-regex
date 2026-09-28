@@ -196,18 +196,62 @@ pub fn nullable(node: *const Node) bool {
     };
 }
 
-/// Whether `node`'s subtree has a lookbehind: such a pattern runs on the
-/// recursive matcher until F6b, the rest on the explicit-stack backtracker.
-pub fn hasLookbehind(node: *const Node) bool {
+/// The number of characters every match of `node` consumes, or null when
+/// it can vary (F6b step 1, B′). A character is what `char_set` and a
+/// `LitUnit` consume in the pattern's mode: a code unit without `u`/`v`,
+/// a code point with them (an astral literal without `u` is already two
+/// units). Assertions and lookarounds consume nothing; a `repeat` is fixed
+/// when `min == max`; an alternation when all its branches agree. A
+/// backreference, a raw byte (one byte of WTF-8, not a character) and a
+/// length past `u32` are not fixed. Captures don't change the length:
+/// whether a lookbehind may hold one is `lookbehindsFixed`'s business.
+pub fn fixedLength(node: *const Node) ?u32 {
     return switch (node.*) {
-        .empty, .literal, .char_set, .backref, .assert => false,
+        .empty, .assert, .look => 0,
+        .literal => |l| for (l.units) |u| {
+            if (u.raw_byte) break null;
+        } else std.math.cast(u32, l.units.len),
+        .char_set => 1,
+        .backref => null,
+        .seq => |items| blk: {
+            var sum: u32 = 0;
+            for (items) |item| sum = std.math.add(u32, sum, fixedLength(item) orelse break :blk null) catch break :blk null;
+            break :blk sum;
+        },
+        .alt => |items| blk: {
+            var len: ?u32 = null;
+            for (items) |item| {
+                const l = fixedLength(item) orelse break :blk null;
+                if (len != null and len.? != l) break :blk null;
+                len = l;
+            }
+            break :blk len orelse 0;
+        },
+        .repeat => |r| if (r.max != null and r.max.? == r.min)
+            std.math.mul(u32, r.min, fixedLength(r.body) orelse return null) catch null
+        else
+            null,
+        .capture => |c| fixedLength(c.body),
+        .modifier_scope => |m| fixedLength(m.body),
+    };
+}
+
+/// Whether every lookbehind in `node`'s subtree is one the explicit-stack
+/// backtracker runs (B′): a body of fixed length (`fixedLength`) with no
+/// capture group inside. Such a body matched forward from `L` characters
+/// back ends exactly where the lookbehind stands, and without captures the
+/// direction can't show. Anything else is `error.UnsupportedFeature` until
+/// F6b matches backward.
+pub fn lookbehindsFixed(node: *const Node) bool {
+    return switch (node.*) {
+        .empty, .literal, .char_set, .backref, .assert => true,
         .seq, .alt => |items| for (items) |item| {
-            if (hasLookbehind(item)) break true;
-        } else false,
-        .repeat => |r| hasLookbehind(r.body),
-        .capture => |c| hasLookbehind(c.body),
-        .look => |l| l.behind or hasLookbehind(l.body),
-        .modifier_scope => |m| hasLookbehind(m.body),
+            if (!lookbehindsFixed(item)) break false;
+        } else true,
+        .repeat => |r| lookbehindsFixed(r.body),
+        .capture => |c| lookbehindsFixed(c.body),
+        .look => |l| (!l.behind or (fixedLength(l.body) != null and captureRange(l.body) == null)) and lookbehindsFixed(l.body),
+        .modifier_scope => |m| lookbehindsFixed(m.body),
     };
 }
 
@@ -332,6 +376,92 @@ test "hir: collectCaptures is pre-order over the whole subtree" {
     defer list.deinit(a);
     try collectCaptures(&root, &list, a);
     try std.testing.expectEqualSlices(u16, &.{ 1, 2, 3 }, list.items);
+}
+
+test "hir: fixedLength and lookbehindsFixed (B′)" {
+    const a = std.testing.allocator;
+    const t = std.testing;
+    const ab_units = [_]LitUnit{ .{ .value = 'a' }, .{ .value = 'b' } };
+    const ab: Node = .{ .literal = .{ .units = &ab_units } };
+    // An astral literal: one unit with `u`, two (its surrogates) without.
+    const smile_cp_units = [_]LitUnit{.{ .value = 0x1F600 }};
+    const smile_cp: Node = .{ .literal = .{ .units = &smile_cp_units } };
+    const smile_cu_units = [_]LitUnit{ .{ .value = 0xD83D }, .{ .value = 0xDE00 } };
+    const smile_cu: Node = .{ .literal = .{ .units = &smile_cu_units } };
+    const raw_units = [_]LitUnit{.{ .value = 0xC3, .raw_byte = true }};
+    const raw: Node = .{ .literal = .{ .units = &raw_units } };
+    const set = try CharSet.fromRanges(a, &.{.{ .lo = '0', .hi = '9' }});
+    defer set.deinit(a);
+    const digit: Node = .{ .char_set = .{ .set = set, .inverted = false, .encoding_hint = .set } };
+    const empty: Node = .empty;
+    const caret: Node = .{ .assert = .caret };
+    const wb: Node = .{ .assert = .word_boundary };
+    const br: Node = .{ .backref = .{ .indices = &.{1} } };
+
+    // Fixed forms.
+    try t.expectEqual(@as(?u32, 2), fixedLength(&ab));
+    try t.expectEqual(@as(?u32, 1), fixedLength(&digit));
+    try t.expectEqual(@as(?u32, 0), fixedLength(&empty));
+    try t.expectEqual(@as(?u32, 0), fixedLength(&caret));
+    try t.expectEqual(@as(?u32, 0), fixedLength(&wb));
+    const seq_items = [_]*const Node{ &caret, &ab, &wb, &digit };
+    const seq: Node = .{ .seq = &seq_items };
+    try t.expectEqual(@as(?u32, 3), fixedLength(&seq));
+    const exact: Node = .{ .repeat = .{ .min = 3, .max = 3, .policy = .lazy, .syntax_form = .counted, .body = &ab } };
+    try t.expectEqual(@as(?u32, 6), fixedLength(&exact));
+    const zero: Node = .{ .repeat = .{ .min = 0, .max = 0, .policy = .greedy, .syntax_form = .counted, .body = &ab } };
+    try t.expectEqual(@as(?u32, 0), fixedLength(&zero));
+    const alt_same_items = [_]*const Node{ &ab, &seq };
+    const alt_same: Node = .{ .alt = &alt_same_items };
+    try t.expectEqual(@as(?u32, null), fixedLength(&alt_same)); // 2 vs 3
+    const two_digits_items = [_]*const Node{ &digit, &digit };
+    const two_digits: Node = .{ .seq = &two_digits_items };
+    const alt_eq_items = [_]*const Node{ &ab, &two_digits };
+    const alt_eq: Node = .{ .alt = &alt_eq_items };
+    try t.expectEqual(@as(?u32, 2), fixedLength(&alt_eq));
+    const ahead_var: Node = .{ .repeat = .{ .min = 1, .max = null, .policy = .greedy, .syntax_form = .plus, .body = &digit } };
+    const look_ahead: Node = .{ .look = .{ .behind = false, .negated = false, .body = &ahead_var } };
+    try t.expectEqual(@as(?u32, 0), fixedLength(&look_ahead));
+    const cap: Node = .{ .capture = .{ .index = 1, .name = null, .body = &ab } };
+    try t.expectEqual(@as(?u32, 2), fixedLength(&cap));
+    // `(?<=😀|ab)`: fixed without `u` (2 and 2 units), not with it (1 and 2).
+    const alt_cu_items = [_]*const Node{ &smile_cu, &ab };
+    const alt_cu: Node = .{ .alt = &alt_cu_items };
+    try t.expectEqual(@as(?u32, 2), fixedLength(&alt_cu));
+    const alt_cp_items = [_]*const Node{ &smile_cp, &ab };
+    const alt_cp: Node = .{ .alt = &alt_cp_items };
+    try t.expectEqual(@as(?u32, null), fixedLength(&alt_cp));
+
+    // Forms that look fixed but aren't.
+    try t.expectEqual(@as(?u32, null), fixedLength(&ahead_var));
+    const opt: Node = .{ .repeat = .{ .min = 0, .max = 1, .policy = .greedy, .syntax_form = .question, .body = &ab } };
+    try t.expectEqual(@as(?u32, null), fixedLength(&opt));
+    const alt_empty_items = [_]*const Node{ &ab, &empty };
+    const alt_empty: Node = .{ .alt = &alt_empty_items };
+    try t.expectEqual(@as(?u32, null), fixedLength(&alt_empty));
+    try t.expectEqual(@as(?u32, null), fixedLength(&br));
+    try t.expectEqual(@as(?u32, null), fixedLength(&raw));
+    const huge: Node = .{ .repeat = .{ .min = std.math.maxInt(u32), .max = std.math.maxInt(u32), .policy = .greedy, .syntax_form = .counted, .body = &ab } };
+    try t.expectEqual(@as(?u32, null), fixedLength(&huge));
+
+    // lookbehindsFixed: every lookbehind fixed and capture-free, nested too.
+    const lb_ok: Node = .{ .look = .{ .behind = true, .negated = true, .body = &seq } };
+    try t.expect(lookbehindsFixed(&lb_ok));
+    const lb_var: Node = .{ .look = .{ .behind = true, .negated = false, .body = &ahead_var } };
+    try t.expect(!lookbehindsFixed(&lb_var));
+    const lb_cap: Node = .{ .look = .{ .behind = true, .negated = false, .body = &cap } };
+    try t.expect(!lookbehindsFixed(&lb_cap));
+    const la_cap: Node = .{ .look = .{ .behind = false, .negated = false, .body = &cap } };
+    try t.expect(lookbehindsFixed(&la_cap)); // a lookahead may capture
+    const inner_items = [_]*const Node{ &ab, &lb_var };
+    const inner: Node = .{ .seq = &inner_items };
+    const lb_nested: Node = .{ .look = .{ .behind = true, .negated = false, .body = &inner } };
+    try t.expectEqual(@as(?u32, 2), fixedLength(&inner)); // the nested lookbehind is zero-width…
+    try t.expect(!lookbehindsFixed(&lb_nested)); // …but not fixed itself
+    const in_ahead: Node = .{ .look = .{ .behind = false, .negated = false, .body = &lb_var } };
+    const deep: Node = .{ .repeat = .{ .min = 0, .max = null, .policy = .greedy, .syntax_form = .star, .body = &in_ahead } };
+    try t.expect(!lookbehindsFixed(&deep));
+    try t.expect(lookbehindsFixed(&seq));
 }
 
 test "hir: dump" {

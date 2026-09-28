@@ -1196,8 +1196,8 @@ pub const Lexer = struct {
             return Token.escaped(value, start_pos);
         }
         // WTF-8, so a lone surrogate half (U+D800-U+DFFF) becomes the same
-        // 3-byte sequence the ecosystem uses for it in subjects (see
-        // `recursive_matcher.zig`'s `decodeSurrogateWtf8`).
+        // 3-byte sequence the ecosystem uses for it in subjects (see the
+        // `subject` module's WTF-8 decoding).
         var buf: [4]u8 = undefined;
         const len = std.unicode.wtf8Encode(@intCast(value), &buf) catch unreachable; // value <= 0x10FFFF
         return Token.multibyteChar(buf, len, start_pos);

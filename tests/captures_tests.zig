@@ -76,7 +76,7 @@ test "D16: group 256 is group 256, not the whole match" {
 test "D9: backreferences past \\9 and past 255 (\\17, \\200, \\300)" {
     const gpa = testing.allocator;
     // 300 groups with the reference: 900+ matchFrom levels, under the
-    // recursion limit (1000 groups are covered in recursive_matcher.zig).
+    // recursion limit (1000 groups are covered in tier2_pipeline_tests.zig).
     for ([_]usize{ 17, 200, 300 }) |n| {
         const groups = try repeat(gpa, "(.)", n);
         defer gpa.free(groups);

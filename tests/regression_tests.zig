@@ -7,7 +7,7 @@
 //!
 //! | Bug (origin)                                                        | Existing test |
 //! |---------------------------------------------------------------------|---------------|
-//! | `/(a*)b\1+/` on "baaac" segfaulted (Phase 6)                        | tests/tier2_pipeline_tests.zig: "RecursiveMatcher: quantified backreference to an empty capture doesn't crash" |
+//! | `/(a*)b\1+/` on "baaac" segfaulted (Phase 6)                        | tests/tier2_pipeline_tests.zig: "backtracker: quantified backreference to an empty capture doesn't crash" |
 //! | `/[a-z]+/i` ignored case in ranges (Phase 6)                         | src/regex.zig: "Regex: case_insensitive character ranges match both cases (test262 S15.10.2.8_A5_T1)" |
 //! | `/[^o]/i` negated class ignored case (Phase 6)                       | src/regex.zig: "Regex: case_insensitive negated character class matches both cases (test262 S15.10.2.6_A3_T7)" |
 //! | `/(123){1,}/` lost its last iteration's capture (Phase 6)           | src/regex.zig: "Regex: a quantified capturing group retains its last iteration's capture (test262 S15.10.2.7_A6_T4)" |
@@ -289,13 +289,80 @@ test "regression: a positive lookahead's captures are undone when backtracking p
     try expectExpert("(?!(a))\\1b", false, "b", &.{ 0, 1, null, null });
 }
 
-test "regression: a pattern with a lookbehind stays on the recursive matcher until F6b" {
-    var lb = try zregex.Regex.compile(testing.allocator, "(?<!\\$)\\d+");
-    defer lb.deinit();
-    try testing.expect(lb.compiled.has_lookbehind);
-    var la = try zregex.Regex.compile(testing.allocator, "(?!\\$)\\d+");
-    defer la.deinit();
-    try testing.expect(!la.compiled.has_lookbehind);
+/// B′ (F6b step 1): the first match of `pattern` (flags: i, u) from 0 in
+/// UTF-16 units, run on UTF-16 and on WTF-8 (converted), with LookLinear on
+/// and off: all four must agree with `want` (V8's, `null`: no match).
+fn expectLookbehind(pattern: []const u8, flags: []const u8, input: []const u8, want: ?[]const i64) !void {
+    const a = testing.allocator;
+    const s16 = try zregex.subject.utf16FromWtf8(a, input);
+    defer a.free(s16);
+    for ([_]bool{ true, false }) |linear| {
+        var re = try zregex.Regex.compileWithOptions(a, pattern, .{
+            .case_insensitive = std.mem.indexOfScalar(u8, flags, 'i') != null,
+            .unicode = std.mem.indexOfScalar(u8, flags, 'u') != null,
+            .t2_look_linear = linear,
+        });
+        defer re.deinit();
+        var scratch = zregex.Scratch.init(a);
+        defer scratch.deinit();
+        const slots = try a.alloc(?usize, re.slotCount());
+        defer a.free(slots);
+        var out: zregex.MatchSlots = .{ .slots = slots };
+        for ([_]zregex.Subject{ .{ .utf16 = s16 }, .{ .wtf8 = input } }) |subj| {
+            const found = try re.execAt(subj, 0, &scratch, &out, .{});
+            const ok = if (want) |w| found and w.len == slots.len and for (w, slots) |x, g| {
+                const u: i64 = if (g) |v| @intCast(if (subj == .wtf8) try zregex.subject.wtf8ToUtf16Index(input, v) else v) else -1;
+                if (u != x) break false;
+            } else true else !found;
+            if (!ok) {
+                std.debug.print("/{s}/{s} on \"{s}\" ({s}, look_linear {}): want {any}, got {any} (found {})\n", .{ pattern, flags, input, @tagName(subj), linear, want, slots, found });
+                return error.TestUnexpectedResult;
+            }
+        }
+    }
+}
+
+test "B′: a lookbehind of fixed length runs on the explicit-stack backtracker (V8's values)" {
+    try expectLookbehind("(?<!\\$)\\d+", "", "$12 34", &.{ 2, 3 });
+    try expectLookbehind("(?<=\\$)\\d+", "", "$12 34", &.{ 1, 3 });
+    try expectLookbehind("(?<=ab)c", "", "abc", &.{ 2, 3 });
+    try expectLookbehind("(?<!ab)c", "", "abc", null);
+    try expectLookbehind("(?<=^)a", "", "a", &.{ 0, 1 });
+    try expectLookbehind("(?<!^a)b", "", "ab", null);
+    // Fewer than L characters before: positive fails, negative holds.
+    try expectLookbehind("(?<!a)b", "", "b", &.{ 0, 1 });
+    try expectLookbehind("(?<=a)", "", "a", &.{ 1, 1 });
+    try expectLookbehind("(?<=[a-c]{2})d", "", "abcd", &.{ 3, 4 });
+    // L counts code units without `u` (WTF-8's b+2 is a position), code
+    // points with it.
+    try expectLookbehind("(?<=\u{1F600})x", "", "\u{1F600}x", &.{ 2, 3 });
+    try expectLookbehind("(?<=\u{1F600})x", "u", "\u{1F600}x", &.{ 2, 3 });
+    try expectLookbehind("(?<=.)x", "u", "\u{1F600}x", &.{ 2, 3 });
+    try expectLookbehind("(?<=.)x", "", "\u{1F600}x", &.{ 2, 3 });
+    try expectLookbehind("(?<=..)x", "", "\u{1F600}x", &.{ 2, 3 });
+    try expectLookbehind("(?<=..)x", "u", "\u{1F600}x", null);
+    // Case folding inside the body.
+    try expectLookbehind("(?<=\u{DF})a", "iu", "\u{1E9E}a", &.{ 1, 2 });
+    try expectLookbehind("(?<=K)x", "iu", "\u{212A}x", &.{ 1, 2 });
+    // RepeatMatcher step 2.b now applies to patterns with a lookbehind.
+    try expectLookbehind("(?<=x)(a*)*", "", "xaa", &.{ 1, 3, 1, 3 });
+}
+
+test "B′: other lookbehinds are error.UnsupportedFeature, after syntax errors" {
+    const a = testing.allocator;
+    for ([_][]const u8{ "(?<=a+)b", "(?<=a|bc)d", "(?<=(a))b", "(?<!(?:x|yz))", "(a)(?<=\\1)", "(?<=a?)b", "(?=(?<=a*))b" }) |p| {
+        try testing.expectError(error.UnsupportedFeature, zregex.Regex.compile(a, p));
+    }
+    // `(?<=\u{1F600}|ab)`: two and two code units without `u`, one and two
+    // code points with it.
+    var cu = try zregex.Regex.compile(a, "(?<=\u{1F600}|ab)c");
+    cu.deinit();
+    try testing.expectError(error.UnsupportedFeature, zregex.Regex.compileWithOptions(a, "(?<=\u{1F600}|ab)c", .{ .unicode = true }));
+    // A quantified lookbehind is a SyntaxError, not an unsupported feature.
+    if (zregex.Regex.compile(a, "a(?<=b)*")) |re| {
+        re.deinit();
+        return error.TestUnexpectedResult;
+    } else |err| try testing.expect(err != error.UnsupportedFeature);
 }
 
 // Found by the F1c long fuzz run (reduced from
@@ -397,8 +464,9 @@ test "LookLinear: which lookaheads are delegated" {
         .{ .pattern = "(?=(a))a", .input = "ba", .sites = 0, .want = .{ 1, 2 } },
         .{ .pattern = "(a)(?=\\1)a", .input = "aa", .sites = 0, .want = .{ 0, 2 } },
         .{ .pattern = "(?=(?=a)a)a", .input = "ba", .sites = 1, .want = .{ 1, 2 } },
-        // Lookbehind: the recursive matcher until F6b, no site.
-        .{ .pattern = "(?<!\\$)\\d+", .input = "$12 34", .sites = 0, .want = .{ 2, 3 } },
+        // A lookbehind of fixed length (B′): delegated from `L` back.
+        .{ .pattern = "(?<!\\$)\\d+", .input = "$12 34", .sites = 1, .want = .{ 2, 3 } },
+        .{ .pattern = "(?<=ab)c|(?<!b)d", .input = "abd abc", .sites = 2, .want = .{ 6, 7 } },
     };
     for (cases) |c| {
         const on = try lookRun(c.pattern, c.input, true, .{});
@@ -646,13 +714,12 @@ test "F7a: an empty iteration above the minimum fails (RepeatMatcher step 2.b, V
     try expectBacktrackerSlots("(?:()|a){2,}x", "ax", &.{ 0, 2, -1, -1 });
 }
 
-test "F7a: a pattern with a lookbehind gets no empty-iteration marks (F6b)" {
-    // It runs on the recursive matcher, which doesn't execute them.
+test "F7a: a pattern with a lookbehind gets empty-iteration marks too (B′)" {
+    // Since B′ it runs on the explicit-stack backtracker, like any other.
     const a = testing.allocator;
     var re = try zregex.Regex.compileWithOptions(a, "(?<=x)(a*)*", .{ .force_tier = .expert });
     defer re.deinit();
-    try testing.expect(re.compiled.has_lookbehind);
-    try testing.expectEqual(@as(u16, 0), re.compiled.mark_count);
+    try testing.expect(re.compiled.mark_count > 0);
     var plain = try zregex.Regex.compileWithOptions(a, "(a*)*", .{ .force_tier = .expert });
     defer plain.deinit();
     try testing.expect(plain.compiled.mark_count > 0);
@@ -764,11 +831,12 @@ fn spanOf(pattern: []const u8, input: []const u8, unicode: bool) !?[2]usize {
 }
 
 // Backreferences never run on T0 (tier0.check rejects them), so there is
-// no T0/T2 cross for them. The two backtrackers share checkBackRef: a
-// pattern with a lookbehind runs on the recursive matcher, one without on
-// the explicit-stack one; the same backreference gives the same span on
-// both (and V8's).
-test "F5b: backreferences under i agree on both backtrackers" {
+// no T0/T2 cross for them. Until B′ a pattern with a lookbehind ran on the
+// recursive matcher and one without on the explicit-stack backtracker (the
+// two shared checkBackRef); since B′ both run on the latter, and the same
+// backreference still gives the same span with and without a lookbehind
+// (and V8's).
+test "F5b: backreferences under i agree with and without a lookbehind" {
     try testing.expectEqual(@as(?[2]usize, .{ 1, 3 }), try spanOf("(?<=x)(\u{E9})\\1", "x\u{E9}\u{C9}", false));
     try testing.expectEqual(@as(?[2]usize, .{ 1, 3 }), try spanOf("(\u{E9})\\1", "x\u{E9}\u{C9}", false));
     try testing.expectEqual(@as(?[2]usize, .{ 1, 3 }), try spanOf("(?<=x)(k)\\1", "xk\u{212A}", true));

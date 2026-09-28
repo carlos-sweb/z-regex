@@ -7,8 +7,6 @@ const std = @import("std");
 const zregex = @import("zregex");
 
 const Matcher = zregex.Matcher;
-const RecursiveMatcher = zregex.tier2.RecursiveMatcher;
-const ExecOptions = zregex.tier2.ExecOptions;
 const CodeGenerator = zregex.CodeGenerator;
 const BytecodeWriter = zregex.BytecodeWriter;
 const Opcode = zregex.Opcode;
@@ -150,169 +148,76 @@ test "Matcher: test_ function" {
     try std.testing.expect(!try matcher.test_("fail"));
 }
 
-// --- from src/tier2/executor/recursive_matcher.zig ---
+// --- from src/tier2/executor/recursive_matcher.zig (on the explicit-stack
+// backtracker since B′, which retired the recursive matcher) ---
 
-test "RecursiveMatcher: question quantifier" {
-    const compiler = zregex;
+/// One run of the backtracker anchored at `pos` (`Matcher.exec`, sticky):
+/// the match's end, or null; the group slots in `slots[2..]`.
+fn runAt(comptime Unit: type, compiled: zregex.CompileResult, input: []const Unit, pos: usize, slots: []?usize, limits: zregex.ExecLimits) !?usize {
+    const m = Matcher.initCompiled(std.testing.allocator, compiled);
+    var scratch = zregex.tier2.matcher.Scratch.init(std.testing.allocator);
+    defer scratch.deinit();
+    if (!try m.exec(Unit, input, pos, true, &scratch, slots, limits)) return null;
+    return slots[1].?;
+}
 
-    const result = try compiler.compileSimple(std.testing.allocator, "a?");
+test "backtracker: question quantifier" {
+    const result = try zregex.compileSimple(std.testing.allocator, "a?");
     defer result.deinit();
+    var slots: [2]?usize = undefined;
+    try std.testing.expectEqual(@as(?usize, 0), try runAt(u8, result, "", 0, &slots, .{}));
+    try std.testing.expectEqual(@as(?usize, 1), try runAt(u8, result, "a", 0, &slots, .{}));
+}
 
-    // Test with empty string (should match)
-    {
-        var matcher = RecursiveMatcher.init(std.testing.allocator, result.bytecode, "");
-        defer matcher.deinit();
-        const exec_result = try matcher.matchFrom(0, 0);
-        try std.testing.expect(exec_result.matched);
-        try std.testing.expectEqual(@as(usize, 0), exec_result.end_pos);
+test "backtracker: simple star quantifier" {
+    const result = try zregex.compileSimple(std.testing.allocator, "a*");
+    defer result.deinit();
+    var slots: [2]?usize = undefined;
+    try std.testing.expectEqual(@as(?usize, 0), try runAt(u8, result, "", 0, &slots, .{}));
+    try std.testing.expectEqual(@as(?usize, 3), try runAt(u8, result, "aaa", 0, &slots, .{}));
+}
+
+test "backtracker: ReDoS protection - step limit" {
+    // (a+)+b over 20 'a' and no 'b': exponential, stopped by the default
+    // step budget.
+    const result = try zregex.compileSimple(std.testing.allocator, "(a+)+b");
+    defer result.deinit();
+    var slots: [4]?usize = undefined;
+    try std.testing.expectError(error.StepLimitExceeded, runAt(u8, result, "aaaaaaaaaaaaaaaaaaaaX", 0, &slots, .{}));
+}
+
+test "backtracker: quantified backreference to an empty capture doesn't crash" {
+    // A real crash found via test262-derived conformance testing (see
+    // docs/ECMASCRIPT_COMPATIBILITY_PLAN.md Phase 6): `\1+` where group 1
+    // can capture zero characters. Matches "b": group 1 captures "", \1+
+    // matches it once and stops (test262's S15.10.2.9_A1_T5.js expects
+    // ["b", ""]).
+    const result = try zregex.compileSimple(std.testing.allocator, "(a*)b\\1+");
+    defer result.deinit();
+    var slots: [4]?usize = undefined;
+    try std.testing.expectEqual(@as(?usize, 1), try runAt(u8, result, "baaac", 0, &slots, .{}));
+}
+
+test "backtracker: 1000 groups capture exactly, and \\1000 matches (D9)" {
+    // The capture storage (heap slots, u16 indices); no native stack in the
+    // way since F6a.
+    const gpa = std.testing.allocator;
+    var pattern: std.ArrayListUnmanaged(u8) = .empty;
+    defer pattern.deinit(gpa);
+    for (0..1000) |_| try pattern.appendSlice(gpa, "(.)");
+    try pattern.appendSlice(gpa, "\\1000");
+    var input: [1001]u8 = undefined;
+    for (input[0..1000], 0..) |*c, i| c.* = @intCast('!' + (i % 94));
+    input[1000] = input[999];
+    const compiled = try zregex.compileSimple(gpa, pattern.items);
+    defer compiled.deinit();
+    const slots = try gpa.alloc(?usize, 2 * 1001);
+    defer gpa.free(slots);
+    try std.testing.expectEqual(@as(?usize, 1001), try runAt(u8, compiled, &input, 0, slots, .{ .max_steps = 0 }));
+    for (1..1001) |g| {
+        try std.testing.expectEqual(@as(?usize, g - 1), slots[2 * g]);
+        try std.testing.expectEqual(@as(?usize, g), slots[2 * g + 1]);
     }
-
-    // Test with "a" (should match and consume)
-    {
-        var matcher = RecursiveMatcher.init(std.testing.allocator, result.bytecode, "a");
-        defer matcher.deinit();
-        const exec_result = try matcher.matchFrom(0, 0);
-        try std.testing.expect(exec_result.matched);
-        try std.testing.expectEqual(@as(usize, 1), exec_result.end_pos);
-    }
-}
-
-test "RecursiveMatcher: simple star quantifier" {
-    const compiler = zregex;
-
-    const result = try compiler.compileSimple(std.testing.allocator, "a*");
-    defer result.deinit();
-
-    // Test with empty string (should match)
-    {
-        var matcher = RecursiveMatcher.init(std.testing.allocator, result.bytecode, "");
-        defer matcher.deinit();
-        const exec_result = try matcher.matchFrom(0, 0);
-        try std.testing.expect(exec_result.matched);
-        try std.testing.expectEqual(@as(usize, 0), exec_result.end_pos);
-    }
-
-    // Test with "aaa" (should match)
-    {
-        var matcher = RecursiveMatcher.init(std.testing.allocator, result.bytecode, "aaa");
-        defer matcher.deinit();
-        const exec_result = try matcher.matchFrom(0, 0);
-
-        try std.testing.expect(exec_result.matched);
-        try std.testing.expectEqual(@as(usize, 3), exec_result.end_pos);
-    }
-}
-
-test "RecursiveMatcher: ReDoS protection - step limit" {
-    const compiler = zregex;
-
-    // Patrón que causa backtracking exponencial: (a+)+b
-    const result = try compiler.compileSimple(std.testing.allocator, "(a+)+b");
-    defer result.deinit();
-
-    // Input malicioso: muchas 'a's sin 'b' al final
-    const malicious_input = "aaaaaaaaaaaaaaaaaaaaX"; // 20 'a's + 'X'
-
-    var matcher = RecursiveMatcher.init(std.testing.allocator, result.bytecode, malicious_input);
-    defer matcher.deinit();
-
-    // Debería alcanzar el límite de pasos y lanzar error
-    const exec_result = matcher.matchFrom(0, 0);
-    try std.testing.expectError(error.StepLimitExceeded, exec_result);
-}
-
-test "RecursiveMatcher: quantified backreference to an empty capture doesn't crash" {
-    // Regression test for a real crash found via test262-derived conformance
-    // testing (see docs/ECMASCRIPT_COMPATIBILITY_PLAN.md Phase 6): `\1+`
-    // where group 1 can capture zero characters used to segfault (stack
-    // overflow) with the DEFAULT recursion limit, because isStarConsumePath
-    // didn't recognize BACK_REF as a quantifiable atom, so the loop fell
-    // through to plain recursive alternation with no zero-width-progress
-    // guard. Uses the real default ExecOptions (matching what every public
-    // Regex.find/test_ call actually uses) -- previous versions of this
-    // exact call crashed the whole test binary, not just failed a `try`.
-    const compiler = zregex;
-    const result = try compiler.compileSimple(std.testing.allocator, "(a*)b\\1+");
-    defer result.deinit();
-
-    var matcher = RecursiveMatcher.init(std.testing.allocator, result.bytecode, "baaac");
-    defer matcher.deinit();
-    const exec_result = try matcher.matchFrom(0, 0);
-    try std.testing.expect(exec_result.matched);
-    // Matches "b": group 1 captures "" (no leading 'a' at position 0), \1+
-    // matches that empty capture once (satisfying "+") and stops repeating
-    // since it makes no further progress. This matches real JS semantics --
-    // this exact pattern/input is test262's S15.10.2.9_A1_T5.js, which
-    // expects ["b", ""].
-    try std.testing.expectEqual(@as(usize, 1), exec_result.end_pos);
-}
-
-test "RecursiveMatcher: ReDoS protection - recursion limit" {
-    const compiler = zregex;
-
-    // NOTE: a bare `a+` no longer exercises this -- isStarConsumePath now
-    // recognizes single-atom `+` loops (see the "quantified backref"
-    // crash fix) and routes them through the iterative matchStarGreedy
-    // path, which doesn't consume recursion depth per repetition. A
-    // group-wrapped repetition `(a)+` isn't eligible for that
-    // optimization (the repeated "atom" is a multi-instruction group, not
-    // a single opcode), so it still recurses once per repetition and is a
-    // faithful test of the recursion-limit mechanism itself.
-    const result = try compiler.compileSimple(std.testing.allocator, "(a)+");
-    defer result.deinit();
-
-    // Crear matcher con límites muy bajos
-    const options = ExecOptions.withLimits(5, 50);
-    var matcher = RecursiveMatcher.initWithOptions(
-        std.testing.allocator,
-        result.bytecode,
-        "aaaaaaaaaa", // 10 'a's
-        options,
-    );
-    defer matcher.deinit();
-
-    // Debería alcanzar el límite de recursión
-    const exec_result = matcher.matchFrom(0, 0);
-    try std.testing.expectError(error.RecursionLimitExceeded, exec_result);
-}
-
-test "RecursiveMatcher: 1000 groups capture exactly, and \\1000 matches (D9)" {
-    // Past the default recursion limit (3 levels per group), so the limit is
-    // lifted and the match runs on a 64 MiB thread: this checks the capture
-    // storage (heap slots, u16 indices), not the stack (F6a).
-    const Ctx = struct {
-        ok: bool = false,
-        fn run(ctx: *@This()) void {
-            ctx.ok = check() catch false;
-        }
-        fn check() !bool {
-            const gpa = std.heap.page_allocator;
-            var pattern: std.ArrayListUnmanaged(u8) = .empty;
-            defer pattern.deinit(gpa);
-            for (0..1000) |_| try pattern.appendSlice(gpa, "(.)");
-            try pattern.appendSlice(gpa, "\\1000");
-            var input: [1001]u8 = undefined;
-            for (input[0..1000], 0..) |*c, i| c.* = @intCast('!' + (i % 94));
-            input[1000] = input[999];
-
-            const compiled = try zregex.compileSimple(gpa, pattern.items);
-            defer compiled.deinit();
-            var m = RecursiveMatcher.initWithOptions(gpa, compiled.bytecode, &input, ExecOptions.withLimits(0, 0));
-            defer m.deinit();
-            const r = try m.matchFrom(0, 0);
-            if (!r.matched or r.end_pos != 1001) return false;
-            const caps = m.captureSlice();
-            if (caps.len != 1001) return false;
-            for (1..1001) |g| {
-                if (caps[g].start != g - 1 or caps[g].end != g) return false;
-            }
-            return true;
-        }
-    };
-    var ctx: Ctx = .{};
-    const t = try std.Thread.spawn(.{ .stack_size = 64 << 20 }, Ctx.run, .{&ctx});
-    t.join();
-    try std.testing.expect(ctx.ok);
 }
 
 // --- from src/tier2/codegen/generator.zig ---
@@ -433,14 +338,17 @@ fn hasOpcode(code: []const u8, op: Opcode) !bool {
 
 // --- F3c: the matcher over UTF-16 ---
 
-test "RecursiveMatcher: the u16 instance matches like the u8 one (code points, F3c)" {
+test "backtracker: the u16 instance matches like the u8 one (code points, F3c)" {
     const a = std.testing.allocator;
     const subject = zregex.subject;
-    const patterns = [_][]const u8{ "a", "\\u00e9+", ".", "(.)(.)", "[^a]+", "[\\u00e0-\\u00ff]", "\\p{L}+", "\\bx\\b", "(\\w)\\1", "(?<=(.))x", "(?<!\\u00e9)x", "^.$", "\\u{1F600}", "[\\u{1F600}a]" };
+    const patterns = [_][]const u8{ "a", "\\u00e9+", ".", "(.)(.)", "[^a]+", "[\\u00e0-\\u00ff]", "\\p{L}+", "\\bx\\b", "(\\w)\\1", "(?<=.)x", "(?<!\\u00e9)x", "^.$", "\\u{1F600}", "[\\u{1F600}a]" };
     const subjects = [_][]const u8{ "", "a", "\u{E9}\u{E9}x", "ax\u{E9}x", "\u{1F600}", "x\u{1F600}x", "\xED\xA0\x80x", "\u{2028}a\nb", "aa bb \u{E9}\u{E9}" };
     for (patterns) |p| {
         const c = try zregex.compile(a, p, .{ .unicode = true });
         defer c.deinit();
+        const n = 2 * (@as(usize, c.group_count) + 1);
+        var s8slots: [8]?usize = undefined;
+        var s16slots: [8]?usize = undefined;
         for (subjects) |s8| {
             const s16 = try subject.utf16FromWtf8(a, s8);
             defer a.free(s16);
@@ -449,21 +357,13 @@ test "RecursiveMatcher: the u16 instance matches like the u8 one (code points, F
                 const p8 = try subject.utf16ToWtf8Index(s8, p16);
                 // Only positions both encodings share outside a pair.
                 if (p16 > 0 and p16 < s16.len and s16[p16] >= 0xDC00 and s16[p16] <= 0xDFFF and s16[p16 - 1] >= 0xD800 and s16[p16 - 1] <= 0xDBFF) continue;
-                var m8 = RecursiveMatcher.init(a, c.bytecode, s8);
-                m8.charsets = c.charsets;
-                defer m8.deinit();
-                var m16 = zregex.tier2.RecursiveMatcherFor(u16).init(a, c.bytecode, s16);
-                m16.charsets = c.charsets;
-                defer m16.deinit();
-                const r8 = try m8.matchFrom(0, p8);
-                const r16 = try m16.matchFrom(0, p16);
-                try std.testing.expectEqual(r8.matched, r16.matched);
-                if (!r8.matched) continue;
-                try std.testing.expectEqual(try subject.wtf8ToUtf16Index(s8, r8.end_pos), r16.end_pos);
-                for (m8.captureSlice(), m16.captureSlice()) |g8, g16| {
-                    try std.testing.expectEqual(g8.start == null, g16.start == null);
-                    if (g8.start) |st| try std.testing.expectEqual(try subject.wtf8ToUtf16Index(s8, st), g16.start.?);
-                    if (g8.end) |en| try std.testing.expectEqual(try subject.wtf8ToUtf16Index(s8, en), g16.end.?);
+                const r8 = try runAt(u8, c, s8, p8, s8slots[0..n], .{});
+                const r16 = try runAt(u16, c, s16, p16, s16slots[0..n], .{});
+                try std.testing.expectEqual(r8 == null, r16 == null);
+                if (r8 == null) continue;
+                for (s8slots[0..n], s16slots[0..n]) |g8, g16| {
+                    try std.testing.expectEqual(g8 == null, g16 == null);
+                    if (g8) |v| try std.testing.expectEqual(try subject.wtf8ToUtf16Index(s8, v), g16.?);
                 }
             }
         }

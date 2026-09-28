@@ -38,7 +38,9 @@ older internal notes had previously (incorrectly) listed as broken:
 - **Alternation** `a|b` — no infinite loop; correctly matches either branch.
 - **Lookahead** `(?=...)`, `(?!...)` and **lookbehind** `(?<=...)`, `(?<!...)` — all four
   forms are zero-width and behave correctly (verified with `find`, not `test_`, since
-  these assertions don't consume input — see the `test_` vs `find` note below).
+  these assertions don't consume input — see the `test_` vs `find` note below). Since
+  F6b step 1 a lookbehind has to be of fixed length without captures; any other is
+  `error.UnsupportedFeature` (see "F6b step 1 (B′)").
 - **`\W`, `\S` negation** — correctly inverted (an older internal note claimed these were
   "parsed but not correctly inverted"; that is no longer true).
 - **Counted quantifiers** `{n}`, `{n,}`, `{n,m}` and their lazy forms `{n,m}?`.
@@ -1644,6 +1646,49 @@ process-to-process noise measured in F7-0, which the minimum doesn't fully remov
 base round happens to be fast. Improvements in the second run: compile `t0_email` -48.7%,
 `t2_book_backref` -39.8%, `t1_book_pL` -36.7%, `t1_pL` -29.8%.
 
+### F6b step 1 (B′): lookbehind of fixed length, the recursive matcher retired
+
+**What runs.** A lookbehind whose body consumes a fixed number of characters `L`
+(`hir.fixedLength`: literals, sets, assertions, lookarounds, `min == max` repeats,
+alternations of equal branches; code units without `u`/`v`, code points with them) and has
+no capture group inside runs on the explicit-stack backtracker: it steps `L` characters back
+(`Subject.decodeBefore`, which keeps a surrogate pair and WTF-8's `b+2` straight) and
+matches the body forward from there, requiring it to end where the lookbehind stands
+(`LOOKBEHIND_FIXED L`; no reverse code generation). LookLinear delegates such a body to T0's
+VM from `L` characters back. **Anything else is `error.UnsupportedFeature`** at compile time,
+after the parser's SyntaxErrors (C API: `ZREGEXP_ERROR_UNSUPPORTED = 9`; no new symbol):
+variable length (`(?<=a+)`, `(?<=a|bc)`), a capture group or a backreference inside
+(`(?<=(a))`, `(?<=\1)`), and also a variable-length lookbehind in code that never runs
+(inside a `{0}`), which the old code generator dropped. Full F6b (matching backward) lifts
+the error; it is mandatory (z-interpreter needs all of lookbehind).
+
+**The recursive matcher is gone.** Every pattern runs on the explicit-stack backtracker;
+`recursive_matcher.zig` became `core.zig` (the state and the atom checks, without the
+recursive control flow and the 100-character window of D7). Patterns with a lookbehind now
+get RepeatMatcher steps 4 and 2.b (F7a(4)), which the recursive matcher never had.
+
+**Measured.**
+- test262: 2980 -> **2968** in UTF-16 and WTF-8, as predicted: the 12 entries that passed
+  and now fail to compile are `lookBehind/{alternations, back-references, do-not-backtrack,
+  misc, nested-lookaround, sliced-strings}.js` (sloppy and strict), every one with a
+  lookbehind of variable length or with captures (`nested-lookaround`'s first rejected one
+  is `(?<=a(?=([^a]{2})d)\w{3})`: fixed length, with a capture in an inner lookahead). The
+  30 lookbehind entries not passing are all `UnsupportedFeature`; none fails at run time.
+- Against V8 (F2c corpus, 5,580 patterns with a lookbehind, every `lastIndex`, UTF-16):
+  the 1,279 of fixed length without captures had 18 patterns with a difference, now 7 and
+  none new. The 11 whose only difference was a capture outside the lookbehind (steps 4 and
+  2.b) are fixed; the 7 left are 3 not caused by the lookbehind (`v` with `i` folding, F5c;
+  a step limit; V8 inside a pair), 3 V8 matches inside a surrogate pair (below) and 1 `v`
+  with `i` (F5c). No fixed-length pattern is `UnsupportedFeature`; 4,298 of the other
+  4,301 are, and the 3 that compile agree with V8. npm: the 29 fixed-length patterns agree
+  with V8 in all 3,262 runs.
+- LookLinear on vs off over the 1,415 corpus patterns with a lookbehind that compile: 1,298
+  with delegated sites (1,912), 0 differences in 298,540 runs. On the lookahead patterns:
+  4,441 -> 4,378 (63 now rejected: a variable-length lookbehind in a `{0}` the old code
+  generator dropped), 0 differences.
+- Binary (`scripts/measure_binary.sh`): ReleaseFast 1,119,168 -> 1,096,112 B (-23,056),
+  ReleaseSmall 711,928 -> 696,504 B (-15,424).
+
 ### Known divergence: V8 matches inside a surrogate pair under `u`/`v`
 
 With `u`/`v` and a search that passes over a surrogate pair, V8 reports a match at the
@@ -1788,7 +1833,7 @@ strictness is itself only the unrecognized-escape slice — see above).
 | Alternation (`\|`) | ✅ Working |
 | Capturing / non-capturing groups | ✅ Working |
 | Backreferences `\1`-`\9` | ✅ Working |
-| Lookahead / Lookbehind | ✅ Working |
+| Lookahead / Lookbehind | ✅ Working (lookbehind: fixed length without captures, F6b step 1) |
 | Anchors `^`, `$`, `\b`, `\B` (string-level) | ✅ Working |
 | `case_insensitive` (ASCII) | ✅ Working |
 | ReDoS protection (step/recursion limits) | ✅ Working |
