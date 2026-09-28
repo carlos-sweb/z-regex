@@ -41,7 +41,7 @@ fn check(pattern: []const u8, flags: []const u8) !void {
     defer ast.deinit();
     var arena = std.heap.ArenaAllocator.init(a);
     defer arena.deinit();
-    const root = try zregex.lower.lower(arena.allocator(), ast, .{ .ignore_case = has(flags, 'i'), .dot_all = has(flags, 's') }, &.{});
+    const root = try zregex.lower.lower(arena.allocator(), ast, .{ .ignore_case = has(flags, 'i'), .dot_all = has(flags, 's') }, &.{}, .{ .unicode = has(flags, 'u'), .v = has(flags, 'v') });
     const body = root.modifier_scope.body;
     // `[a]`-style lone members lower to a literal; only char_set nodes here.
     if (body.* != .char_set) return;

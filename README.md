@@ -4,7 +4,7 @@ An ECMA-262 regular expression engine in Zig, independent of the JavaScript engi
 
 [![Zig 0.16+](https://img.shields.io/badge/zig-0.16%2B-orange)](https://ziglang.org/)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
-[![test262](https://img.shields.io/badge/test262-2974%2F3017-blue)](scripts/test262/baseline.json)
+[![test262](https://img.shields.io/badge/test262-2978%2F3017-blue)](scripts/test262/baseline.json)
 [![T0](https://img.shields.io/badge/T0-complete-green)](docs/REGEX_TIERS_PLAN.md)
 
 ## What it is
@@ -26,11 +26,11 @@ An ECMA-262 regular expression engine in Zig, independent of the JavaScript engi
 - **T0 (regular patterns): complete.** A Pike VM without captures and a tagged VM with
   captures, both linear in the input.
 - **T1 (Unicode: `u`/`v`, `\p{…}`, full case folding): in development (F5).** Since F5a, `u`
-  and `\p{…}` without Unicode case folding run on T0's linear VM (code-point mode); case
-  folding under `i` (F5b) and `v` (F5c) still run on the backtracker.
+  and `\p{…}` run on T0's linear VM (code-point mode); since F5b, so does case folding
+  under `i` (with and without `u`). `v` (F5c) still runs on the backtracker.
 - **T2 (backreferences, lookaround): on the backtracker**, with a step budget. Rewrite in F6a.
-- **test262: 2974/3017 (98.6%)**, 0 regressions.
-- **Divergences from V8** in the differential: 471, all T2 (470) or T1 (1); **0 on T0**.
+- **test262: 2978/3017 (98.7%)**, 0 regressions.
+- **Divergences from V8** in the differential: 470, all T2; **0 on T0 and T1**.
 
 ## What runs where
 
@@ -41,8 +41,9 @@ An ECMA-262 regular expression engine in Zig, independent of the JavaScript engi
 | `.` and the `s` flag | T0 | OK |
 | `^` `$` `\b` `\B` | T0 | OK |
 | Alternation, prefilters, fast paths | T0 | OK |
-| `u`, `\p{…}` (without Unicode case folding) | T1 | OK (T0's linear VM, F5a) |
-| Unicode case folding, `v`, `\q{…}` | T1 | F5b/F5c (runs on the backtracker) |
+| `u`, `\p{…}` | T1 | OK (T0's linear VM, F5a) |
+| Unicode case folding under `i` (with and without `u`) | T1 | OK (T0's linear VM, F5b) |
+| `v`, `\q{…}`, case folding under `v` | T1 | F5c (runs on the backtracker) |
 | Backreferences | T2 | OK (backtracker) |
 | Lookahead | T2 | OK (backtracker) |
 | Lookbehind | T2 | OK (backtracker, D7) |
@@ -182,10 +183,10 @@ against V8, Rust regex, PCRE2 and zig-regex.
 
 ## Compatibility
 
-- **test262: 2974/3017 (98.6%)**, 0 regressions, the same status with UTF-16 and WTF-8
+- **test262: 2978/3017 (98.7%)**, 0 regressions, the same status with UTF-16 and WTF-8
   subjects. Baseline: `scripts/test262/baseline.json`.
-- **`differential-v8`** against `tests/differential/reference/diff-F5a.json`: 0 new, 0 gone,
-  0 changed. Its 471 divergences are T2 (470) and T1 (1); none is T0.
+- **`differential-v8`** against `tests/differential/reference/diff-F5b.json`: 0 new, 0 gone,
+  0 changed. Its 470 divergences are all T2; none is T0 or T1.
 - **Internal differential** (every capture slot, V8 as the arbiter where the executors
   disagree): 0 crashes and 0 two-pass mismatches in 12.76 M runs over the real corpora and
   14.16 M over the iteration corpus (`tests/corpus/`).
@@ -240,7 +241,7 @@ The full list, with measurements: [docs/KNOWN_LIMITATIONS.md](docs/KNOWN_LIMITAT
 
 - **T0: done** (F4a, F4b; v0.3.0; v0.3.1 adds the SIMD literal search; v0.3.2 adds `Regex.iterator`).
 - **F5, T1 (Unicode):** F5a done (`u` and `\p{…}` on the VM, every UCD property name);
-  F5b (case folding) and F5c (full `v`) pending.
+  F5b done (full case folding under `i`); F5c (full `v`) pending.
 - **F6a, T2 without lookbehind:** pending.
 - **F6b, lookbehind (or its plan B):** pending.
 

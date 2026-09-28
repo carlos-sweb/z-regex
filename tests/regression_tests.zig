@@ -556,3 +556,71 @@ test "F5b: backreferences under i agree on both backtrackers" {
     try testing.expectEqual(@as(?[2]usize, .{ 1, 3 }), try spanOf("(?<=x)(k)\\1", "xk\u{212A}", true));
     try testing.expectEqual(@as(?[2]usize, .{ 1, 3 }), try spanOf("(k)\\1", "xk\u{212A}", true));
 }
+
+// F5b(2): literals, ranges, classes, \w/\W and properties fold at compile
+// time under `i`; each case with and without `u`, V8's answers (F5b's
+// pre-check table), on whatever executor the dispatcher picks.
+test "F5b: literals, classes and properties fold under i (V8)" {
+    const Case = struct { pattern: []const u8, subject: []const u8, i: bool, iu: bool };
+    const cases = [_]Case{
+        .{ .pattern = "k", .subject = "\u{212A}", .i = false, .iu = true },
+        .{ .pattern = "\u{212A}", .subject = "k", .i = false, .iu = true },
+        .{ .pattern = "s", .subject = "\u{17F}", .i = false, .iu = true },
+        .{ .pattern = "\u{DF}", .subject = "\u{1E9E}", .i = false, .iu = true },
+        .{ .pattern = "\u{1E9E}", .subject = "\u{DF}", .i = false, .iu = true },
+        .{ .pattern = "\u{DF}", .subject = "ss", .i = false, .iu = false },
+        .{ .pattern = "\u{FB00}", .subject = "ff", .i = false, .iu = false },
+        .{ .pattern = "\u{FB01}", .subject = "FI", .i = false, .iu = false },
+        .{ .pattern = "\u{FB05}", .subject = "\u{FB06}", .i = false, .iu = true },
+        .{ .pattern = "\u{3C3}", .subject = "\u{3C2}", .i = true, .iu = true },
+        .{ .pattern = "\u{3C2}", .subject = "\u{3A3}", .i = true, .iu = true },
+        .{ .pattern = "\u{390}", .subject = "\u{1FD3}", .i = false, .iu = true },
+        .{ .pattern = "\u{1F80}", .subject = "\u{1F88}", .i = false, .iu = true },
+        .{ .pattern = "\u{E9}", .subject = "\u{C9}", .i = true, .iu = true },
+        .{ .pattern = "\u{345}", .subject = "\u{1FBE}", .i = true, .iu = true },
+        .{ .pattern = "\u{130}", .subject = "i", .i = false, .iu = false },
+        .{ .pattern = "\u{131}", .subject = "I", .i = false, .iu = false },
+        .{ .pattern = "\\u{10400}", .subject = "\u{10428}", .i = false, .iu = true },
+        .{ .pattern = "\\w", .subject = "\u{17F}", .i = false, .iu = true },
+        .{ .pattern = "\\w", .subject = "\u{212A}", .i = false, .iu = true },
+        .{ .pattern = "\\W", .subject = "\u{17F}", .i = true, .iu = false },
+        .{ .pattern = "\\W", .subject = "\u{212A}", .i = true, .iu = false },
+        .{ .pattern = "[\\W]", .subject = "\u{17F}", .i = true, .iu = false },
+        .{ .pattern = "[\\W]", .subject = "s", .i = false, .iu = false },
+        .{ .pattern = "[^\\w]", .subject = "\u{17F}", .i = true, .iu = false },
+        .{ .pattern = "\\W", .subject = "S", .i = false, .iu = false },
+        .{ .pattern = "[a-z]", .subject = "\u{212A}", .i = false, .iu = true },
+        .{ .pattern = "[\u{C0}-\u{D6}]", .subject = "\u{E0}", .i = true, .iu = true },
+        .{ .pattern = "[\u{C0}-\u{D6}]", .subject = "\u{212B}", .i = false, .iu = true },
+        .{ .pattern = "[^k]", .subject = "\u{212A}", .i = true, .iu = false },
+        // `\b` on the second character, which `s`/`k` now match.
+        .{ .pattern = "s\\b", .subject = "s\u{17F}", .i = true, .iu = true },
+        .{ .pattern = "k\\b", .subject = "k\u{212A}", .i = true, .iu = true },
+    };
+    for (cases) |c| {
+        for ([_]struct { []const u8, bool }{ .{ "i", c.i }, .{ "iu", c.iu } }) |mode| {
+            const got = try v8Test(c.pattern, mode[0], c.subject);
+            if (got != mode[1]) {
+                std.debug.print("/{s}/{s} on \"{s}\": got {}, V8 {}\n", .{ c.pattern, mode[0], c.subject, got, mode[1] });
+                return error.TestUnexpectedResult;
+            }
+        }
+    }
+    // Properties (only with `u`: without it `\p` is the letter p).
+    const props = [_]struct { []const u8, []const u8, bool }{
+        .{ "\\p{Lu}", "a", true },
+        .{ "\\P{Lu}", "A", true },
+        .{ "[\\p{Lu}]", "a", true },
+        .{ "[^\\p{Lu}]", "a", false },
+        .{ "\\p{Script=Greek}", "\u{3C3}", true },
+        .{ "\\p{ASCII}", "\u{212A}", true },
+        .{ "\\p{Nd}", "a", false },
+    };
+    for (props) |c| {
+        const got = try v8Test(c[0], "iu", c[1]);
+        if (got != c[2]) {
+            std.debug.print("/{s}/iu on \"{s}\": got {}, V8 {}\n", .{ c[0], c[1], got, c[2] });
+            return error.TestUnexpectedResult;
+        }
+    }
+}

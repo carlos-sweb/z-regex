@@ -337,7 +337,7 @@ fn testProgram(pattern: []const u8, flags: hir.Flags) !TestProgram {
     defer ast_root.deinit();
     var arena = std.heap.ArenaAllocator.init(a);
     defer arena.deinit();
-    const root = try lower.lower(arena.allocator(), ast_root, flags, &.{});
+    const root = try lower.lower(arena.allocator(), ast_root, flags, &.{}, .{});
 
     var program: TestProgram = .{ .writer = BytecodeWriter.init(a), .code = &.{} };
     errdefer program.writer.deinit();

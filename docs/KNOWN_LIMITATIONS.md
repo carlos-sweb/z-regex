@@ -1173,6 +1173,72 @@ iterations, so a long loop whose body isn't a single atom is quadratic: 5,000 it
 `(?:ab)*` take ~7 ms (for F7 if it matters). The binary
 grows while both executors coexist (until F6b).
 
+### F5b: full case folding under `i` (F5b closed)
+
+**What folds.** With `i` and without `v`, every set is closed under the spec's
+Canonicalize at compile time (`src/frontend/lower/lower.zig`):
+- **With `u`:** simple case folding (CaseFolding.txt 17.0.0, statuses C and S):
+  1,482 equivalence classes, 2,994 code points. `k` matches `K` (U+212A), `s` matches `ſ`,
+  `ß` matches `ẞ`, `ᾀ` matches `ᾈ`, `σ`/`ς`/`Σ` fold together, and so do Deseret pairs.
+- **Without `u`:** the legacy rule, full `toUppercase` (SpecialCasing unconditional
+  mappings) kept only if it is one code unit and never maps >= 128 to < 128: 1,144
+  classes, 2,313 code points. `ẞ` doesn't match `ß`, `ᾀ` doesn't match `ᾈ`, `K` (U+212A)
+  doesn't match `k`.
+- **Literals, ranges, classes, `\w`/`\W` and `\p{...}`/`\P{...}`** (standalone and in
+  classes; a negated class is the complement of the closure). `[À-Ö]` matches `à`;
+  `\p{Lu}` matches `a` under `iu`; `[\W]` under `iu` doesn't match `ſ` or `K`.
+- **At run time:** backreferences (`checkBackRef`, shared by both backtrackers) and
+  `\b`/`\B`, whose word characters under `i` in code-point mode add U+017F and U+212A
+  (the fold closure of the ASCII word characters; `/a\b/iu` on "aſ" doesn't match).
+- Class tables were checked against V8 (Node 22, ICU 78.2 = Unicode 17.0) on every code
+  point in both modes: 0 mismatches. A per-code-point differential (`^c$`, `^[c]$`,
+  `^[^c]$`, `i` and `iu`, WTF-8 and UTF-16; 117,966 cases over 14,446 code points)
+  also gives 0 mismatches.
+
+**Not covered.** Full case mappings (`ß` ~ `ss`, `ﬁ` ~ `fi`: never, the spec uses simple
+folding), the Turkic mappings (`İ`, `ı`: never), `v` with `i` on sets (F5c: under `v` sets
+fold with the old rule; `\P{Lu}` under `iv` differs from `iu` in V8), `\q{...}` (F5c).
+
+**Routing.** Patterns whose only T1 features are `u`, `\p{...}` and Unicode case
+folding now run on T0's VM (`vmTakesUnicode`). On the F2c corpus 2,757 more patterns
+reach the VM (18,435 -> 21,192), with the same 382 known bound differences against the
+backtracker and identical slots; on the T1 corpora, V8 sides with the VM in all 1,002
+arbitrable runs of the 13 differing patterns (the 2 new ones are the backtracker's known
+empty-iteration issue under `{0,1}`/`?`). A delegated lookahead (LookLinear) is still
+skipped under `i` with `u`, as in F6a.
+
+**test262:** 2974 -> 2978 of 3017 (UTF-16 and WTF-8): `unicode_full_case_folding.js`
+and `u-case-mapping.js`, sloppy and strict. `differential-v8`: 1 divergence gone (a T1
+pattern with `i` and `é`, now on the VM), none new: `diff-F5b.json`.
+
+**Compile cost** (`cprobe`, median of 31 x 200, us):
+
+| Pattern | Flags | Default | `.expert` |
+|---|---|---|---|
+| `\p{L}` | `u` / `iu` | 1.56 / 3.51 | 0.36 / 2.87 |
+| `\p{L}+` | `u` / `iu` | 1.56 / 4.22 | 0.62 / 3.09 |
+| `\p{Lu}` | `u` / `iu` | 0.76 / 4.99 | 0.37 / 4.60 |
+| `\p{Nd}` | `iu` | 0.83 | 0.39 |
+| `[^\p{L}]` | `u` / `iu` | 4.37 / 5.09 | 3.98 / 4.29 |
+| `[^a]` | `u` / `iu` | 1.30 / 1.86 | 0.93 / 1.35 |
+| `[À-Ö]` | none / `i` | 1.65 / 2.24 | 0.75 / 1.23 |
+| `[À-Ö]` | `u` / `iu` | 1.14 / 1.70 | 0.78 / 1.33 |
+| `k` | `u` / `iu` | 0.63 / 0.98 | 0.40 / 0.60 |
+
+Against `.expert` every case is within §7.2 (<= 2x or <= +2 us). **Against the same
+pattern without `i`, a folded property is not:** `\p{L}` +1.9 us (2.2x), `\p{L}+` +2.7 us,
+`\p{Lu}` +4.2 us (6.6x). The folded property is no longer the property opcode but a set of
+~700-2,000 ranges (union with its precomputed delta, codegen copy, interning). Properties
+whose delta is empty (`\p{Nd}`) keep the property path. The case the F5 plan flagged as
+pathological, `[^\p{L}]` under `iu`, costs +0.7 us over `u`.
+
+**Binary** (`.so`, stripped): ReleaseFast 974,304 -> 1,112,272 B (+137,968 B, +14.2 %),
+ReleaseSmall 575,480 -> 708,520 B (+133,040 B, +23.1 %) for Parts 1, 1b and 2 together,
+above the plan's +70 KB. `.rodata` +114 KB: the class tables (~69 KB, both modes) and the
+property deltas (~45 KB, 5,647 ranges, almost all in the 25 case-related properties:
+`Lu`, `Ll`, `Uppercase`, `Lowercase`, `Changes_When_*`...); `.data.rel.ro` +8.5 KB (the
+delta slices); `.text` +12 KB.
+
 ### test262 baseline (F0b)
 
 The real test262 measurement that replaces the sample above as the semantic
@@ -1464,31 +1530,11 @@ incorrect examples in this repository's own README and doc comments.
 
 ## Genuinely unimplemented
 
-### Unicode Case Folding — non-ASCII character *ranges*
+### Unicode case folding under `v` (F5c)
 
-```zig
-const options = CompileOptions{ .case_insensitive = true };
-var re = try Regex.compileWithOptions(allocator, "[\xc3\x80-\xc3\x96]", options); // [À-Ö]
-try re.test_("à"); // false — the range itself isn't case-folded, only individual members
-```
-
-`case_insensitive` folds ASCII `a-z`/`A-Z` standalone, in ranges and in classes whose
-members are all ASCII — **but not an ASCII range inside a class that also has a non-ASCII
-or `\p{...}` member**: `[a-z]` under `i` matches `A`, `[a-zé]` doesn't (confirmed while
-building the F2c lowering, which reproduces it as is; the per-path folding rule is in
-`src/lower/lower.zig`, and F3's case-folding work replaces it with the spec's). And
-— as of a same-session Phase 4 follow-up — a literal non-ASCII character's simple
-case-fold pair too, both standalone (`café` also matches `CAFÉ`) and as a single
-character-class member (`[é]` also matches `É`; mixed ASCII/non-ASCII members like
-`[aé]` fold both). Quantifiers over a case-folded non-ASCII literal work correctly
-(`é+` still repeats the whole atomic character, matching either case per repetition).
-What's still not folded: non-ASCII character *ranges* (`[À-Ö]`) — unlike ASCII's uniform
-+32 shift, Unicode case mappings aren't a simple offset over an arbitrary range, so
-folding one would need per-codepoint expansion rather than the single-pair-per-member
-mechanism the literal/class-member case uses; and `\p{...}`-in-a-class members (a
-property's *set* of codepoints doesn't have a single "case-fold pair" to add the way one
-literal character does). See `docs/ECMASCRIPT_COMPATIBILITY_PLAN.md` Phase 4 for the
-mechanism and the reasoning behind what's covered vs. not.
+Fixed in F5b for `i` with and without `u` (see "F5b" above: ranges, classes and
+`\p{...}` fold). Under `v`, sets still fold with the pre-F5b rule (ASCII letters and a
+literal's simple pair); `v` with `i` is F5c.
 
 ### `u` (Unicode mode) flag — partial; `v` (Unicode Sets mode) flag — partial
 
@@ -1610,7 +1656,8 @@ strictness is itself only the unrecognized-escape slice — see above).
 | `\p{Script_Extensions=Name}`/`\p{scx=Name}` | ✅ Implemented (Phase 3) |
 | `\p{...}`/`\P{...}` as a character-class member (`[\p{L}\d]`, up to 4 tests) | ✅ Implemented (Phase 3) |
 | Unicode case folding: literal non-ASCII char (standalone or single class member) | ✅ Implemented (Phase 4) |
-| Unicode case folding: non-ASCII character ranges (`[À-Ö]`) / `\p{...}`-in-a-class | ❌ Not implemented |
+| Unicode case folding: non-ASCII ranges (`[À-Ö]`), `\p{...}`, `\w`/`\W`, backreferences, `\b` (`i`, `iu`) | ✅ Implemented (F5b) |
+| Unicode case folding under `v` (`iv` sets) | ❌ Not implemented (F5c) |
 | `sticky` option (`y` flag) + `Regex.findAt` | ✅ Added (Phase 5a) |
 | `getCaptureIndices`/`getNamedCaptureIndices` (`d` flag equivalent) | ✅ Added (Phase 5a) |
 | `u` flag (`CompileOptions.unicode`): strict unrecognized-escape rejection | ✅ Implemented (Phase 5b) |

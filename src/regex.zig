@@ -2253,14 +2253,14 @@ test "Regex: CHAR_SET class edge cases keep their pre-F2b meaning" {
     defer any.deinit();
     try std.testing.expect(try any.test_("\n"));
 
-    // Case folding: literals fold, ranges don't (documented gap, unchanged).
+    // Case folding: literals and, since F5b, ranges fold (V8).
     var lit = try Regex.compileWithOptions(allocator, "^[\u{E9}\u{1F600}]$", .{ .case_insensitive = true });
     defer lit.deinit();
     try std.testing.expect(try lit.test_("\u{C9}"));
     var range = try Regex.compileWithOptions(allocator, "^[\u{C0}-\u{D6}\u{1F600}]$", .{ .case_insensitive = true });
     defer range.deinit();
     try std.testing.expect(try range.test_("\u{C0}"));
-    try std.testing.expect(!try range.test_("\u{E0}"));
+    try std.testing.expect(try range.test_("\u{E0}"));
 
     // A negated operand inside a set operation: [^a-z] && \p{L} is the
     // letters outside a-z.

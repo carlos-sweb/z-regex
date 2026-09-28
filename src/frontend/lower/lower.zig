@@ -1,9 +1,22 @@
 //! Lowering: parser AST -> HIR (docs/REGEX_TIERS_PLAN.md, F2c).
 //!
-//! Faithful to what the code generator did from the AST before F2c, so the
-//! bytecode is unchanged (tests/snapshots/bytecode.txt). In particular a
+//! **Case folding (F5b).** Under `i` without `v`, every character set is
+//! widened at compile time to the union of its members' Canonicalize classes
+//! (`fold.zig`, `unicode.casefold`): `unicode` with `u`, `legacy` without.
+//! A literal character whose class isn't its ASCII case pair becomes a
+//! set: every non-ASCII one (a singleton if it only matches itself, so the
+//! code generator's old case pair doesn't apply) and, with `u`, `k`/`s`
+//! (with the Kelvin sign and the long s). Classes fold their literals,
+//! ranges and properties (the properties from the generated delta), then
+//! apply their own negation; a `\W` member is the complement of the extended
+//! WordCharacters. A set folding widens beyond what its bytecode encoding
+//! can hold (a property opcode, a byte range, a 256-bit table) is encoded
+//! as a CHAR_SET instead. The executors match the widened set as it is.
+//!
+//! **Under `v` with `i`** the pre-F5b rule stays (F5c), faithful to what
+//! the code generator did from the AST before F2c. In particular a
 //! class's CharSet is built with the case-folding rule of the path the class
-//! took before, which is not the spec's (F3 fixes folding):
+//! took before, which is not the spec's:
 //! - a class that fits the ASCII bitmap folds the ASCII letters of its
 //!   literals AND ranges (`[a-z]` under `i` matches `A`);
 //! - any other class folds only its literals, with the simple case mapping
@@ -20,6 +33,7 @@ const hir = @import("ir").hir;
 const charset_mod = @import("ir").charset;
 const properties = @import("unicode").properties;
 const casefold = @import("unicode").casefold;
+const fold_mod = @import("fold.zig");
 const Lexer = @import("../parser/lexer.zig").Lexer;
 const Parser = @import("../parser/parser.zig").Parser;
 
@@ -77,7 +91,7 @@ pub const Frontend = struct {
         const arena = self.arena.allocator();
         const names = try arena.alloc(GroupName, self.parser.group_names.items.len);
         for (self.parser.group_names.items, names) |entry, *n| n.* = .{ .name = entry.name, .index = entry.index };
-        self.root = try lower(arena, self.ast, flags, names);
+        self.root = try lower(arena, self.ast, flags, names, lex);
         return self;
     }
 
@@ -91,9 +105,11 @@ pub const Frontend = struct {
 
 /// Lower `root` into a HIR tree allocated in `arena` (free the arena to free
 /// the tree). The result is the root `ModifierScope`, carrying `flags`.
-/// `names` (index -> name of each named group) is borrowed.
-pub fn lower(arena: Allocator, root: *const AstNode, flags: hir.Flags, names: []const GroupName) LowerError!*const Node {
-    var l: Lowerer = .{ .arena = arena, .flags = flags, .names = names };
+/// `names` (index -> name of each named group) is borrowed. `lex` says which
+/// case folding `i` means (F5b).
+pub fn lower(arena: Allocator, root: *const AstNode, flags: hir.Flags, names: []const GroupName, lex: LexOptions) LowerError!*const Node {
+    const fold: ?casefold.FoldMode = if (!flags.ignore_case or lex.v) null else if (lex.unicode) .unicode else .legacy;
+    var l: Lowerer = .{ .arena = arena, .flags = flags, .names = names, .fold = fold };
     const body = try l.lowerNode(root);
     return l.make(.{ .modifier_scope = .{ .flags = flags, .body = body } });
 }
@@ -103,6 +119,8 @@ const Lowerer = struct {
     /// The flags of the scope being lowered (only the root scope in F2c).
     flags: hir.Flags,
     names: []const GroupName,
+    /// F5b's folding under `i` (null without `i`, and under `v`: F5c).
+    fold: ?casefold.FoldMode = null,
 
     fn make(self: *Lowerer, node: Node) LowerError!*const Node {
         const p = try self.arena.create(Node);
@@ -175,6 +193,15 @@ const Lowerer = struct {
     }
 
     noinline fn literalUnit(self: *Lowerer, unit: hir.LitUnit) LowerError!*const Node {
+        if (self.fold) |mode| if (!unit.raw_byte) {
+            // Under `i`, a character whose class isn't its ASCII case pair
+            // (which the executors fold themselves) is the set of its class.
+            const class = casefold.class(unit.value, mode);
+            if (unit.value >= 0x80 or (class != null and class.?.len > 2)) {
+                const one = [_]u32{unit.value};
+                return self.charSetNode(try pointsSet(self.arena, class orelse &one), false, .set);
+            }
+        };
         const units = try self.arena.alloc(hir.LitUnit, 1);
         units[0] = unit;
         return self.make(.{ .literal = .{ .units = units } });
@@ -272,6 +299,34 @@ const Lowerer = struct {
     // Character sets
     // -------------------------------------------------------------------------
 
+    /// A set of single code points.
+    fn pointsSet(arena: Allocator, points: []const u32) LowerError!CharSet {
+        const ranges = try arena.alloc(Range, points.len);
+        for (points, ranges) |p, *rg| rg.* = .{ .lo = p, .hi = p };
+        return CharSet.fromRanges(arena, ranges);
+    }
+
+    /// `members` folded under F5b's `i` (unchanged without it), and the
+    /// encoding that can still hold them: a property opcode or a byte
+    /// range only if folding added nothing, a 256-bit table only if every
+    /// member is below 256 (under `i` the code generator builds an ASCII
+    /// byte range's table from the set too), else a CHAR_SET.
+    fn folded(self: *Lowerer, members: CharSet, hint: hir.EncodingHint) LowerError!struct { set: CharSet, hint: hir.EncodingHint } {
+        const mode = self.fold orelse return .{ .set = members, .hint = hint };
+        const set = try fold_mod.foldSet(self.arena, members, mode);
+        return .{ .set = set, .hint = keptHint(hint, members, set) };
+    }
+
+    fn keptHint(hint: hir.EncodingHint, before: CharSet, after: CharSet) hir.EncodingHint {
+        const max = if (after.ranges.len == 0) 0 else after.ranges[after.ranges.len - 1].hi;
+        return switch (hint) {
+            .dot, .set => hint,
+            .bitmap => if (max <= 0xFF) hint else .set,
+            .byte_range => |r| if (after.eql(before) or (r.hi <= 0x7F and max <= 0xFF)) hint else .set,
+            .property => if (after.eql(before)) hint else .set,
+        };
+    }
+
     /// `members` is the set before the node's own negation; `set` (what
     /// matches) is its complement when `inverted`.
     fn charSetNode(self: *Lowerer, members: CharSet, inverted: bool, hint: hir.EncodingHint) LowerError!*const Node {
@@ -310,9 +365,14 @@ const Lowerer = struct {
     noinline fn lowerByteRange(self: *Lowerer, n: *const AstNode) LowerError!*const Node {
         if (n.range_start > 0xFF or n.range_end > 0xFF) return error.InvalidPattern;
         var ranges = [_]Range{.{ .lo = n.range_start, .hi = n.range_end }};
+        const hint: hir.EncodingHint = .{ .byte_range = .{ .lo = @intCast(n.range_start), .hi = @intCast(n.range_end) } };
+        if (self.fold != null) {
+            const f = try self.folded(try CharSet.fromRanges(self.arena, &ranges), hint);
+            return self.charSetNode(f.set, n.inverted, f.hint);
+        }
         const fold = self.flags.ignore_case and n.range_end <= 0x7F;
         const members = if (fold) try self.asciiFolded(&ranges) else try CharSet.fromRanges(self.arena, &ranges);
-        return self.charSetNode(members, n.inverted, .{ .byte_range = .{ .lo = @intCast(n.range_start), .hi = @intCast(n.range_end) } });
+        return self.charSetNode(members, n.inverted, hint);
     }
 
     noinline fn lowerProperty(self: *Lowerer, n: *const AstNode) LowerError!*const Node {
@@ -327,6 +387,13 @@ const Lowerer = struct {
             else => unreachable,
         };
         if (n.char_value > 0xFF) return error.InvalidPattern;
+        if (self.fold != null and propertyDelta(n).len > 0) {
+            // Under `iu`: the closure of the property, or of its complement,
+            // from the generated delta. An empty delta adds nothing to
+            // either (no class crosses the property's edge): the property
+            // opcode stays.
+            return self.charSetNodeFrom(try self.foldedProperty(n), false, .set, .{ .property = true });
+        }
         return self.charSetNodeFrom(members, n.inverted, .{ .property = .{ .kind = kind, .value = @intCast(n.char_value) } }, .{ .property = true });
     }
 
@@ -341,7 +408,7 @@ const Lowerer = struct {
         if (children.len == 0 and !n.inverted) return self.charSetNode(try CharSet.fromRanges(self.arena, &.{}), false, .set);
 
         for (children) |child| switch (child.type) {
-            .unicode_property, .unicode_script, .unicode_script_extensions => return self.charSetNodeFrom(try self.classMembers(n, self.flags.ignore_case), n.inverted, .set, .{ .property = true }),
+            .unicode_property, .unicode_script, .unicode_script_extensions => return self.charSetNodeFrom(try self.classMembersAny(n), n.inverted, .set, .{ .property = true }),
             else => {},
         };
         var needs_set = false;
@@ -350,7 +417,7 @@ const Lowerer = struct {
             .char_range => needs_set = needs_set or child.range_start > 0x7F or child.range_end > 0x7F,
             else => return error.InvalidPattern,
         };
-        if (needs_set) return self.charSetNode(try self.classMembers(n, self.flags.ignore_case), n.inverted, .set);
+        if (needs_set) return self.charSetNode(try self.classMembersAny(n), n.inverted, .set);
 
         // A lone member is generated as itself: `[a]` is the literal `a`,
         // `[a-z]` a byte range.
@@ -364,8 +431,71 @@ const Lowerer = struct {
             .char_range => try ranges.append(self.arena, .{ .lo = child.range_start, .hi = child.range_end }),
             else => unreachable,
         };
+        if (self.fold != null) {
+            // Folding may reach past ASCII (with `u`: the long s, the
+            // Kelvin sign), and a `\W` member is the complement of the
+            // extended WordCharacters: the class's own members, folded.
+            const members = try self.classMembersFolded(n);
+            const plain = try CharSet.fromRanges(self.arena, ranges.items);
+            return self.charSetNode(members, n.inverted, keptHint(.bitmap, plain, members));
+        }
         const members = if (self.flags.ignore_case) try self.asciiFolded(ranges.items) else try CharSet.fromRanges(self.arena, ranges.items);
         return self.charSetNode(members, n.inverted, .bitmap);
+    }
+
+    /// A class's members: folded under F5b's `i`, else the pre-F5b rule.
+    fn classMembersAny(self: *Lowerer, n: *const AstNode) LowerError!CharSet {
+        if (self.fold != null) return self.classMembersFolded(n);
+        return self.classMembers(n, self.flags.ignore_case);
+    }
+
+    /// F5b: the union of a class's members' closures, without its own
+    /// `[^...]`. Literals and ranges fold as one set; each property folds
+    /// from its delta; `\W`'s ranges under `u` are the complement of the
+    /// extended WordCharacters (closed already).
+    fn classMembersFolded(self: *Lowerer, n: *const AstNode) LowerError!CharSet {
+        const mode = self.fold.?;
+        var plain: std.ArrayListUnmanaged(Range) = .empty;
+        var acc: ?CharSet = null;
+        var not_word = false;
+        for (n.children.items) |child| switch (child.type) {
+            .char => try plain.append(self.arena, .{ .lo = child.char_value, .hi = child.char_value }),
+            .char_range => if (child.not_word and mode == .unicode) {
+                not_word = true;
+            } else try plain.append(self.arena, .{ .lo = child.range_start, .hi = child.range_end }),
+            .unicode_property, .unicode_script, .unicode_script_extensions => {
+                const p = try self.foldedProperty(child);
+                acc = if (acc) |a| try a.unionWith(p, self.arena) else p;
+            },
+            else => return error.InvalidPattern,
+        };
+        if (plain.items.len > 0 or acc == null) {
+            const f = try fold_mod.foldSet(self.arena, try CharSet.fromRanges(self.arena, plain.items), mode);
+            acc = if (acc) |a| try a.unionWith(f, self.arena) else f;
+        }
+        if (not_word) {
+            const word = try CharSet.fromRanges(self.arena, &.{ .{ .lo = '0', .hi = '9' }, .{ .lo = 'A', .hi = 'Z' }, .{ .lo = '_', .hi = '_' }, .{ .lo = 'a', .hi = 'z' } });
+            const extended = try fold_mod.foldSet(self.arena, word, .unicode);
+            acc = try acc.?.unionWith(try extended.complement(self.arena), self.arena);
+        }
+        return acc.?;
+    }
+
+    /// A `\p{...}`/`\P{...}` node's `u` closure (F5b), negation included.
+    fn foldedProperty(self: *Lowerer, n: *const AstNode) LowerError!CharSet {
+        const delta = propertyDelta(n);
+        if (delta.len == 0) return self.propertyMembers(n);
+        return fold_mod.foldProperty(self.arena, try self.propertyTable(n), delta, n.inverted);
+    }
+
+    /// What the `u` closure adds to a `\p{...}` node's property (F5b).
+    fn propertyDelta(n: *const AstNode) []const properties.CodepointRange {
+        return switch (n.type) {
+            .unicode_property => properties.propertyFoldDelta(@enumFromInt(n.char_value)),
+            .unicode_script => properties.scriptFoldDelta(@intCast(n.char_value)),
+            .unicode_script_extensions => properties.scriptExtensionsFoldDelta(@intCast(n.char_value)),
+            else => &.{},
+        };
     }
 
     /// `ranges` plus the other case of every ASCII letter in them.
@@ -486,7 +616,7 @@ fn expectLowered(pattern: []const u8, options: TestOptions, expected: []const u8
 
     var arena_state = std.heap.ArenaAllocator.init(a);
     defer arena_state.deinit();
-    const h = try lower(arena_state.allocator(), root, options.flags, names.items);
+    const h = try lower(arena_state.allocator(), root, options.flags, names.items, .{ .unicode = options.unicode, .v = options.v, .possessive = options.possessive });
     var out: std.Io.Writer.Allocating = .init(a);
     defer out.deinit();
     try hir.dump(h, &out.writer, 0);
@@ -601,8 +731,45 @@ test "lower: classes keep their pre-F2c encoding and folding path" {
         \\  char_set bitmap ranges=2 41-43 61-63
         \\
     );
-    // CHAR_SET path: only literals fold (a-z doesn't gain A-Z).
+    // CHAR_SET path: literals and ranges fold (F5b).
     try expectLowered("[a-z\u{E9}]", .{ .flags = .{ .ignore_case = true } },
+        \\scope i
+        \\  char_set set ranges=4 41-5A 61-7A C9-C9 E9-E9
+        \\
+    );
+    // With `u`, [a-z] also gains the long s and the Kelvin sign: past 255,
+    // so a CHAR_SET instead of the bitmap.
+    try expectLowered("[a-z]", .{ .flags = .{ .ignore_case = true }, .unicode = true },
+        \\scope i
+        \\  char_set set ranges=4 41-5A 61-7A 17F-17F 212A-212A
+        \\
+    );
+    // A literal whose class isn't its ASCII pair is a set: with `u`, `k`;
+    // a non-ASCII one always (a singleton if it only matches itself).
+    try expectLowered("ak\u{DF}", .{ .flags = .{ .ignore_case = true }, .unicode = true },
+        \\scope i
+        \\  seq
+        \\    literal 'a'
+        \\    char_set set ranges=3 4B-4B 6B-6B 212A-212A
+        \\    char_set set ranges=2 DF-DF 1E9E-1E9E
+        \\
+    );
+    try expectLowered("ak\u{DF}", .{ .flags = .{ .ignore_case = true } },
+        \\scope i
+        \\  seq
+        \\    literal 'a' 'k'
+        \\    char_set set ranges=1 DF-DF
+        \\
+    );
+    // \W under `iu` is the complement of the extended WordCharacters (no
+    // long s, no Kelvin sign), in a class too.
+    try expectLowered("[\\W]", .{ .flags = .{ .ignore_case = true }, .unicode = true },
+        \\scope i
+        \\  char_set set ranges=7 0-2F 3A-40 5B-5E 60-60 ...
+        \\
+    );
+    // Under `v`, the pre-F5b rule (F5c).
+    try expectLowered("[a-z\u{E9}]", .{ .flags = .{ .ignore_case = true }, .v = true },
         \\scope i
         \\  char_set set ranges=3 61-7A C9-C9 E9-E9
         \\

@@ -154,15 +154,17 @@ fn checkRouting(gpa: std.mem.Allocator, re: zregex.Regex, pattern: []const u8, o
     // The forced-backtracker run (F4a(5)) routes nothing to the VM.
     if (zregex.force_backtracker) return;
     var plain = false;
-    // T0, or T1 with only `u` and `\p` (F5a), when the VM takes the HIR.
+    // T0, or T1 with only `u`, `\p` (F5a) and `i`'s Unicode folding (F5b),
+    // when the VM takes the HIR.
     const t1_vm = analysis.min_tier == .unicode and blk: {
         var it = analysis.reasons().iterator();
-        while (it.next()) |f| if (f != .unicode_mode and f != .property_escape) break :blk false;
+        while (it.next()) |f| if (f != .unicode_mode and f != .property_escape and f != .ignore_case_unicode) break :blk false;
         break :blk true;
     };
     const eligible = blk: {
         if (analysis.min_tier != .regular and !t1_vm) break :blk false;
-        const fe = try zregex.lower.Frontend.init(gpa, pattern, .{ .unicode = options.unicode, .v = options.v }, .{});
+        // The HIR the pattern compiled from: its flags decide the folded sets.
+        const fe = try zregex.lower.Frontend.init(gpa, pattern, .{ .unicode = options.unicode, .v = options.v }, .{ .ignore_case = options.case_insensitive, .multiline = options.multiline, .dot_all = options.dot_all });
         defer fe.deinit();
         plain = zregex.tier0.check(fe.root) == null;
         break :blk plain or zregex.tier0.compile_mod.checkTagged(fe.root) == null;

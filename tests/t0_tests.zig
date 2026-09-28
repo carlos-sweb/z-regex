@@ -162,9 +162,10 @@ test "dispatcher: eligible T0 patterns go to the VM, the rest to the backtracker
     // T2, T1, a raw pattern byte.
     for ([_][]const u8{ "a(?=b)", "(a)\\1", "(?<=a)b", "\xE9" }) |p|
         try testing.expect(!try routedToVm(p, .{}));
-    // T1 without folding goes to the VM since F5a (see below); `v` doesn't.
+    // T1 goes to the VM since F5a (and with folding since F5b; see below);
+    // `v` doesn't.
     try testing.expect(!try routedToVm("a", .{ .v = true }));
-    try testing.expect(!try routedToVm("\\u00e9", .{ .case_insensitive = true }));
+    try testing.expect(try routedToVm("\\u00e9", .{ .case_insensitive = true }));
 }
 
 test "dispatcher: an unclassifiable pattern goes to the backtracker, without error" {
@@ -232,8 +233,10 @@ test "force_tier .expert and .unicode" {
     // `.unicode` (F5a): the VM for T0 and for T1 without folding.
     try testing.expect(try routedToVm("abc", .{ .force_tier = .unicode }));
     try testing.expect(try routedToVm("\\p{L}+", .{ .unicode = true, .force_tier = .unicode }));
+    // Since F5b, Unicode folding too; `v` still isn't built.
+    try testing.expect(try routedToVm("\u{E9}", .{ .unicode = true, .case_insensitive = true, .force_tier = .unicode }));
     var diag: zregex.TierUnavailable = undefined;
-    try testing.expectError(error.TierUnavailable, zregex.Regex.compileWithOptions(testing.allocator, "\u{E9}", .{ .unicode = true, .case_insensitive = true, .force_tier = .unicode, .tier_diagnostic = &diag }));
+    try testing.expectError(error.TierUnavailable, zregex.Regex.compileWithOptions(testing.allocator, "[\\p{L}--[a]]", .{ .v = true, .force_tier = .unicode, .tier_diagnostic = &diag }));
     try testing.expectEqualDeep(zregex.TierUnavailable{ .not_built = .unicode }, diag);
     try expectUnavailableTier("a(?=b)", .unicode, .{ .tier_too_high = .expert });
 }
@@ -245,9 +248,24 @@ test "F5a: T1 without folding runs on T0's VM" {
             std.debug.print("/{s}/u stays off the VM\n", .{p});
             return err;
         };
-    // Still on the backtracker: Unicode case folding (F5b), `v` (F5c).
-    try testing.expect(!try routedToVm("\\p{L}", .{ .unicode = true, .case_insensitive = true }));
+    // Still on the backtracker: `v` (F5c).
     try testing.expect(!try routedToVm("[\\p{L}--[a]]", .{ .v = true }));
+}
+
+test "F5b: T1 with Unicode case folding runs on T0's VM" {
+    if (zregex.force_backtracker) return error.SkipZigTest;
+    // `iu`, and `i` without `u` on non-ASCII content: the folded sets are in
+    // the HIR; `\b` counts the extended WordCharacters on the VM too.
+    for ([_][]const u8{ "\\p{L}", "k", "\u{DF}+", "[\u{C0}-\u{D6}]", "\\w+\\b", "[^\\W]" }) |p|
+        testing.expect(try routedToVm(p, .{ .unicode = true, .case_insensitive = true })) catch |err| {
+            std.debug.print("/{s}/iu stays off the VM\n", .{p});
+            return err;
+        };
+    for ([_][]const u8{ "\u{E9}", "[\u{C0}-\u{D6}]+", "\u{3C3}" }) |p|
+        testing.expect(try routedToVm(p, .{ .case_insensitive = true })) catch |err| {
+            std.debug.print("/{s}/i stays off the VM\n", .{p});
+            return err;
+        };
 }
 
 fn expectUnavailableTier(pattern: []const u8, tier: zregex.analysis.Tier, expected: zregex.TierUnavailable) !void {

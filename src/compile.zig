@@ -220,13 +220,16 @@ fn route(fe: *const lower_mod.Frontend, options: CompileOptions) error{TierUnava
 }
 
 /// Whether T0's VM takes a T1 pattern (F5a): its T1 features are only `u`
-/// mode and `\p{...}`, which are HIR sets the VM already matches in
-/// code-point mode. Unicode case folding (F5b), `v` (F5c, its test262 part
-/// is still skipped) and large counted repeats stay on the backtracker.
+/// mode, `\p{...}` and, since F5b, Unicode case folding (the lowering
+/// folds every set; `\b` and backreferences fold at run time), which are
+/// HIR sets the VM already matches. `v` (F5c, its test262 part is still
+/// skipped) and large counted repeats stay on the backtracker.
 fn vmTakesUnicode(analysis: classify.Analysis) bool {
     var it = analysis.reasons().iterator();
     while (it.next()) |f| switch (f) {
-        .unicode_mode, .property_escape => {},
+        // F5b: `i`'s Unicode folding is in the HIR's sets, which the VM
+        // matches as they are (`v` stays out through `unicode_sets_mode`).
+        .unicode_mode, .property_escape, .ignore_case_unicode => {},
         else => return false,
     };
     return true;
