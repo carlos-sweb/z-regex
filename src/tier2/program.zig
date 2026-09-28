@@ -31,6 +31,10 @@ pub const CompileResult = struct {
     /// matcher follows it from F3d; until then every pattern decodes code
     /// points, as before F3.
     mode: Mode = .code_unit,
+    /// Whether the bytecode has a lookbehind: such a pattern runs on the
+    /// recursive matcher until F6b, the rest on the explicit-stack
+    /// backtracker (F6a).
+    has_lookbehind: bool = false,
     allocator: Allocator,
 
     /// Free the compilation result
@@ -41,6 +45,20 @@ pub const CompileResult = struct {
         self.allocator.free(self.bytecode);
     }
 };
+
+/// Whether `bytecode` has a LOOKBEHIND/NEGATIVE_LOOKBEHIND instruction.
+pub fn hasLookbehind(bytecode: []const u8) bool {
+    var pc: usize = 0;
+    while (pc < bytecode.len) {
+        const inst = format_mod.decodeInstruction(bytecode, pc) catch return false;
+        switch (inst.opcode) {
+            .LOOKBEHIND, .NEGATIVE_LOOKBEHIND => return true,
+            else => {},
+        }
+        pc += inst.size;
+    }
+    return false;
+}
 
 pub fn freeCharSets(allocator: Allocator, charsets: []const CharSet) void {
     for (charsets) |cs| cs.deinit(allocator);

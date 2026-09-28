@@ -98,7 +98,7 @@ fn clearError() void {
 fn zigErrorToC(err: anytype) ZRegexError {
     return switch (err) {
         error.OutOfMemory => .ZREGEXP_ERROR_OUT_OF_MEMORY,
-        error.RecursionLimitExceeded => .ZREGEXP_ERROR_RECURSION_LIMIT,
+        error.RecursionLimitExceeded, error.BacktrackStackExhausted => .ZREGEXP_ERROR_RECURSION_LIMIT,
         error.StepLimitExceeded => .ZREGEXP_ERROR_STEP_LIMIT,
         error.UnmatchedParen => .ZREGEXP_ERROR_UNMATCHED_PAREN,
         error.InvalidEscape, error.InvalidQuantifier, error.IncompatibleFlags => .ZREGEXP_ERROR_SYNTAX,

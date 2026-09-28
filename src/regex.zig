@@ -78,9 +78,10 @@ pub const Scratch = struct {
         self.in_use = false;
     }
 };
-/// Execution limits: the backtracker's recursion depth and step budget,
-/// per start position (F6a makes the budget per execution, D11).
-pub const ExecLimits = matcher_mod.ExecOptions;
+/// Execution limits (D11, F6a): the backtracker's step budget, per start
+/// position, and the bytes its stacks may take (`BacktrackStackExhausted`
+/// past them). T0's VM is linear and ignores them.
+pub const ExecLimits = matcher_mod.ExecLimits;
 /// What `Regex.execAt` can fail with.
 pub const ExecError = matcher_mod.ExecError;
 
@@ -150,6 +151,8 @@ pub const RegexError = parser_mod.ParseError || generator_mod.CodegenError || Al
     BufferTooSmall,
     RecursionLimitExceeded,
     StepLimitExceeded,
+    /// The backtracker's stacks passed `ExecLimits.max_backtrack_stack_bytes`.
+    BacktrackStackExhausted,
     /// A CHAR_SET index outside the program's CharSet table (malformed
     /// program; never produced by `compile`).
     InvalidCharSet,

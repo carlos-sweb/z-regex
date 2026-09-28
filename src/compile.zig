@@ -272,6 +272,7 @@ fn generate(allocator: Allocator, fe: *const lower_mod.Frontend, options: Compil
         .group_count = parser.group_counter,
         .charsets = charsets,
         .mode = if (options.unicode or options.v) .code_point else .code_unit,
+        .has_lookbehind = @import("tier2").program.hasLookbehind(optimized),
         .allocator = allocator,
     };
 }

@@ -21,6 +21,7 @@ const Decoded = subject_mod.Decoded;
 const Mode = subject_mod.Mode;
 
 const Opcode = opcodes.Opcode;
+const Choice = @import("backtrack.zig").Choice;
 const Instruction = format.Instruction;
 
 /// Capture slots kept inline in the matcher (no allocation); patterns with
@@ -101,6 +102,8 @@ pub const Scratch = struct {
     /// Positions of the greedy star fast path (a stack: nested stars push
     /// above the outer one's).
     positions: std.ArrayListUnmanaged(usize) = .empty,
+    /// The explicit-stack backtracker's choicepoints (F6a, `backtrack.zig`).
+    choices: std.ArrayListUnmanaged(Choice) = .empty,
     in_use: bool = false,
 
     pub fn init(gpa: Allocator) Scratch {
@@ -112,6 +115,7 @@ pub const Scratch = struct {
         self.snapshots.deinit(self.gpa);
         self.loop_guard.deinit(self.gpa);
         self.positions.deinit(self.gpa);
+        self.choices.deinit(self.gpa);
         self.* = undefined;
     }
 
@@ -283,7 +287,7 @@ pub fn RecursiveMatcherFor(comptime Unit: type) type {
         }
 
         /// The live capture slots (inline or heap, see `capture_slots`).
-        fn caps(self: *Self) []CaptureGroup {
+        pub fn caps(self: *Self) []CaptureGroup {
             if (self.capture_slots <= INLINE_CAPTURES) return self.inline_captures[0..self.capture_slots];
             return self.heap_captures;
         }
@@ -698,12 +702,12 @@ pub fn RecursiveMatcherFor(comptime Unit: type) type {
         /// Null at the end of input.
         /// ASCII is decoded here, inline: an ASCII byte is always a whole
         /// character, and never next to a `b+2` position.
-        inline fn decodeAt(self: *const Self, pos: usize) ?Decoded {
+        pub inline fn decodeAt(self: *const Self, pos: usize) ?Decoded {
             if (pos < self.input.len and isSingle(self.input[pos])) return .{ .value = self.input[pos], .pos = pos + 1 };
             return self.subject().decodeAt(self.mode, pos);
         }
 
-        inline fn decodeBefore(self: *const Self, pos: usize) ?Decoded {
+        pub inline fn decodeBefore(self: *const Self, pos: usize) ?Decoded {
             if (pos > 0 and pos <= self.input.len and isSingle(self.input[pos - 1])) return .{ .value = self.input[pos - 1], .pos = pos - 1 };
             return self.subject().decodeBefore(self.mode, pos);
         }
@@ -717,17 +721,17 @@ pub fn RecursiveMatcherFor(comptime Unit: type) type {
 
         /// ECMA-262 LineTerminator: LF, CR, LS (U+2028) or PS (U+2029). What `.`
         /// without /s excludes and what `^`/`$` with /m look for (D5).
-        fn isLineTerminator(c: u32) bool {
+        pub fn isLineTerminator(c: u32) bool {
             return c == '\n' or c == '\r' or c == 0x2028 or c == 0x2029;
         }
 
-        fn isLineTerminatorAt(self: *const Self, pos: usize) bool {
+        pub fn isLineTerminatorAt(self: *const Self, pos: usize) bool {
             const d = self.decodeAt(pos) orelse return false;
             return isLineTerminator(d.value);
         }
 
         /// Whether a LineTerminator ends right before `pos`.
-        fn lineTerminatorEndsAt(self: *const Self, pos: usize) bool {
+        pub fn lineTerminatorEndsAt(self: *const Self, pos: usize) bool {
             const d = self.decodeBefore(pos) orelse return false;
             return isLineTerminator(d.value);
         }
@@ -744,7 +748,7 @@ pub fn RecursiveMatcherFor(comptime Unit: type) type {
 
         /// Whether the decoded character `d` matches a single-character
         /// instruction (CHAR32, dot, CHAR_RANGE/CHAR_CLASS and their `_INV`).
-        inline fn charMatches(self: *const Self, inst: Instruction, pc: usize, d: Decoded) MatchError!bool {
+        pub inline fn charMatches(self: *const Self, inst: Instruction, pc: usize, d: Decoded) MatchError!bool {
             const c = d.value;
             return switch (inst.opcode) {
                 .CHAR32 => !d.invalid and c == inst.operands[0],
@@ -774,7 +778,7 @@ pub fn RecursiveMatcherFor(comptime Unit: type) type {
         /// up in `charsets[idx]`. Decoded code points are always in
         /// [0, 0x10FFFF] (a lone invalid byte decodes as its value), so a set
         /// complemented at compile time agrees with a runtime negation.
-        fn checkCharSet(self: *Self, inst: Instruction, pos: usize) MatchError!struct { matched: bool, end_pos: usize } {
+        pub fn checkCharSet(self: *Self, inst: Instruction, pos: usize) MatchError!struct { matched: bool, end_pos: usize } {
             const idx = inst.operands[0];
             if (idx >= self.charsets.len) return error.InvalidCharSet;
             const decoded = self.decodeAt(pos) orelse return .{ .matched = false, .end_pos = pos };
@@ -787,7 +791,7 @@ pub fn RecursiveMatcherFor(comptime Unit: type) type {
         /// main recursive matcher and the star-loop fast path
         /// (matchSingleInstruction). Decodes the code point at `pos` and checks
         /// it against the instruction's General_Category operand.
-        fn checkUnicodeProperty(self: *Self, pc: usize, pos: usize, inverted: bool) MatchError!struct { matched: bool, end_pos: usize } {
+        pub fn checkUnicodeProperty(self: *Self, pc: usize, pos: usize, inverted: bool) MatchError!struct { matched: bool, end_pos: usize } {
             if (pos >= self.input.len) return .{ .matched = false, .end_pos = pos };
             if (pc + 2 > self.bytecode.len) return error.UnexpectedEndOfBytecode;
 
@@ -803,7 +807,7 @@ pub fn RecursiveMatcherFor(comptime Unit: type) type {
         /// recursive matcher and the star-loop fast path (matchSingleInstruction).
         /// Decodes the code point at `pos` and checks it against the
         /// instruction's script-index operand.
-        fn checkUnicodeScript(self: *Self, pc: usize, pos: usize, inverted: bool) MatchError!struct { matched: bool, end_pos: usize } {
+        pub fn checkUnicodeScript(self: *Self, pc: usize, pos: usize, inverted: bool) MatchError!struct { matched: bool, end_pos: usize } {
             if (pos >= self.input.len) return .{ .matched = false, .end_pos = pos };
             if (pc + 2 > self.bytecode.len) return error.UnexpectedEndOfBytecode;
 
@@ -819,7 +823,7 @@ pub fn RecursiveMatcherFor(comptime Unit: type) type {
         /// both the main recursive matcher and the star-loop fast path
         /// (matchSingleInstruction). Same shape as `checkUnicodeScript`, but
         /// checks `properties.isInScriptExtensions` instead of `isInScript`.
-        fn checkUnicodeScriptExtensions(self: *Self, pc: usize, pos: usize, inverted: bool) MatchError!struct { matched: bool, end_pos: usize } {
+        pub fn checkUnicodeScriptExtensions(self: *Self, pc: usize, pos: usize, inverted: bool) MatchError!struct { matched: bool, end_pos: usize } {
             if (pos >= self.input.len) return .{ .matched = false, .end_pos = pos };
             if (pc + 2 > self.bytecode.len) return error.UnexpectedEndOfBytecode;
 
@@ -834,7 +838,7 @@ pub fn RecursiveMatcherFor(comptime Unit: type) type {
         /// Detect if SPLIT is part of star quantifier pattern
         /// Pattern: SPLIT pc_consume, pc_skip OR SPLIT pc_skip, pc_consume
         /// where pc_consume points to: CHAR; GOTO back_to_split
-        fn isStarQuantifier(self: *Self, split_pc: usize, pc1: usize, pc2: usize) MatchError!bool {
+        pub fn isStarQuantifier(self: *Self, split_pc: usize, pc1: usize, pc2: usize) MatchError!bool {
             // Try pc1 as the consume path
             if (try self.isStarConsumePath(split_pc, pc1)) return true;
 
@@ -861,7 +865,7 @@ pub fn RecursiveMatcherFor(comptime Unit: type) type {
         }
 
         /// Check if a given PC is the consume path of a star quantifier
-        fn isStarConsumePath(self: *Self, split_pc: usize, consume_pc: usize) MatchError!bool {
+        pub fn isStarConsumePath(self: *Self, split_pc: usize, consume_pc: usize) MatchError!bool {
             // Check if consume_pc points to a character-consuming instruction
             if (consume_pc >= self.bytecode.len) return false;
 
@@ -1010,7 +1014,7 @@ pub fn RecursiveMatcherFor(comptime Unit: type) type {
 
         /// Match a single instruction without advancing PC
         /// Used by star quantifiers to match the repeated element
-        fn matchSingleInstruction(self: *Self, inst: Instruction, pc: usize, pos: usize) MatchError!struct { matched: bool, end_pos: usize } {
+        pub fn matchSingleInstruction(self: *Self, inst: Instruction, pc: usize, pos: usize) MatchError!struct { matched: bool, end_pos: usize } {
             switch (inst.opcode) {
                 .BYTE => {
                     // A raw byte: compared, not decoded (see opcodes.zig); never
@@ -1140,12 +1144,12 @@ pub fn RecursiveMatcherFor(comptime Unit: type) type {
             }
         }
 
-        fn restoreSnapshot(self: *Self, mark: usize) void {
+        pub fn restoreSnapshot(self: *Self, mark: usize) void {
             @memcpy(self.caps(), self.snapshots.items[mark..][0..self.capture_slots]);
         }
 
         /// Find the position of LOOKAHEAD_END opcode
-        fn findLookaheadEnd(self: Self, start_pc: usize) MatchError!usize {
+        pub fn findLookaheadEnd(self: Self, start_pc: usize) MatchError!usize {
             var pc = start_pc;
             var depth: usize = 1; // Track nested lookaheads
 
@@ -1275,7 +1279,7 @@ pub fn RecursiveMatcherFor(comptime Unit: type) type {
         /// zero characters matches zero characters here too (`end_pos == pos`)
         /// -- callers that loop on this (e.g. `\1+`) must have their own
         /// zero-width-progress guard, same as any other quantified atom.
-        fn checkBackRef(self: *Self, pos: usize, group: usize, case_insensitive: bool) struct { matched: bool, end_pos: usize } {
+        pub fn checkBackRef(self: *Self, pos: usize, group: usize, case_insensitive: bool) struct { matched: bool, end_pos: usize } {
             if (group >= self.capture_slots) {
                 return .{ .matched = false, .end_pos = pos };
             }
@@ -1329,7 +1333,7 @@ pub fn RecursiveMatcherFor(comptime Unit: type) type {
         }
 
         /// Check if position is at word boundary
-        fn isWordBoundary(self: *const Self, pos: usize) bool {
+        pub fn isWordBoundary(self: *const Self, pos: usize) bool {
             const before_is_word = if (self.decodeBefore(pos)) |d| isWordChar(d.value) else false;
             const after_is_word = if (self.decodeAt(pos)) |d| isWordChar(d.value) else false;
             return before_is_word != after_is_word;

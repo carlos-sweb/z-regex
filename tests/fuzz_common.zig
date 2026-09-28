@@ -267,7 +267,7 @@ fn compareEngines(gpa: std.mem.Allocator, re: zregex.Regex, pattern: []const u8,
                     const expected = bt.execAt(subj, i, &scratch, &o2, .{}) catch |err| switch (err) {
                         error.OutOfMemory => return err,
                         // The backtracker's limits; the VM has none.
-                        error.StepLimitExceeded, error.RecursionLimitExceeded => continue,
+                        error.StepLimitExceeded, error.RecursionLimitExceeded, error.BacktrackStackExhausted => continue,
                         error.InvalidIndex => {
                             try std.testing.expectError(error.InvalidIndex, vm.execAt(subj, i, &scratch, &o1, .{}));
                             continue;

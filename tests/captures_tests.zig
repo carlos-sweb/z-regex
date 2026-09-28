@@ -45,19 +45,11 @@ test "D9: 17 and 200 sequential groups capture exactly" {
     try expectSequentialCaptures(200);
 }
 
-test "D9: 1000 sequential groups hit the recursion limit through Regex (D14, F6a)" {
-    // Each group costs three matchFrom levels, past the recursive matcher's
-    // limit of 1000: a defined error, not a crash. The 1000-group captures
-    // themselves are checked with the limit lifted in
-    // tests/tier2_pipeline_tests.zig ("1000 groups capture exactly").
-    const gpa = testing.allocator;
-    const pattern = try repeat(gpa, "(.)", 1000);
-    defer gpa.free(pattern);
-    const input = try distinctChars(gpa, 1000);
-    defer gpa.free(input);
-    var re = try zregex.Regex.compile(gpa, pattern);
-    defer re.deinit();
-    try testing.expectError(error.RecursionLimitExceeded, re.find(input));
+test "D9: 1000 sequential groups capture exactly through Regex (D14, F6a)" {
+    // Until F6a each group cost three levels of the recursive matcher, past
+    // its depth limit of 1000 (`RecursionLimitExceeded`). The explicit-stack
+    // backtracker keeps them on the heap: the 1000 captures, exactly.
+    try expectSequentialCaptures(1000);
 }
 
 test "D16: group 256 is group 256, not the whole match" {
