@@ -78,17 +78,23 @@ F5a the script also reads `PropertyAliases.txt` (short names of the binary prope
 (`Changes_When_NFKC_Casefolded`), emits every General_Category value alias of
 `PropertyValueAliases.txt` (`cntrl`, `digit`, `punct`, `Combining_Mark`, ...) and every
 Script alias including the extra fields (`Qaac`, `Qaai`), and the `LC` table
-(Lu | Ll | Lt). A regeneration from the same files must reproduce `tables.zig` byte for
-byte.
+(Lu | Ll | Lt). Since F5b it also reads `CaseFolding.txt` and `SpecialCasing.txt`: the
+case-folding classes of `i` with `u` (simple folding, statuses C and S) and without it
+(ECMA-262's Canonicalize: the full `toUppercase` when it is one code unit and doesn't
+take a code point >= 128 below 128), each property's closure delta, and, with
+`--word-out`, `src/ir/word_fold.zig` (the non-ASCII word characters of `u` + `i`). A
+regeneration from the same files must reproduce both files byte for byte.
 
 ```bash
 B=https://raw.githubusercontent.com/unicode-org/unicodetools/main/unicodetools/data/ucd/17.0.0
 cd /tmp && for f in UnicodeData.txt PropList.txt DerivedCoreProperties.txt emoji/emoji-data.txt \
-    Scripts.txt PropertyValueAliases.txt ScriptExtensions.txt PropertyAliases.txt DerivedNormalizationProps.txt; do
+    Scripts.txt PropertyValueAliases.txt ScriptExtensions.txt PropertyAliases.txt DerivedNormalizationProps.txt \
+    CaseFolding.txt SpecialCasing.txt; do
   curl -sSfo "$(basename $f)" "$B/$f"; done; cd -
 python3 scripts/gen_unicode_tables.py /tmp/UnicodeData.txt /tmp/PropList.txt /tmp/DerivedCoreProperties.txt \
   /tmp/emoji-data.txt /tmp/Scripts.txt /tmp/PropertyValueAliases.txt /tmp/ScriptExtensions.txt \
-  /tmp/PropertyAliases.txt /tmp/DerivedNormalizationProps.txt > src/unicode/tables.zig
+  /tmp/PropertyAliases.txt /tmp/DerivedNormalizationProps.txt /tmp/CaseFolding.txt /tmp/SpecialCasing.txt \
+  --word-out src/ir/word_fold.zig > src/unicode/tables.zig
 zig build test
 ```
 

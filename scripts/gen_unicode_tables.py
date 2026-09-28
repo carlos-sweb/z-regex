@@ -49,13 +49,33 @@ General_Category value alias (`Letter`, `cntrl`, `digit`, `punct`,
 lines give every Script alias, including the extra fields (`Qaac`, `Qaai`).
 DerivedNormalizationProps.txt gives `Changes_When_NFKC_Casefolded`.
 
+Case folding (F5b): `i` groups code points into equivalence classes, two of
+them:
+- with `u`/`v`, CaseFolding.txt's simple folding (statuses C and S; F and T
+  are full and Turkic mappings, which ECMA-262 doesn't use): `FOLD_U_*`;
+- without `u`, ECMA-262's Canonicalize: the full `toUppercase` (SpecialCasing.txt's
+  unconditional mappings, else UnicodeData.txt's simple one), kept only when
+  it is one code unit and doesn't take a code point >= 128 below 128, over
+  the BMP: `FOLD_LEGACY_*`.
+Each is emitted as the sorted code points of every non-trivial class
+(`*_CPS`) with their class index (`*_CLASS`), the classes' members
+(`*_MEMBERS`, grouped, from `*_START[k]` to `*_START[k + 1]`) and each class's
+canonical value (`*_CANON`). Per property (General_Category values, binary
+properties, `ASCII`, scripts and script extensions), the code points the
+`u` closure adds to it (`FOLD_DELTA`, `SCRIPT_FOLD_DELTA`,
+`SCRIPT_EXTENSIONS_FOLD_DELTA`), so folding `\\p{L}` under `iu` doesn't enumerate its ~140k code points.
+With `--word-out PATH`, also writes `src/ir/word_fold.zig`: the non-ASCII code
+points whose `u` class holds an ASCII word character (ECMA-262's
+WordCharacters under `u` + `i`).
+
 Usage (UCD 17.0.0, pinned; the unicodetools repository holds the same files
 as unicode.org's Public/17.0.0/ucd):
     B=https://raw.githubusercontent.com/unicode-org/unicodetools/main/unicodetools/data/ucd/17.0.0
     for f in UnicodeData.txt PropList.txt DerivedCoreProperties.txt emoji/emoji-data.txt Scripts.txt \
-        PropertyValueAliases.txt ScriptExtensions.txt PropertyAliases.txt DerivedNormalizationProps.txt; do
+        PropertyValueAliases.txt ScriptExtensions.txt PropertyAliases.txt DerivedNormalizationProps.txt \
+        CaseFolding.txt SpecialCasing.txt; do
       curl -sSfo "$(basename $f)" "$B/$f"; done
-    python3 scripts/gen_unicode_tables.py UnicodeData.txt PropList.txt DerivedCoreProperties.txt emoji-data.txt Scripts.txt PropertyValueAliases.txt ScriptExtensions.txt PropertyAliases.txt DerivedNormalizationProps.txt > src/unicode/tables.zig
+    python3 scripts/gen_unicode_tables.py UnicodeData.txt PropList.txt DerivedCoreProperties.txt emoji-data.txt Scripts.txt PropertyValueAliases.txt ScriptExtensions.txt PropertyAliases.txt DerivedNormalizationProps.txt CaseFolding.txt SpecialCasing.txt --word-out src/ir/word_fold.zig > src/unicode/tables.zig
 """
 import re
 import sys
@@ -372,12 +392,121 @@ def parse_script_extensions(path):
     return result
 
 
+def parse_case_folding(path):
+    """CaseFolding.txt's simple folding: status C (common) and S (simple).
+    F (full) and T (Turkic) aren't ECMA-262's Canonicalize."""
+    scf = {}
+    for line in open(path, encoding="utf-8"):
+        line = line.split("#", 1)[0].strip()
+        if not line:
+            continue
+        code, status, mapping = [f.strip() for f in line.split(";")[:3]]
+        if status in ("C", "S"):
+            scf[int(code, 16)] = int(mapping, 16)
+    return scf
+
+
+def parse_special_casing_upper(path):
+    """SpecialCasing.txt's unconditional uppercase mappings (the conditional,
+    locale or context ones aren't toUppercase's default)."""
+    upper = {}
+    for line in open(path, encoding="utf-8"):
+        line = line.split("#", 1)[0].strip()
+        if not line:
+            continue
+        fields = [f.strip() for f in line.split(";")]
+        if len(fields) >= 5 and fields[4]:
+            continue
+        upper[int(fields[0], 16)] = [int(x, 16) for x in fields[3].split()]
+    return upper
+
+
+def fold_classes(key, universe):
+    """The non-trivial equivalence classes of `key` over `universe`, each
+    sorted, with its canonical value (the key), ordered by first member."""
+    groups = {}
+    for cp in universe:
+        groups.setdefault(key(cp), []).append(cp)
+    classes = sorted((sorted(members), canon) for canon, members in groups.items() if len(members) > 1)
+    for members, canon in classes:
+        assert canon in members, (hex(canon), members)
+    return classes
+
+
+def in_ranges(ranges, cp):
+    lo, hi = 0, len(ranges)
+    while lo < hi:
+        mid = (lo + hi) // 2
+        start, end = ranges[mid]
+        if cp < start:
+            hi = mid
+        elif cp > end:
+            lo = mid + 1
+        else:
+            return True
+    return False
+
+
+def fold_delta(classes, ranges):
+    """What folding adds to a set: its code points outside it that share a
+    class with one inside. (What it adds to the set's complement follows:
+    the other members of those classes, the ones inside the set.)"""
+    add = []
+    for members, _ in classes:
+        inside = [m for m in members if in_ranges(ranges, m)]
+        if inside and len(inside) < len(members):
+            add.extend(m for m in members if m not in inside)
+    return merge_ranges(sorted(set(add)))
+
+
+def emit_fold_classes(prefix, classes):
+    """`<prefix>_CPS`/`_CLASS` (sorted by code point), `_MEMBERS`/`_START`
+    (grouped by class) and `_CANON` (per class)."""
+    by_cp = sorted((cp, k) for k, (members, _) in enumerate(classes) for cp in members)
+    print(f"pub const {prefix}_CPS: []const u32 = &.{{")
+    for cp, _ in by_cp:
+        print(f"    0x{cp:X},")
+    print("};")
+    print()
+    print(f"pub const {prefix}_CLASS: []const u16 = &.{{")
+    for _, k in by_cp:
+        print(f"    {k},")
+    print("};")
+    print()
+    print(f"pub const {prefix}_MEMBERS: []const u32 = &.{{")
+    for members, _ in classes:
+        for m in members:
+            print(f"    0x{m:X},")
+    print("};")
+    print()
+    print(f"pub const {prefix}_START: []const u16 = &.{{")
+    start = 0
+    for members, _ in classes:
+        print(f"    {start},")
+        start += len(members)
+    print(f"    {start},")
+    print("};")
+    print()
+    print(f"pub const {prefix}_CANON: []const u32 = &.{{")
+    for _, canon in classes:
+        print(f"    0x{canon:X},")
+    print("};")
+    print()
+
+
 def main():
-    if len(sys.argv) != 10:
+    args = sys.argv[1:]
+    word_out = None
+    if "--word-out" in args:
+        i = args.index("--word-out")
+        word_out = args[i + 1]
+        del args[i : i + 2]
+    if len(args) != 11:
         print(
             f"usage: {sys.argv[0]} UnicodeData.txt PropList.txt DerivedCoreProperties.txt "
             "emoji-data.txt Scripts.txt PropertyValueAliases.txt ScriptExtensions.txt "
-            "PropertyAliases.txt DerivedNormalizationProps.txt",
+            "PropertyAliases.txt DerivedNormalizationProps.txt CaseFolding.txt SpecialCasing.txt "
+            "[--word-out src/ir/word_fold.zig]",
             file=sys.stderr,
         )
         sys.exit(1)
@@ -391,7 +520,9 @@ def main():
         script_extensions_path,
         property_aliases_path,
         derived_normalization_path,
-    ) = sys.argv[1:10]
+        case_folding_path,
+        special_casing_path,
+    ) = args
 
     by_category = {}  # category (major or minor) -> list of codepoints
     upper_to_lower = []  # (upper_cp, lower_cp)
@@ -621,6 +752,73 @@ def main():
     for cp, upper in lower_to_upper:
         print(f"    .{{ .from = 0x{cp:X}, .to = 0x{upper:X} }},")
     print("};")
+    print()
+
+    # Case folding (F5b; see the module doc).
+    scf = parse_case_folding(case_folding_path)
+    special_upper = parse_special_casing_upper(special_casing_path)
+    simple_upper = dict(lower_to_upper)
+
+    def canonicalize_legacy(cp):
+        # ECMA-262 Canonicalize without `u`: toUppercase, one code unit, and
+        # never from >= 128 to < 128.
+        mapped = special_upper.get(cp, [simple_upper.get(cp, cp)])
+        if len(mapped) != 1 or mapped[0] > 0xFFFF:
+            return cp
+        if cp >= 128 and mapped[0] < 128:
+            return cp
+        return mapped[0]
+
+    fold_u = fold_classes(lambda cp: scf.get(cp, cp), sorted(set(scf) | set(scf.values())))
+    legacy_universe = sorted(
+        cp for cp in set(simple_upper) | set(simple_upper.values()) | set(special_upper) if cp <= 0xFFFF
+    )
+    legacy_keys = {cp: canonicalize_legacy(cp) for cp in legacy_universe}
+    # Members whose canonical value is another code point not in the
+    # universe (it maps to itself) join through the value.
+    legacy_universe = sorted(set(legacy_universe) | set(legacy_keys.values()))
+    fold_legacy = fold_classes(canonicalize_legacy, legacy_universe)
+    emit_fold_classes("FOLD_U", fold_u)
+    emit_fold_classes("FOLD_LEGACY", fold_legacy)
+
+    # Closure deltas of every property table, under `u` (without `u` there
+    # is no `\\p`).
+    named_tables = {cat: merge_range_tuples(merge_ranges(sorted(set(by_category.get(cat, [])))) + (unassigned if cat == "C" else [])) for cat in all_categories}
+    named_tables["Cn"] = unassigned
+    named_tables["LC"] = cased_letter
+    named_tables.update({name: binary_property_ranges[name] for name in BINARY_PROPERTIES})
+    named_tables["ASCII"] = [(0, 0x7F)]
+    delta_names = sorted(named_tables)
+    print("/// Property names with a `FOLD_DELTA` entry, sorted.")
+    print("pub const FOLD_DELTA_NAMES: []const []const u8 = &.{")
+    for name in delta_names:
+        print(f'    "{name}",')
+    print("};")
+    print()
+    for i, (label, tables_by_index) in enumerate((
+        ("FOLD_DELTA", [named_tables[name] for name in delta_names]),
+        ("SCRIPT_FOLD_DELTA", [script_merged_ranges[name] for name in script_names]),
+        ("SCRIPT_EXTENSIONS_FOLD_DELTA", [script_extensions_ranges[name] for name in script_names]),
+    )):
+        if i > 0:
+            print()
+        print(f"pub const {label}: []const []const CodepointRange = &.{{")
+        for ranges in tables_by_index:
+            print(f"    {zig_ranges_slice(fold_delta(fold_u, ranges))},")
+        print("};")
+
+    # WordCharacters under `u` + `i` (ECMA-262): the ASCII word characters'
+    # `u` closure, minus themselves.
+    ascii_word = set(range(0x30, 0x3A)) | set(range(0x41, 0x5B)) | set(range(0x61, 0x7B)) | {0x5F}
+    word_extra = sorted({m for members, _ in fold_u if ascii_word & set(members) for m in members} - ascii_word)
+    if word_out:
+        with open(word_out, "w", encoding="utf-8") as f:
+            f.write("//! Generated by scripts/gen_unicode_tables.py from CaseFolding.txt -- do not\n")
+            f.write("//! edit by hand, regenerate instead (scripts/README.md).\n\n")
+            f.write("/// The code points outside ASCII whose simple case folding class (`u`)\n")
+            f.write("/// holds an ASCII word character: what ECMA-262's WordCharacters adds\n")
+            f.write("/// under `u`/`v` + `i`. Sorted.\n")
+            f.write("pub const extra: []const u32 = &.{ " + ", ".join(f"0x{c:X}" for c in word_extra) + " };\n")
 
     total_ranges = sum(
         len(merge_ranges(sorted(set(by_category.get(cat, []))))) for cat in all_categories
@@ -635,7 +833,10 @@ def main():
         f"script_extensions_ranges={script_extensions_ranges_count} "
         f"script_extensions_codes_skipped={skipped_scx_codes} "
         f"binary_aliases={len(binary_aliases)} gc_aliases={len(gc_aliases)} "
-        f"upper_to_lower={len(upper_to_lower)} lower_to_upper={len(lower_to_upper)}",
+        f"upper_to_lower={len(upper_to_lower)} lower_to_upper={len(lower_to_upper)} "
+        f"fold_u_classes={len(fold_u)} fold_u_cps={sum(len(m) for m, _ in fold_u)} "
+        f"fold_legacy_classes={len(fold_legacy)} fold_legacy_cps={sum(len(m) for m, _ in fold_legacy)} "
+        f"word_extra={[hex(c) for c in word_extra]}",
         file=sys.stderr,
     )
 

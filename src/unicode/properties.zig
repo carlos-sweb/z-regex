@@ -392,6 +392,27 @@ pub fn scriptExtensionsRanges(script_index: u8) []const CodepointRange {
     return tables.SCRIPT_EXTENSIONS_RANGES[script_index];
 }
 
+/// What the `u` case-folding closure adds to property `cat` (F5b): the
+/// code points outside it that share a `u` class with one inside,
+/// precomputed so folding `\p{L}` under `iu` doesn't walk its code points.
+/// `Any` is closed. What the closure adds to the property's complement is
+/// the rest of those classes (`casefold.class` of each).
+pub fn propertyFoldDelta(cat: UnicodeProperty) []const CodepointRange {
+    if (cat == .Any) return &.{};
+    const i = binarySearchNames(tables.FOLD_DELTA_NAMES, @tagName(cat)) orelse unreachable;
+    return tables.FOLD_DELTA[i];
+}
+
+/// `propertyFoldDelta` for the script at `script_index`.
+pub fn scriptFoldDelta(script_index: u8) []const CodepointRange {
+    return tables.SCRIPT_FOLD_DELTA[script_index];
+}
+
+/// `propertyFoldDelta` for the script extensions of `script_index`.
+pub fn scriptExtensionsFoldDelta(script_index: u8) []const CodepointRange {
+    return tables.SCRIPT_EXTENSIONS_FOLD_DELTA[script_index];
+}
+
 /// Whether codepoint `cp` belongs to Unicode property `cat` (binary search
 /// over the property's sorted, merged range list, except for the two
 /// trivial properties computed directly).
@@ -730,4 +751,36 @@ test "properties: Bidi_Mirrored and Assigned (sourced directly from UnicodeData.
     try std.testing.expect(isInCategory('a', .Assigned));
     try std.testing.expect(isInCategory(0x1F600, .Assigned)); // GRINNING FACE
     try std.testing.expect(!isInCategory(0xFFFF, .Assigned)); // noncharacter, unassigned
+}
+
+test "properties: every property has a fold delta, and it is exactly the closure's" {
+    const casefold = @import("casefold.zig");
+    const gpa = std.testing.allocator;
+    for (std.enums.values(UnicodeProperty)) |cat| {
+        const delta = propertyFoldDelta(cat);
+        // Recompute: the u closure of the property, minus the property.
+        const ranges = propertyRanges(cat);
+        const pairs = try gpa.alloc([2]u32, ranges.len);
+        defer gpa.free(pairs);
+        for (ranges, pairs) |r, *p| p.* = .{ r.start, r.end };
+        var extra: std.ArrayListUnmanaged(u32) = .empty;
+        defer extra.deinit(gpa);
+        try casefold.closureExtra(pairs, .unicode, gpa, &extra);
+        std.mem.sort(u32, extra.items, {}, std.sort.asc(u32));
+        var n: usize = 0;
+        for (delta) |r| n += r.end - r.start + 1;
+        var uniq: usize = 0;
+        for (extra.items, 0..) |cp, i| {
+            if (i > 0 and extra.items[i - 1] == cp) continue;
+            uniq += 1;
+            try std.testing.expect(binarySearchRanges(delta, cp));
+        }
+        try std.testing.expectEqual(n, uniq);
+    }
+    // \p{Lu}'s delta holds the lowercase letters; \p{L}'s only a few marks.
+    try std.testing.expect(binarySearchRanges(propertyFoldDelta(.Lu), 'a'));
+    try std.testing.expect(binarySearchRanges(propertyFoldDelta(.L), 0x345));
+    try std.testing.expect(!binarySearchRanges(propertyFoldDelta(.L), 'a'));
+    // ASCII gains the long s and the Kelvin sign.
+    try std.testing.expectEqualSlices(CodepointRange, &.{ .{ .start = 0x17F, .end = 0x17F }, .{ .start = 0x212A, .end = 0x212A } }, propertyFoldDelta(.ASCII));
 }
