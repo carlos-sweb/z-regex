@@ -1182,12 +1182,14 @@ give the same slots in all 566,490 runs.
   used by every execution through the C API and by the Zig facade (`find`, `findAll`,
   `replace`, ...); before F7b it was accepted and ignored. `max_recursion_depth` is a
   reserved field with no effect.
-- C API: `zregex_last_error_name` (the precise `@errorName`) is recorded only by
-  `zregex_compile_n`, `zregex_match_at_n`, `zregex_search_n` and `zregex_exec_wtf8`/`_utf16`.
-  The older functions (`zregex_compile`, `zregex_find*`, `zregex_is_match`,
-  `zregex_replace*`, `zregex_escape`, `zregex_match_slice`/`_group`,
-  `zregex_named_group_*`) set only the coarse `zregex_last_error` code and leave the name
-  "". Use `zregex_compile_n` for the name of a compile error.
+- C API: every function that can fail records the error's name
+  (`zregex_last_error_name`) with its code (`zregex_last_error`): the Zig error's own name
+  when there is one (`UnexpectedToken`, `StepLimitExceeded`, `OutOfMemory`, ...), else the
+  code's (`InvalidGroup` for an index out of range). Until this change `zregex_compile`,
+  `zregex_find*`, `zregex_is_match`, `zregex_replace*`, `zregex_escape`,
+  `zregex_match_slice`/`_group` and `zregex_named_group_*` set only the code;
+  `zregex_named_group_name`/`_index` out of range now also report
+  `ZREGEXP_ERROR_INVALID_GROUP` (before, a bare null / 0).
 
 **Bench** (10 interleaved rounds of `zregex_xbench` against `66a9d60`, median `execAt`
 MB/s; the backtracker cases):

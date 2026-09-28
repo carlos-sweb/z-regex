@@ -15,7 +15,33 @@ const Allocator = std.mem.Allocator;
 
 /// Global allocator for FFI operations
 var gpa: std.heap.DebugAllocator(.{}) = .init;
-const allocator = gpa.allocator();
+/// In test builds it goes through `test_alloc`, which can be told to fail
+/// (to exercise the out-of-memory paths); elsewhere it's `gpa` itself.
+const allocator: Allocator = if (@import("builtin").is_test) test_alloc.allocator() else gpa.allocator();
+
+/// Test builds only: `gpa`, failing every allocation while `fail` is set.
+const test_alloc = struct {
+    threadlocal var fail: bool = false;
+
+    fn allocator() Allocator {
+        return .{ .ptr = undefined, .vtable = &.{ .alloc = alloc, .resize = resize, .remap = remap, .free = free } };
+    }
+    fn alloc(_: *anyopaque, len: usize, alignment: std.mem.Alignment, ret: usize) ?[*]u8 {
+        if (fail) return null;
+        return gpa.allocator().rawAlloc(len, alignment, ret);
+    }
+    fn resize(_: *anyopaque, memory: []u8, alignment: std.mem.Alignment, new_len: usize, ret: usize) bool {
+        if (fail and new_len > memory.len) return false;
+        return gpa.allocator().rawResize(memory, alignment, new_len, ret);
+    }
+    fn remap(_: *anyopaque, memory: []u8, alignment: std.mem.Alignment, new_len: usize, ret: usize) ?[*]u8 {
+        if (fail and new_len > memory.len) return null;
+        return gpa.allocator().rawRemap(memory, alignment, new_len, ret);
+    }
+    fn free(_: *anyopaque, memory: []u8, alignment: std.mem.Alignment, ret: usize) void {
+        gpa.allocator().rawFree(memory, alignment, ret);
+    }
+};
 
 /// Thread-local error state
 threadlocal var last_error: ZRegexError = .ZREGEXP_OK;
@@ -89,8 +115,28 @@ pub const ZRegexOptions = extern struct {
 // Helper Functions
 // =============================================================================
 
+/// A failure with no Zig error behind it (an argument out of range): the
+/// code, and its name from `codeName`.
 fn setError(err: ZRegexError) void {
     last_error = err;
+    last_error_name = codeName(err);
+}
+
+/// The name `zregex_last_error_name` reports for a failure known only by
+/// its code: one entry per `ZRegexError`.
+fn codeName(err: ZRegexError) [*:0]const u8 {
+    return switch (err) {
+        .ZREGEXP_OK => "",
+        .ZREGEXP_ERROR_SYNTAX => "SyntaxError",
+        .ZREGEXP_ERROR_OUT_OF_MEMORY => "OutOfMemory",
+        .ZREGEXP_ERROR_RECURSION_LIMIT => "BacktrackStackExhausted",
+        .ZREGEXP_ERROR_STEP_LIMIT => "StepLimitExceeded",
+        .ZREGEXP_ERROR_INVALID_GROUP => "InvalidGroup",
+        .ZREGEXP_ERROR_UNMATCHED_PAREN => "UnmatchedParen",
+        .ZREGEXP_ERROR_INVALID_RANGE => "InvalidCharRange",
+        .ZREGEXP_ERROR_UNKNOWN => "Unknown",
+        .ZREGEXP_ERROR_UNSUPPORTED => "UnsupportedFeature",
+    };
 }
 
 fn setZigError(err: anyerror) void {
@@ -176,12 +222,12 @@ export fn zregex_compile(pattern: [*:0]const u8, options: ?*const ZRegexOptions)
             .v = opts.v,
         };
         break :blk Regex.compileWithOptions(allocator, pattern_slice, compile_opts) catch |err| {
-            setError(zigErrorToC(err));
+            setZigError(err);
             return null;
         };
     } else blk: {
         break :blk Regex.compile(allocator, pattern_slice) catch |err| {
-            setError(zigErrorToC(err));
+            setZigError(err);
             return null;
         };
     };
@@ -191,7 +237,7 @@ export fn zregex_compile(pattern: [*:0]const u8, options: ?*const ZRegexOptions)
     // Allocate on heap
     const heap_re = allocator.create(Regex) catch {
         re.deinit();
-        setError(.ZREGEXP_ERROR_OUT_OF_MEMORY);
+        setZigError(error.OutOfMemory);
         return null;
     };
     heap_re.* = re;
@@ -223,10 +269,13 @@ export fn zregex_named_group_count(re: *ZRegex) usize {
 export fn zregex_named_group_name(re: *ZRegex, index: usize) ?[*:0]u8 {
     clearError();
 
-    if (index >= re.compiled.named_groups.len) return null;
+    if (index >= re.compiled.named_groups.len) {
+        setError(.ZREGEXP_ERROR_INVALID_GROUP);
+        return null;
+    }
 
     const buf = sliceToCString(re.compiled.named_groups[index].name) catch {
-        setError(.ZREGEXP_ERROR_OUT_OF_MEMORY);
+        setZigError(error.OutOfMemory);
         return null;
     };
 
@@ -234,8 +283,14 @@ export fn zregex_named_group_name(re: *ZRegex, index: usize) ?[*:0]u8 {
     return @ptrCast(@constCast(buf.ptr));
 }
 
+/// The group number of named group `index`, or 0 (never a named group's)
+/// with ZREGEXP_ERROR_INVALID_GROUP when `index` is out of range.
 export fn zregex_named_group_index(re: *ZRegex, index: usize) usize {
-    if (index >= re.compiled.named_groups.len) return 0;
+    clearError();
+    if (index >= re.compiled.named_groups.len) {
+        setError(.ZREGEXP_ERROR_INVALID_GROUP);
+        return 0;
+    }
     return re.compiled.named_groups[index].index;
 }
 
@@ -249,14 +304,14 @@ export fn zregex_named_group_index(re: *ZRegex, index: usize) usize {
 fn wrapMatch(input_slice: []const u8, match: MatchResult) ?*ZMatch {
     const input_dup = allocator.dupe(u8, input_slice) catch {
         match.deinit();
-        setError(.ZREGEXP_ERROR_OUT_OF_MEMORY);
+        setZigError(error.OutOfMemory);
         return null;
     };
 
     const heap_match = allocator.create(ZMatch) catch {
         allocator.free(input_dup);
         match.deinit();
-        setError(.ZREGEXP_ERROR_OUT_OF_MEMORY);
+        setZigError(error.OutOfMemory);
         return null;
     };
 
@@ -274,7 +329,7 @@ export fn zregex_find(re: *ZRegex, input: [*:0]const u8) ?*ZMatch {
     const input_slice = cStringToSlice(input);
 
     const result = re.find(input_slice) catch |err| {
-        setError(zigErrorToC(err));
+        setZigError(err);
         return null;
     };
 
@@ -288,7 +343,7 @@ export fn zregex_find_at(re: *ZRegex, input: [*:0]const u8, start_byte_offset: u
     const input_slice = cStringToSlice(input);
 
     const result = re.findAt(input_slice, start_byte_offset) catch |err| {
-        setError(zigErrorToC(err));
+        setZigError(err);
         return null;
     };
 
@@ -302,7 +357,7 @@ export fn zregex_find_all(re: *ZRegex, input: [*:0]const u8) ?*ZMatchList {
     const input_slice = cStringToSlice(input);
 
     var matches_unmanaged = re.findAll(input_slice) catch |err| {
-        setError(zigErrorToC(err));
+        setZigError(err);
         return null;
     };
 
@@ -313,7 +368,7 @@ export fn zregex_find_all(re: *ZRegex, input: [*:0]const u8) ?*ZMatchList {
     const input_dup = allocator.dupe(u8, input_slice) catch {
         for (matches_unmanaged.items) |m| m.deinit();
         matches_unmanaged.deinit(allocator);
-        setError(.ZREGEXP_ERROR_OUT_OF_MEMORY);
+        setZigError(error.OutOfMemory);
         return null;
     };
 
@@ -326,7 +381,7 @@ export fn zregex_find_all(re: *ZRegex, input: [*:0]const u8) ?*ZMatchList {
             for (matches_unmanaged.items) |m| m.deinit();
             matches_unmanaged.deinit(allocator);
             match_list.deinit(allocator);
-            setError(.ZREGEXP_ERROR_OUT_OF_MEMORY);
+            setZigError(error.OutOfMemory);
             return null;
         };
     }
@@ -336,7 +391,7 @@ export fn zregex_find_all(re: *ZRegex, input: [*:0]const u8) ?*ZMatchList {
     const heap_list = allocator.create(ZMatchList) catch {
         allocator.free(input_dup);
         match_list.deinit(allocator);
-        setError(.ZREGEXP_ERROR_OUT_OF_MEMORY);
+        setZigError(error.OutOfMemory);
         return null;
     };
 
@@ -350,7 +405,7 @@ export fn zregex_is_match(re: *ZRegex, input: [*:0]const u8) bool {
     const input_slice = cStringToSlice(input);
 
     const match = re.find(input_slice) catch |err| {
-        setError(zigErrorToC(err));
+        setZigError(err);
         return false;
     };
 
@@ -367,9 +422,10 @@ export fn zregex_is_match(re: *ZRegex, input: [*:0]const u8) bool {
 // =============================================================================
 
 export fn zregex_match_slice(match: *ZMatch) [*:0]u8 {
+    clearError();
     const slice = match.result.group(match.input);
     const buf = sliceToCString(slice) catch {
-        setError(.ZREGEXP_ERROR_OUT_OF_MEMORY);
+        setZigError(error.OutOfMemory);
         return @constCast("");
     };
     // Caller must free with zregex_string_free()
@@ -385,12 +441,13 @@ export fn zregex_match_end(match: *ZMatch) usize {
 }
 
 export fn zregex_match_group(match: *ZMatch, group_index: usize) ?[*:0]u8 {
+    clearError();
     // Group 0 is the full match; it isn't stored in the internal captures
     // array (which is 1-indexed by capture group number), so it needs its
     // own path rather than going through `MatchResult.getCapture`.
     if (group_index == 0) {
         const buf = sliceToCString(match.result.group(match.input)) catch {
-            setError(.ZREGEXP_ERROR_OUT_OF_MEMORY);
+            setZigError(error.OutOfMemory);
             return null;
         };
         return @ptrCast(@constCast(buf.ptr));
@@ -406,7 +463,7 @@ export fn zregex_match_group(match: *ZMatch, group_index: usize) ?[*:0]u8 {
     const capture = match.result.getCapture(group_index, match.input) orelse return null;
 
     const buf = sliceToCString(capture) catch {
-        setError(.ZREGEXP_ERROR_OUT_OF_MEMORY);
+        setZigError(error.OutOfMemory);
         return null;
     };
 
@@ -493,13 +550,13 @@ export fn zregex_replace(re: *ZRegex, input: [*:0]const u8, replacement: [*:0]co
     const replacement_slice = cStringToSlice(replacement);
 
     const result = re.replace(allocator, input_slice, replacement_slice) catch |err| {
-        setError(zigErrorToC(err));
+        setZigError(err);
         return null;
     };
     defer allocator.free(result);
 
     const buf = sliceToCString(result) catch {
-        setError(.ZREGEXP_ERROR_OUT_OF_MEMORY);
+        setZigError(error.OutOfMemory);
         return null;
     };
 
@@ -513,13 +570,13 @@ export fn zregex_replace_all(re: *ZRegex, input: [*:0]const u8, replacement: [*:
     const replacement_slice = cStringToSlice(replacement);
 
     const result = re.replaceAll(allocator, input_slice, replacement_slice) catch |err| {
-        setError(zigErrorToC(err));
+        setZigError(err);
         return null;
     };
     defer allocator.free(result);
 
     const buf = sliceToCString(result) catch {
-        setError(.ZREGEXP_ERROR_OUT_OF_MEMORY);
+        setZigError(error.OutOfMemory);
         return null;
     };
 
@@ -698,15 +755,10 @@ export fn zregex_group_count(re: *ZRegex) usize {
 }
 
 /// `@errorName` of the last failure on this thread, or "" if none. The
-/// string is static; don't free it. Only `zregex_compile_n`,
-/// `zregex_match_at_n`, `zregex_search_n` and `zregex_exec_wtf8`/`_utf16`
-/// record it; the older functions (`zregex_compile`, `zregex_find`,
-/// `zregex_find_at`, `zregex_find_all`, `zregex_is_match`, `zregex_replace`,
-/// `zregex_replace_all`, `zregex_escape`, `zregex_match_slice`,
-/// `zregex_match_group`, `zregex_named_group_name`,
-/// `zregex_named_group_index`) set only `zregex_last_error` and leave this
-/// "". For the precise name of a compile error, compile with
-/// `zregex_compile_n`.
+/// string is static; don't free it. Every function of the C API that can
+/// fail records it with `zregex_last_error`: the Zig error's own name when
+/// there is one (`UnexpectedToken`, `StepLimitExceeded`, `OutOfMemory`,
+/// ...), else the code's (`InvalidGroup` for an index out of range).
 export fn zregex_last_error_name() [*:0]const u8 {
     return last_error_name;
 }
@@ -729,18 +781,18 @@ export fn zregex_escape(input: [*:0]const u8) ?[*:0]u8 {
     for (input_slice) |c| {
         if (std.mem.indexOfScalar(u8, special_chars, c) != null) {
             result.append(allocator, '\\') catch {
-                setError(.ZREGEXP_ERROR_OUT_OF_MEMORY);
+                setZigError(error.OutOfMemory);
                 return null;
             };
         }
         result.append(allocator, c) catch {
-            setError(.ZREGEXP_ERROR_OUT_OF_MEMORY);
+            setZigError(error.OutOfMemory);
             return null;
         };
     }
 
     const buf = sliceToCString(result.items) catch {
-        setError(.ZREGEXP_ERROR_OUT_OF_MEMORY);
+        setZigError(error.OutOfMemory);
         return null;
     };
 
@@ -850,9 +902,123 @@ test "zregex_compile / zregex_compile_n carry u and v to CompileResult.mode (F3c
     try std.testing.expectEqual(Mode.code_unit, plain.compiled.mode);
 }
 
+/// The code and the name the last failure recorded.
+fn expectLastError(code: ZRegexError, name: []const u8) !void {
+    try std.testing.expectEqual(code, zregex_last_error());
+    try std.testing.expectEqualStrings(name, std.mem.span(zregex_last_error_name()));
+}
+
+/// A regex whose every execution over `step_input` passes its step budget.
+fn stepLimited() *ZRegex {
+    var opts = zregex_default_options();
+    opts.max_steps = 100;
+    return zregex_compile("(a+)+\\1b", &opts).?;
+}
+const step_input = "aaaaaaaaaaaac";
+
+test "error name: zregex_compile records a compile error's name" {
+    try std.testing.expect(zregex_compile("(a", null) == null);
+    try expectLastError(zigErrorToC(@as(anyerror, error.UnexpectedToken)), "UnexpectedToken");
+    var opts = zregex_default_options();
+    opts.unicode = true;
+    try std.testing.expect(zregex_compile("\\q", &opts) == null);
+    try expectLastError(.ZREGEXP_ERROR_SYNTAX, "InvalidEscape");
+    const ok = zregex_compile("a", null).?;
+    zregex_free(ok);
+    try expectLastError(.ZREGEXP_OK, "");
+}
+
+test "error name: zregex_find, zregex_find_at, zregex_is_match record StepLimitExceeded" {
+    const re = stepLimited();
+    defer zregex_free(re);
+    try std.testing.expect(zregex_find(re, step_input) == null);
+    try expectLastError(.ZREGEXP_ERROR_STEP_LIMIT, "StepLimitExceeded");
+    try std.testing.expect(zregex_find_at(re, step_input, 0) == null);
+    try expectLastError(.ZREGEXP_ERROR_STEP_LIMIT, "StepLimitExceeded");
+    try std.testing.expect(!zregex_is_match(re, step_input));
+    try expectLastError(.ZREGEXP_ERROR_STEP_LIMIT, "StepLimitExceeded");
+}
+
+test "error name: zregex_find_all records StepLimitExceeded" {
+    const re = stepLimited();
+    defer zregex_free(re);
+    try std.testing.expect(zregex_find_all(re, step_input) == null);
+    try expectLastError(.ZREGEXP_ERROR_STEP_LIMIT, "StepLimitExceeded");
+}
+
+test "error name: zregex_replace and zregex_replace_all record StepLimitExceeded" {
+    const re = stepLimited();
+    defer zregex_free(re);
+    try std.testing.expect(zregex_replace(re, step_input, "x") == null);
+    try expectLastError(.ZREGEXP_ERROR_STEP_LIMIT, "StepLimitExceeded");
+    try std.testing.expect(zregex_replace_all(re, step_input, "x") == null);
+    try expectLastError(.ZREGEXP_ERROR_STEP_LIMIT, "StepLimitExceeded");
+}
+
+test "error name: zregex_escape records OutOfMemory" {
+    test_alloc.fail = true;
+    const r = zregex_escape("a.b");
+    test_alloc.fail = false;
+    try std.testing.expect(r == null);
+    try expectLastError(.ZREGEXP_ERROR_OUT_OF_MEMORY, "OutOfMemory");
+    const ok = zregex_escape("a.b").?;
+    defer zregex_string_free(ok);
+    try expectLastError(.ZREGEXP_OK, "");
+}
+
+test "error name: zregex_match_slice records OutOfMemory" {
+    const re = zregex_compile("b+", null).?;
+    defer zregex_free(re);
+    const m = zregex_find(re, "abbc").?;
+    defer zregex_match_free(m);
+    test_alloc.fail = true;
+    const r = zregex_match_slice(m);
+    test_alloc.fail = false;
+    try std.testing.expectEqualStrings("", std.mem.span(r)); // static, not freed
+    try expectLastError(.ZREGEXP_ERROR_OUT_OF_MEMORY, "OutOfMemory");
+}
+
+test "error name: zregex_match_group records InvalidGroup and OutOfMemory" {
+    const re = zregex_compile("(b)+", null).?;
+    defer zregex_free(re);
+    const m = zregex_find(re, "abbc").?;
+    defer zregex_match_free(m);
+    try std.testing.expect(zregex_match_group(m, 5) == null);
+    try expectLastError(.ZREGEXP_ERROR_INVALID_GROUP, "InvalidGroup");
+    test_alloc.fail = true;
+    const r = zregex_match_group(m, 1);
+    test_alloc.fail = false;
+    try std.testing.expect(r == null);
+    try expectLastError(.ZREGEXP_ERROR_OUT_OF_MEMORY, "OutOfMemory");
+    const g = zregex_match_group(m, 1).?;
+    zregex_string_free(g);
+    try expectLastError(.ZREGEXP_OK, "");
+}
+
+test "error name: zregex_named_group_name records InvalidGroup and OutOfMemory" {
+    const re = zregex_compile("(?<x>a)", null).?;
+    defer zregex_free(re);
+    try std.testing.expect(zregex_named_group_name(re, 1) == null);
+    try expectLastError(.ZREGEXP_ERROR_INVALID_GROUP, "InvalidGroup");
+    test_alloc.fail = true;
+    const r = zregex_named_group_name(re, 0);
+    test_alloc.fail = false;
+    try std.testing.expect(r == null);
+    try expectLastError(.ZREGEXP_ERROR_OUT_OF_MEMORY, "OutOfMemory");
+}
+
+test "error name: zregex_named_group_index records InvalidGroup" {
+    const re = zregex_compile("(?<x>a)", null).?;
+    defer zregex_free(re);
+    try std.testing.expectEqual(@as(usize, 0), zregex_named_group_index(re, 3));
+    try expectLastError(.ZREGEXP_ERROR_INVALID_GROUP, "InvalidGroup");
+    try std.testing.expectEqual(@as(usize, 1), zregex_named_group_index(re, 0));
+    try expectLastError(.ZREGEXP_OK, "");
+}
+
 test "a lookbehind of variable length is ZREGEXP_ERROR_UNSUPPORTED (B′)" {
     try std.testing.expect(zregex_compile("(?<=a+)b", null) == null);
-    try std.testing.expectEqual(ZRegexError.ZREGEXP_ERROR_UNSUPPORTED, zregex_last_error());
+    try expectLastError(.ZREGEXP_ERROR_UNSUPPORTED, "UnsupportedFeature");
     try std.testing.expect(zregex_compile_n("(?<=(a))b", 9, null) == null);
     try std.testing.expectEqual(ZRegexError.ZREGEXP_ERROR_UNSUPPORTED, zregex_last_error());
     try std.testing.expectEqualStrings("UnsupportedFeature", std.mem.span(zregex_last_error_name()));
