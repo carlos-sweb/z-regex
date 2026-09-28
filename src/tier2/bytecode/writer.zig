@@ -204,6 +204,22 @@ pub const BytecodeWriter = struct {
         return self.code.items;
     }
 
+    /// The finished bytecode, owned by the caller from now on (free it with
+    /// the writer's allocator); the writer is left empty. The buffer is
+    /// shrunk in place when the allocator can, copied only when it can't
+    /// (F7b: `compile` took a copy through the no-op `Optimizer` before).
+    pub fn takeBytecode(self: *Self) ![]u8 {
+        if (self.patches.items.len > 0) return error.UnresolvedLabels;
+        const len = self.code.items.len;
+        const full = self.code.items.ptr[0..self.code.capacity];
+        if (self.code.capacity != len and !self.allocator.resize(full, len)) {
+            // The writer keeps (and frees) its buffer; the caller gets a copy.
+            return self.allocator.dupe(u8, self.code.items);
+        }
+        self.code = DynBuf(u8).init(self.allocator);
+        return full[0..len];
+    }
+
     /// Get bytecode without consuming writer
     pub fn bytecode(self: Self) []const u8 {
         return self.code.items;

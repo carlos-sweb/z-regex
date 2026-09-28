@@ -1555,6 +1555,15 @@ None. (D17, `\u{H+}` without `u`/`v`, was fixed in F7a: see "Fixed in F7a" below
   differentials against T0's VM (382 bound and 7,538 slot differences on the T0 corpora,
   1,050 rows on T1) -> 0.
 
+### The bytecode `Optimizer` doesn't optimize (F7b)
+
+`src/tier2/codegen/optimizer.zig` never did anything but copy the bytecode (its three
+passes are TODO stubs). Since F7b `compile` doesn't run it: the code generator's buffer is
+taken as is (`BytecodeWriter.takeBytecode`). The change is below measurement (callgrind,
+per compilation: -0.5% to +0.5% on eight patterns), since the copy was a few dozen bytes;
+what it removes is a step that claimed to optimize. `CompileOptions.opt_level`, `Optimizer`
+and `OptLevel` have no effect and stay exported until the 1.0 API review (F7c).
+
 ### Binary size: one procedure since F7b (the ~26 KB anomaly explained)
 
 After F7a the F5b figure (1,112,272 B, ReleaseFast `.so`, stripped) didn't reproduce: the

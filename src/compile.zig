@@ -19,7 +19,6 @@ const Tier = classify.Tier;
 const build_options = @import("build_options");
 
 const CodeGenerator = generator_mod.CodeGenerator;
-const Optimizer = optimizer_mod.Optimizer;
 const OptLevel = optimizer_mod.OptLevel;
 const BytecodeWriter = bytecode_writer.BytecodeWriter;
 pub const NamedGroup = format_mod.NamedGroup;
@@ -33,7 +32,9 @@ const hir = @import("ir").hir;
 
 /// Compiler options
 pub const CompileOptions = struct {
-    /// Optimization level
+    /// Optimization level. No effect: the `Optimizer` never optimized, and
+    /// since F7b `compile` doesn't run it (kept for API compatibility until
+    /// the 1.0 API review, F7c).
     opt_level: OptLevel = .basic,
 
     /// Case insensitive matching
@@ -255,13 +256,10 @@ fn generate(allocator: Allocator, fe: *const lower_mod.Frontend, options: Compil
     generator.empty_check = !hir.hasLookbehind(fe.root);
     try generator.generate(fe.root);
 
-    const unoptimized = try writer.finalize();
-    // Note: unoptimized is owned by writer, will be freed by writer.deinit()
-
-    // Phase 5: Optimization
-    var optimizer = Optimizer.init(allocator, options.opt_level);
-    const optimized = try optimizer.optimize(unoptimized);
-    errdefer allocator.free(optimized);
+    // Phase 5 was a no-op `Optimizer` that copied the bytecode (F7b): the
+    // writer's buffer is taken as it is.
+    const bytecode = try writer.takeBytecode();
+    errdefer allocator.free(bytecode);
 
     // Copy named-group names out of the parser's pattern-borrowed slices so
     // they outlive this function (the pattern itself may not outlive the
@@ -297,12 +295,12 @@ fn generate(allocator: Allocator, fe: *const lower_mod.Frontend, options: Compil
     }
 
     return CompileResult{
-        .bytecode = optimized,
+        .bytecode = bytecode,
         .named_groups = try named_groups.toOwnedSlice(allocator),
         .group_count = parser.group_counter,
         .charsets = charsets,
         .mode = if (options.unicode or options.v) .code_point else .code_unit,
-        .has_lookbehind = program_mod.hasLookbehind(optimized),
+        .has_lookbehind = program_mod.hasLookbehind(bytecode),
         .mark_count = generator.marks,
         .word_fold = options.case_insensitive and (options.unicode or options.v),
         .linear = linear_owned,
