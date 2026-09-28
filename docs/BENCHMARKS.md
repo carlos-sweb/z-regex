@@ -1,6 +1,6 @@
 # Benchmarks: z-regex against V8, Rust regex, PCRE2 and zig-regex
 
-What this measures: z-regex 0.3.0 (T0 closed: F4a and F4b) against the engines people
+What this measures: z-regex 0.3.0 † (T0 closed: F4a and F4b) against the engines people
 would use instead, **tier by tier** (docs/REGEX_TIERS_PLAN.md): a T0 case is compared only
 with engines that run it as a regular expression, a T2 case (backreferences, lookaround) only
 with backtracking engines that support it. Tiers are never mixed in one table.
@@ -11,11 +11,15 @@ with backtracking engines that support it. Tiers are never mixed in one table.
 |---|---|
 | Machine | Intel(R) Xeon(R) Processor @ 2.10GHz, 4 cores (no SMT), KVM guest, 15Gi RAM, Linux 6.18.44-fc-v37 |
 | Environment | **shared container**: expect ±15% variance between runs; read the min–max band, not only the median |
-| z-regex | 0.3.0, Zig 0.16.0, ReleaseFast |
+| z-regex | 0.3.0 †, Zig 0.16.0, ReleaseFast |
 | V8 | 12.4.254.21-node.39 (Node v22.22.2) |
 | Rust regex | 1.13.1 (rustc 1.94.1 (e408947bf 2026-03-25)), release, LTO |
 | PCRE2 | 10.42, 8-bit library, JIT and interpreter |
 | zig-regex | 0.1.1 (zig-utils/zig-regex, 173b298) — the last release that builds with Zig 0.16 (v0.2.x needs 0.17-dev) |
+
+† Measured version. These figures (and `bench/results.json`) are from 0.3.0, with the
+literal cells re-measured on 0.3.1; they were not re-measured for 0.4.0 or 0.5.0. They are
+re-published in F7c.
 
 **Method.** 10 interleaved rounds: each round runs every engine once over all its cases, and
 the engines' order rotates from round to round. Within a round, a throughput number is the

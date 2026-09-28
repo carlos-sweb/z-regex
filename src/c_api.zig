@@ -180,7 +180,7 @@ fn sliceToCString(slice: []const u8) ![]u8 {
 // =============================================================================
 
 export fn zregex_version() [*:0]const u8 {
-    return "1.0.0";
+    return regex.version;
 }
 
 // =============================================================================
@@ -815,6 +815,10 @@ export fn zregex_is_valid_pattern(pattern: [*:0]const u8) bool {
 // =============================================================================
 // Tests
 // =============================================================================
+
+test "zregex_version is the package version" {
+    try std.testing.expectEqualStrings(regex.version, std.mem.span(zregex_version()));
+}
 
 test "zregex_compile_n / zregex_search_n handle embedded NUL" {
     const pattern = "a\x00b";
