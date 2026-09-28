@@ -72,7 +72,11 @@ pub const ZRegexOptions = extern struct {
     sticky: bool,
     unicode: bool,
     v: bool,
+    /// Reserved: no effect since F6a (the backtracker keeps its stack on
+    /// the heap, bounded by `ExecLimits.max_backtrack_stack_bytes`).
     max_recursion_depth: u32,
+    /// The backtracker's step budget per start position
+    /// (`ExecLimits.max_steps`); 0 keeps the default.
     max_steps: u64,
     reserved: [4]u32,
 };
@@ -155,10 +159,9 @@ export fn zregex_compile(pattern: [*:0]const u8, options: ?*const ZRegexOptions)
 
     const pattern_slice = cStringToSlice(pattern);
 
-    // Compile regex
-    // Note: max_recursion_depth and max_steps are runtime execution limits,
-    // not compilation options. They are handled by the Matcher, not the compiler.
-    const re = if (options) |opts| blk: {
+    // `max_steps` becomes the regex's own limit (`applyLimits`), used by
+    // every execution through this API.
+    var re = if (options) |opts| blk: {
         const compile_opts = regex.CompileOptions{
             .case_insensitive = opts.case_insensitive,
             .multiline = opts.multiline,
@@ -178,6 +181,8 @@ export fn zregex_compile(pattern: [*:0]const u8, options: ?*const ZRegexOptions)
         };
     };
 
+    if (options) |opts| applyLimits(&re, opts);
+
     // Allocate on heap
     const heap_re = allocator.create(Regex) catch {
         re.deinit();
@@ -187,6 +192,12 @@ export fn zregex_compile(pattern: [*:0]const u8, options: ?*const ZRegexOptions)
     heap_re.* = re;
 
     return heap_re;
+}
+
+/// The execution limits of `ZRegexOptions` on the compiled regex: `max_steps`
+/// (0 keeps the default); `max_recursion_depth` is reserved.
+fn applyLimits(re: *Regex, opts: *const ZRegexOptions) void {
+    if (opts.max_steps > 0) re.limits.max_steps = std.math.cast(usize, opts.max_steps) orelse std.math.maxInt(usize);
 }
 
 export fn zregex_free(re: ?*ZRegex) void {
@@ -566,10 +577,11 @@ export fn zregex_compile_n(pattern: [*]const u8, len: usize, options: ?*const ZR
         .unicode = opts.unicode,
         .v = opts.v,
     } else .{};
-    const re = Regex.compileWithOptions(allocator, pattern_slice, compile_opts) catch |err| {
+    var re = Regex.compileWithOptions(allocator, pattern_slice, compile_opts) catch |err| {
         setZigError(err);
         return null;
     };
+    if (options) |opts| applyLimits(&re, opts);
     const heap_re = allocator.create(Regex) catch {
         re.deinit();
         setZigError(error.OutOfMemory);
@@ -644,7 +656,7 @@ fn execC(re: *ZRegex, subject: regex.Subject, index: usize, sticky: bool, slots:
     };
     defer if (n > stack_slots.len) allocator.free(buf);
     var out: regex.MatchSlots = .{ .slots = buf };
-    const found = r.execAt(subject, index, threadScratch(), &out, .{}) catch |err| {
+    const found = r.execAt(subject, index, threadScratch(), &out, r.limits) catch |err| {
         setZigError(err);
         return -1;
     };
@@ -823,6 +835,40 @@ test "zregex_compile / zregex_compile_n carry u and v to CompileResult.mode (F3c
     defer zregex_free(plain);
     try std.testing.expectEqual(Mode.code_unit, plain.compiled.mode);
 }
+
+test "ZRegexOptions.max_steps reaches every execution (F7b)" {
+    // A backref keeps the pattern on the backtracker; the VM has no step
+    // budget. 12 `a` and no `b`: exponential, but far under the default.
+    const pattern = "(a+)+\\1b";
+    const input = "aaaaaaaaaaaac";
+    var small = zregex_default_options();
+    small.max_steps = 100;
+    var zero = zregex_default_options();
+    zero.max_steps = 0;
+    var slots: [4]usize = undefined;
+    const limited = [_]*ZRegex{ zregex_compile(pattern, &small).?, zregex_compile_n(pattern, pattern.len, &small).? };
+    defer for (limited) |re| zregex_free(re);
+    for (limited) |re| {
+        try std.testing.expectEqual(@as(usize, 100), re.limits.max_steps);
+        try std.testing.expect(zregex_find(re, input) == null);
+        try std.testing.expectEqual(ZRegexError.ZREGEXP_ERROR_STEP_LIMIT, zregex_last_error());
+        try std.testing.expect(!zregex_is_match(re, input));
+        try std.testing.expectEqual(ZRegexError.ZREGEXP_ERROR_STEP_LIMIT, zregex_last_error());
+        try std.testing.expectEqual(@as(c_int, -1), zregex_exec_wtf8(re, input.ptr, input.len, 0, false, &slots, slots.len));
+        try std.testing.expectEqualStrings("StepLimitExceeded", std.mem.span(zregex_last_error_name()));
+    }
+    // The defaults (and 0, which keeps them) answer: no match, no error.
+    const plain = [_]*ZRegex{ zregex_compile(pattern, null).?, zregex_compile(pattern, &zero).? };
+    defer for (plain) |re| zregex_free(re);
+    for (plain) |re| {
+        try std.testing.expectEqual(backtrack_default_steps, re.limits.max_steps);
+        try std.testing.expect(zregex_find(re, input) == null);
+        try std.testing.expectEqual(ZRegexError.ZREGEXP_OK, zregex_last_error());
+        try std.testing.expectEqual(@as(c_int, 0), zregex_exec_wtf8(re, input.ptr, input.len, 0, false, &slots, slots.len));
+    }
+}
+
+const backtrack_default_steps = (regex.ExecLimits{}).max_steps;
 
 test "zregex_exec_wtf8 / zregex_exec_utf16 agree and report errors (F3c)" {
     const re = zregex_compile("(b)|x", null).?;

@@ -176,6 +176,10 @@ pub const Regex = struct {
     /// JS `y` flag: `find`/`findAll` only match starting exactly at the
     /// current position, never scanning ahead to find a match further in.
     sticky: bool = false,
+    /// Limits for the facade (`find`, `findAll`, `replace`, ...), which
+    /// takes none per call; `execAt` and `iterator` take theirs from the
+    /// caller instead. The C API sets `max_steps` from `ZRegexOptions`.
+    limits: ExecLimits = .{},
 
     const Self = @This();
 
@@ -280,7 +284,7 @@ pub const Regex = struct {
         const heap = n > stack_slots.len;
         const slots = if (heap) try self.allocator.alloc(?usize, n) else stack_slots[0..n];
         defer if (heap) self.allocator.free(slots);
-        const found = self.exec(.{ .wtf8 = input }, index, sticky, scratch, slots, .{}) catch |err| switch (err) {
+        const found = self.exec(.{ .wtf8 = input }, index, sticky, scratch, slots, self.limits) catch |err| switch (err) {
             error.InvalidIndex => return null,
             error.SlotsTooSmall => unreachable,
             else => |e| return e,

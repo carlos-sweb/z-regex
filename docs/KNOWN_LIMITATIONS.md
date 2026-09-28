@@ -1153,7 +1153,11 @@ give the same slots in all 566,490 runs.
 - `max_memo_bytes` (default 1 MiB): a memo table that doesn't fit isn't an error, that
   lookahead runs without memo; 0 turns the memo off.
 - `max_recursion_depth` is gone (API change): only the recursive matcher had one.
-- The C API still doesn't take limits per execution (no ABI change).
+- The C API still doesn't take limits per execution (no ABI change). Since F7b,
+  `ZRegexOptions.max_steps` (0 keeps the default) becomes the regex's own `Regex.limits`,
+  used by every execution through the C API and by the Zig facade (`find`, `findAll`,
+  `replace`, ...); before F7b it was accepted and ignored. `max_recursion_depth` is a
+  reserved field with no effect.
 
 **Bench** (10 interleaved rounds of `zregex_xbench` against `66a9d60`, median `execAt`
 MB/s; the backtracker cases):
