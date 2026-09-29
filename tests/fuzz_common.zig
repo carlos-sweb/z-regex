@@ -289,6 +289,10 @@ fn compareEngines(gpa: std.mem.Allocator, re: zregex.Regex, pattern: []const u8,
 }
 
 fn isParseError(err: anyerror) bool {
+    // Not a SyntaxError: valid syntax that isn't implemented, raised by the
+    // parser and also after it (a lookbehind of variable length), where
+    // analyze classifies the pattern.
+    if (err == error.UnsupportedFeature) return false;
     inline for (@typeInfo(zregex.ParseError).error_set.?) |e| {
         if (err == @field(anyerror, e.name)) return true;
     }

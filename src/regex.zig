@@ -163,7 +163,11 @@ pub const RegexError = parser_mod.ParseError || generator_mod.CodegenError || Al
     IncompatibleFlags,
     /// A valid pattern this engine can't run yet: a lookbehind of variable
     /// length or with a capture group inside (F6b step 1, B′; the rest of
-    /// lookbehind is F6b). C API: `ZREGEXP_ERROR_UNSUPPORTED`.
+    /// lookbehind is F6b), `\q{...}`, a chained or bare-character class
+    /// set operand or a union with a nested class under `v`, a property of
+    /// strings, RegExp modifiers. Valid syntax that isn't implemented is
+    /// always this error, never a wrong result. C API:
+    /// `ZREGEXP_ERROR_UNSUPPORTED`.
     UnsupportedFeature,
 };
 
@@ -3625,15 +3629,19 @@ test "Regex: v flag class set operation with a negated nested operand (regressio
     try std.testing.expect(!try re.test_("a"));
 }
 
-test "Regex: v flag rejects chained class set operators" {
+test "Regex: v flag: chained class set operators are UnsupportedFeature, mixed ones a SyntaxError" {
     const allocator = std.testing.allocator;
 
-    // This feature's scope is exactly one operation per class; chaining
-    // (`[A--B--C]`) is deliberately not supported -- see
-    // docs/KNOWN_LIMITATIONS.md.
+    // One operation per class is implemented. A chain of the same operator
+    // (`[A--B--C]`) is valid syntax not implemented yet (F5c); mixing `--`
+    // and `&&` is a SyntaxError in ECMA-262.
     try std.testing.expectError(
-        error.ChainedClassSetOperatorNotSupported,
+        error.UnsupportedFeature,
         Regex.compileWithOptions(allocator, "[\\p{L}--[a]--[b]]", .{ .v = true }),
+    );
+    try std.testing.expectError(
+        error.MixedClassSetOperators,
+        Regex.compileWithOptions(allocator, "[\\p{L}--[a]&&[b]]", .{ .v = true }),
     );
 }
 

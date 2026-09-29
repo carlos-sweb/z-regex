@@ -19,7 +19,7 @@
 
 ## Contexto
 
-`z-regex` (paquete Zig `zregex`, Zig 0.16) es un motor de regex tipo ECMAScript consumido por otros paquetes de un ecosistema de motor JS (los commits `85afd1f`, `f12de31` y `7d36074` mencionan `z-string` y `z-lexer`). Hoy tiene **un único ejecutor de backtracking recursivo** para todas las regex. El objetivo es reorganizarlo en **3 niveles de capacidad (Tiers)** con **una sola semántica** ECMA-262, detección automática del Tier mínimo y delegación de Tiers superiores a inferiores, de modo que los patrones simples corran por un camino lineal, barato y sin riesgo de ReDoS, y la complejidad y el riesgo queden aislados en el Tier superior.
+`z-regex` (paquete Zig `zregex`, Zig 0.16) es un motor de regex tipo ECMAScript para hosts JS. Hoy tiene **un único ejecutor de backtracking recursivo** para todas las regex. El objetivo es reorganizarlo en **3 niveles de capacidad (Tiers)** con **una sola semántica** ECMA-262, detección automática del Tier mínimo y delegación de Tiers superiores a inferiores, de modo que los patrones simples corran por un camino lineal, barato y sin riesgo de ReDoS, y la complejidad y el riesgo queden aislados en el Tier superior.
 
 El repo debe seguir siendo agnóstico al motor JS: no depende de APIs internas del motor y expone una interfaz limpia, reusable y testeable.
 
@@ -125,7 +125,7 @@ El parser siempre soporta todo. La columna "Tier" es el backend mínimo requerid
 | **Reset de capturas en cada iteración** | `/(?:(a)\|b)+/` sobre `"ab"` → `$1 = undefined` | 0 | **8** | RepeatMatcher, paso 4: limpiar las capturas internas al inicio de cada iteración. En la VM es `ClearSlots(rango)` por hilo, O(k) por iteración con copy-on-write. Deduplicar ignorando las capturas solo es correcto porque T0 no tiene backrefs; por eso las backrefs van a T2. | Grupos capturantes, cuantificadores | Capturas de una iteración anterior que quedan pegadas (bug ya visto en el repo, Phase 6) | test262 + diferencial |
 | Grupos con nombre (+ duplicados ES2025) | `(?<y>\d{4})`, `(?<x>a)\|(?<x>b)` | 0 | 3 | Son metadatos; ya existen. | Tabla de nombres | Nombres con escapes `\u` | unit |
 | `i` sin `u`, contenido ASCII | `/abc/i`, `/[a-z]/i` | 0 | 3 | Por la regla del spec, un caracter ≥ 128 nunca canonicaliza a < 128, así que con un patrón ASCII no hacen falta tablas. | Canonicalize ASCII | — | unit, diferencial |
-| Modificadores (ES2025) | `(?i:a)`, `(?-m:^)` | 0* | 5 | Parser, early errors (`(?ii:)`, `(?-:)`) y Canonicalize por nodo. *Es T0 si el contenido cumple las reglas de T0; si no, T1. | Parser | Early errors | unit, test262 |
+| Modificadores (ES2025) | `(?i:a)`, `(?-m:^)` | 0* | 5 | **Pendientes hasta nuevo aviso** (decisión 2026-09-29, `docs/plans/F7.md`, Decisiones 4). Parser, early errors (`(?ii:)`, `(?-:)`) y Canonicalize por nodo. *Es T0 si el contenido cumple las reglas de T0; si no, T1. | Parser | Early errors | unit, test262 |
 | Flags `g`, `y`, `d` | `lastIndex`, sticky, `indices` | 0 | 2 | La semántica de `lastIndex` es del host; la lib ofrece `execAt(index)` + `advanceIndex()`. | API | AdvanceStringIndex con `u` | unit |
 | Prefiltros / fast paths | literal puro, prefijo literal, conjunto del primer caracter, patrón anclado | 0 | 4 | Es optimización, no feature; también la usan T1 y T2. | Análisis del IR | Corrección con `i`/`m`/`y` | diferencial, bench |
 
@@ -222,7 +222,7 @@ pub const SyntaxError = struct { kind: SyntaxErrorKind, offset: usize };
 pub const ExecError = error{ StepLimitExceeded, BacktrackStackExhausted, OutOfMemory };
 ```
 
-- La fachada actual (`Regex.compile/find/findAll/replace`) se mantiene como capa de conveniencia sobre `execAt`, para no romper a `z-string`.
+- La fachada actual (`Regex.compile/find/findAll/replace`) se mantiene como capa de conveniencia sobre `execAt`, para no romper a los consumidores existentes.
 - No hay callbacks al motor JS ni tipos del motor: solo slices, enteros y allocators.
 
 **Concurrencia:**
@@ -327,7 +327,7 @@ pub fn existsAnchoredMatch(
 
 ```
                          ┌──────────────────────────────────────────────┐
-  Host (motor JS, z-string, CLI…) → solo usa api/ (Source, Subject, Flags, execAt)
+  Host (motor JS, CLI…) → solo usa api/ (Source, Subject, Flags, execAt)
                          └───────────────┬──────────────────────────────┘
                                          │
  ┌───────────────────────────────────────▼───────────────────────────────────────┐
@@ -464,7 +464,7 @@ Un consumidor que solo necesite T0 puede importar `zregex-t0` y no enlaza las ~3
 ### 6.3 Roadmap por fases
 
 **Decisión de F0a sobre D1–D3:** F0a **no** corrige D1–D3. Marca como `unclassifiable` los patrones afectados, y el contrato `Analysis` de F0a no cubre esos casos hasta F1.
-- **Motivo:** corregir D1–D3 cambia lo que se compila para los consumidores actuales (`z-string`), es decir, rompe semántica. Un cambio así pasa por la puerta de test262, que no existe hasta F0b. Mezclarlo en F0a le quitaría a F0a la cualidad de ser mergeable sin riesgo.
+- **Motivo:** corregir D1–D3 cambia lo que se compila para los consumidores actuales, es decir, rompe semántica. Un cambio así pasa por la puerta de test262, que no existe hasta F0b. Mezclarlo en F0a le quitaría a F0a la cualidad de ser mergeable sin riesgo.
 - **D2 y D3** ya los rechaza el parser actual (`InvalidRepeat`, `EmptyCharClass`), así que salen como `unclassifiable(.parse_error)` sin trabajo adicional.
 - **D1** lo acepta mal, así que F0a incluye un **detector léxico** (no una corrección): busca `{` fuera de una clase que no forme `{n}`, `{n,}` o `{n,m}` según la gramática del spec.
   - **Implementado (F0a):** en lugar de un escáner que replique al lexer, el propio lexer registra la desviación cuando `parseRepeat` acepta un `{…}` con mínimo vacío (D1) o un mínimo recortado (D10), y el parser descarta ese registro al rebobinar un token especulativo (`Lexer.rewindTo`). No cambia la tokenización. Así se evitó reimplementar el seguimiento de clases y escapes, que era el riesgo que alargaba la estimación a 1–2 semanas. F0a también marca D8 (posesivos) como `unclassifiable`, por el mismo criterio.
@@ -512,7 +512,7 @@ Un consumidor que solo necesite T0 puede importar `zregex-t0` y no enlaza las ~3
 | **F6a — Tier 2 sin lookbehind** ✅ **Cerrada** | Con el codegen del backtracker actual mueren las pistas del HIR que solo él lee: `CharSet.encoding_hint` y `Repeat.syntax_form` (F2c). Backtracker con pila explícita en heap (sin recursión nativa); trail; backrefs numéricas, con nombre y con `i`; lookahead (atomicidad, capturas); asserts cuantificados Annex B; `LookLinear` forward con memo; `ExecLimits` públicos (D11). Los patrones con lookbehind siguen en el backtracker actual. **T15 ya no refuerza F6a:** si T15 funciona en F1c, F6a queda con D15 solo (D14 y D15 sin refuerzo de T15), y así fue. En el Paso 0 de F1, con 200 grupos capturantes anidados, el matcher necesitaba ≈ 9,8 MiB (≈ 49 KiB por nivel en ReleaseSafe, ≈ 147 KiB en Debug). Tras D9 (F1c) son **≈ 3,4 KiB por nivel en ReleaseSafe y ≈ 21,7 KiB en Debug** (200 niveles ≈ 0,7 MiB y ≈ 4,3 MiB): T15 pasa con 8 MiB. Ese número por nivel es lo que la pila explícita de F6a tiene que batir. **D15 refuerza F6a:** el límite de recursión del matcher actual (1000) cuenta profundidad, no bytes. Tras D9 cuesta ≈ 1,8 KiB por nivel en ReleaseSafe, así que en 8 MiB ya dispara antes del crash, pero en Debug (≈ 11,2 KiB por nivel) y en pilas más pequeñas sigue crasheando. Solo una pila explícita con límite en bytes lo resuelve. | test262 de backrefs, `named-groups` y lookahead en verde; ningún patrón T2 sin lookbehind pasa por `recursive_matcher.zig`; `(a+)+b` y similares cumplen la cota de §7; **el diferencial entre Tiers pasa a bloquear merges para patrones sin lookbehind**; el fuzz del parser ejecuta también los patrones T2 y se quitan los `skip` de D14 y D15 (el de D15 tiene que dar match vacío).  **Nota de F4a(4):** el backtracker se reescribe por completo; los números del bench van a cambiar. No tomar la referencia de F4a como objetivo: sus casos T2 del bench (`<(\w+)>.*?<\/\1>`, `(?<=\$)\d+`, los adversariales) ya cayeron un 6–19 % en F4a por layout de LLVM, sin cambio de código en el backtracker. **Cierre (F6a(1)–(3), docs/F6A_PRECHECK.md):** backtracker de pila explícita sobre el mismo bytecode (`backtrack.zig`), trail de capturas (corrige el bug F: capturas de un lookahead positivo que sobrevivían a un backtracking posterior), LookLinear forward con memo de 2 bits por posición y `ExecLimits` públicos (`max_steps`, `max_backtrack_stack_bytes`, `max_memo_bytes`; `BacktrackStackExhausted`). Los patrones con lookbehind siguen en `recursive_matcher.zig` hasta F6b. D14 y D15 cerrados (el test de D15 da match vacío). test262 2974/3017 sin cambios; `differential-v8` idéntico a `diff-F5a.json`; `pfdiff` idéntico salvo `RecursionLimitExceeded` → `StepLimitExceeded` (34 ejecuciones); LookLinear activado frente a desactivado: 0 diferencias en 566.490 ejecuciones (2.463 patrones con sitios delegados). Bench (10 rondas intercaladas contra `66a9d60`, `execAt`): `t2_lookahead` ×2,58; resto de T2 entre −2,3 % y +2,4 %; `t1_vset` −12,7 %, `t0_az_bt` −3,9 %; adversariales `StepLimitExceeded` en 26,4/22,3 ms (antes 29,0/24,8). `.so` con strip: ReleaseFast 940.720 → 974.304 B (+3,6 %), ReleaseSmall 552.488 → 575.480 B (+4,2 %), mientras conviven los dos ejecutores. |
 | **F6b — Lookbehind** | Matching hacia atrás (D7): IR invertido, instrucciones de consumo en dirección −1 para ambos encodings, cambio de dirección lookahead↔lookbehind anidados, backrefs hacia atrás, `LookLinear` backward con programas invertidos. | test262 `lookBehind` en verde; diferencial contra V8 en lookbehind sin discrepancias; `recursive_matcher.zig` sin usos.  **Aviso (F3d):** F6b reescribe el lookbehind por completo, así que el número del bench de `(?<=\$)\d+` va a cambiar. No tomar la referencia de F3d (0,59 MB/s) como objetivo de F6b. |
 | **F6b — B′ (paso 1 de 2, decidido tras F7b)** ✅ **Hecho** | Lookbehind de longitud fija sin capturas ni backrefs, ejecutado hacia delante desde `pos − L` en el backtracker de pila (opcode `LOOKBEHIND_FIXED`, sin codegen inverso); el resto da `error.UnsupportedFeature` al compilar (C API: `ZREGEXP_ERROR_UNSUPPORTED`). Retira `recursive_matcher.zig`. Cubre 29 de los 34 patrones con lookbehind del corpus npm (52 de 59 ocurrencias). | test262 2980 → 2968 exacto (pierde 12 entradas que D7 acertaba con longitud variable o capturas); los patrones de longitud fija del corpus F2c siguen coincidiendo con V8; `recursive_matcher.zig` sin usos. |
-| **F6b — completo (paso 2 de 2, obligatorio)** | Longitud variable y capturas dentro del lookbehind: matching hacia atrás (la fila de arriba, "F6b — Lookbehind"). Aditivo sobre B′: quita el `UnsupportedFeature`. **Obligatorio, no candidato:** `z-interpreter` requiere el 100 % del lookbehind (ES2018). | Los criterios de la fila "F6b — Lookbehind". |
+| **F6b — completo (paso 2 de 2, obligatorio)** | Longitud variable y capturas dentro del lookbehind: matching hacia atrás (la fila de arriba, "F6b — Lookbehind"). Aditivo sobre B′: quita el `UnsupportedFeature`. **Obligatorio, no candidato:** el lookbehind completo es ES2018. | Los criterios de la fila "F6b — Lookbehind". |
 | **F6b — Plan B (sustituido por B′)** | Si F6b no cierra dentro de su timebox (se fija al iniciar F6b; **no hay datos de velocidad para proponer una cifra**): se publica **sin lookbehind**. Los patrones con `(?<=…)`/`(?<!…)` fallan en `compile` con `error.UnsupportedFeature` (no `SyntaxError`, porque el patrón es válido) y se documenta en `docs/KNOWN_LIMITATIONS.md` como limitación conocida. **No** se conserva la implementación actual con ventana de 100 bytes, porque da resultados incorrectos en silencio. | Limitación documentada; tests que verifican el error explícito. **Impacto:** hoy el repo acepta lookbehind (con D7), así que el plan B es una regresión funcional para los consumidores actuales; se acepta a cambio de no dar resultados incorrectos (ver P10). |
 | **F6b — Nota de F0d** | Dado el throughput medido en F0d (`(?<=\$)\d+` a 0,27–0,34 MB/s, ~74× por debajo del objetivo de ≥ 20 MB/s), **el plan B (publicar sin lookbehind) no es solo una defensa: es una opción razonable si el timebox se agota.** La decisión de intentar F6b completo debe justificarse contra el uso real del feature (F0c), no contra la completitud del spec. | — |
 | **F7 — Endurecimiento** | **Backlog (F5b):** si el tamaño del binario importa a un consumidor, mover las tablas de folding a un módulo separado (F5b: +138 KB en ReleaseFast, 69 KB de clases y 45 KB de deltas). **Backlog (F5a):** reducir el coste fijo de `tier0.compile` (tablas de clausuras, `follow`); afecta a T0 desde F4a y a T1 desde F5a; no bloqueante, los tiempos absolutos son µs. Enforcement final de dependencias en el build; suite de benchmarks; retirar `recursive_matcher.zig`; telemetría opcional de Tiers para el host. Actualizar `docs/ARCHITECTURE.md` y `docs/PROJECT_STRUCTURE.md` (movido desde F0d). | Conformidad test262 medida y publicada en `docs/KNOWN_LIMITATIONS.md`. |
@@ -520,7 +520,7 @@ Un consumidor que solo necesite T0 puede importar `zregex-t0` y no enlaza las ~3
 ### 6.4 Agnosticismo e integración con un motor JS
 
 - La lib nunca ve objetos JS. El host implementa `RegExpBuiltinExec` alrededor de `execAt` (lee y escribe `lastIndex`, crea el array resultado, `groups` e `indices`), y usa `expandReplacement` para GetSubstitution. `matchAll`, `split` y el resto de los protocolos `Symbol.*` son del host (§3.4).
-- El host elige la representación de strings: si guarda UTF-16 usa `Subject.utf16`; si guarda WTF-8 (como `z-string` después de `7d36074`) usa `Subject.wtf8` y mapea índices (la lib puede ofrecer un helper de mapeo UTF-16↔WTF-8).
+- El host elige la representación de strings: si guarda UTF-16 usa `Subject.utf16`; si guarda WTF-8 usa `Subject.wtf8` y mapea índices (la lib puede ofrecer un helper de mapeo UTF-16↔WTF-8).
 - El caché de `Regex` por (source, flags) es responsabilidad del host; `compile` es puro y determinista.
 - Errores: `SyntaxErrorKind` + offset, sin textos de mensaje obligatorios.
 - Allocators explícitos y `Scratch` reutilizable, con una instancia por hilo (§4.2): el host controla toda la memoria.
@@ -748,7 +748,7 @@ Trabajo suelto que no pertenece a ninguna fase. No son mitigaciones: reducen el 
 
 **Supuestos**
 - S1. Un Tier es el backend mínimo requerido; T1 no tiene ejecutor propio.
-- S2. `z-string` y `z-lexer` usan la API actual (`Regex.compile/find/...`, `unicode.isInCategory`), que se mantiene como wrapper. Esos repos no se revisaron.
+- S2. Los consumidores existentes usan la API actual (`Regex.compile/find/...`, `unicode.isInCategory`), que se mantiene como wrapper.
 - S3. D12 (arrancar a mitad de una secuencia UTF-8) está inferido del código, no verificado ejecutándolo.
 - S4. Los objetivos de rendimiento de §7.2 son estimaciones hasta tener F0d.
 - S5. Las duraciones (F0a: 1–2 semanas) son de esfuerzo, no de calendario: no se conoce la dedicación del equipo.
@@ -759,11 +759,11 @@ Trabajo suelto que no pertenece a ninguna fase. No son mitigaciones: reducen el 
 - P3. ¿El motor consumidor guarda los strings en UTF-16, Latin1 o WTF-8? ¿Hace falta `Subject.latin1`?
 - P4. ¿Los posesivos se mantienen como opt-in o se eliminan del todo?
 - P5. ¿Qué `max_tier` por defecto quiere el host para patrones no confiables?
-- P6. ¿Se puede romper la API pública actual (`CompileOptions`, `MatchResult` con 16 capturas) o hay que mantener compatibilidad con `z-string` durante una versión?
+- P6. ¿Se puede romper la API pública actual (`CompileOptions`, `MatchResult` con 16 capturas) o hay que mantener compatibilidad durante una versión?
 - P7. ¿Hay CI con Node para test262 desde F0b, o el harness se ejecutará solo en local?
 - P8. ¿Qué límites de implementación son aceptables (tamaño de programa, conteos `{n}`, `max_memo_bytes`) y cómo se reportan al host?
 - P9. ¿Qué corpus reales se pueden usar en F0c, con qué licencia y con qué ponderación?
-- P10. Si se activa el plan B de F6b, ¿aceptan los consumidores actuales (`z-string`) perder lookbehind temporalmente, o necesitan un aviso previo o una versión mayor?
+- P10. Si se activa el plan B de F6b, ¿aceptan los consumidores actuales perder lookbehind temporalmente, o necesitan un aviso previo o una versión mayor?
 
 ---
 

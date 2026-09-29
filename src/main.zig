@@ -31,7 +31,7 @@
 const std = @import("std");
 
 // Version information
-pub const version = "0.5.0";
+pub const version = "0.5.1";
 pub const zig_version_required = "0.16.0";
 
 // Utils module exports
@@ -114,7 +114,7 @@ pub const find = @import("regex.zig").find;
 pub const findAll = @import("regex.zig").findAll;
 
 // Unicode General_Category lookup, re-exported for reuse outside the regex
-// engine (e.g. z-lexer's ID_Start/ID_Continue identifier classification) --
+// engine (e.g. ID_Start/ID_Continue identifier classification in a lexer) --
 // avoids duplicating the ~21k lines of UCD-derived tables in tables.zig.
 pub const unicode = struct {
     pub const UnicodeProperty = @import("unicode").properties.UnicodeProperty;

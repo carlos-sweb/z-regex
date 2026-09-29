@@ -942,3 +942,142 @@ test "F7b(6): the VM's set cache doesn't mix the letters of an i literal" {
         } else try testing.expect(!found);
     }
 }
+
+test "E0: valid syntax that isn't implemented is UnsupportedFeature, never a wrong result" {
+    // `/^[\q{abc|d}]$/v` used to read `\q` as the letter q and match "q",
+    // "|" and "a" but not "abc". Every row: V8 12.4 accepts the pattern.
+    const v: zregex.CompileOptions = .{ .v = true };
+    const cases = [_]struct { []const u8, zregex.CompileOptions }{
+        .{ "^[\\q{abc|d}]$", v },
+        .{ "[\\q{a}]", v },
+        .{ "[\\p{L}--\\d]", v }, // bug B: a shorthand operand
+        .{ "[\\p{L}--a]", v }, // bug B: a bare character operand
+        .{ "[[a][b]]", v }, // a union with nested classes
+        .{ "[a[b]]", v },
+        .{ "[[a]--[b]--[c]]", v }, // the same operator chained
+        .{ "[[a]&&[b]&&[c]]", v },
+        .{ "\\p{RGI_Emoji}", v }, // a property of strings
+        .{ "[\\p{Basic_Emoji}]", v },
+        .{ "(?i:a)", .{} }, // RegExp modifiers (ES2025)
+        .{ "(?-m:^a)", .{ .multiline = true } },
+        .{ "(?i-s:a.)", .{ .unicode = true } },
+    };
+    for (cases) |c| {
+        try testing.expectError(error.UnsupportedFeature, zregex.Regex.compileWithOptions(testing.allocator, c[0], c[1]));
+    }
+}
+
+test "E0: v applies u's early errors; invalid class set syntax stays a SyntaxError" {
+    // Every row: V8 12.4 throws a SyntaxError.
+    const v: zregex.CompileOptions = .{ .v = true };
+    const cases = [_]struct { []const u8, zregex.CompileOptions, anyerror }{
+        .{ "\\q", v, error.InvalidEscape },
+        .{ "[\\q]", v, error.InvalidEscape },
+        .{ "\\q{a}", v, error.InvalidEscape },
+        .{ "\\z", v, error.InvalidEscape },
+        .{ "[a--]", v, error.InvalidClassSetOperand },
+        .{ "[--a]", v, error.InvalidClassSetOperand },
+        .{ "[--\\d]", v, error.InvalidClassSetOperand },
+        // A lexer error right after a nested class frees it (the testing
+        // allocator catches a leak): found by the fuzz stress in E0.
+        .{ "[[a]\\z]", v, error.InvalidEscape },
+        .{ "[[a]--[b]\\z]", v, error.InvalidEscape },
+        .{ "[[a]--[b]&&[c]]", v, error.MixedClassSetOperators },
+        .{ "\\P{RGI_Emoji}", v, error.UnknownUnicodeProperty },
+        .{ "\\p{RGI_Emoji}", .{ .unicode = true }, error.UnknownUnicodeProperty },
+        .{ "(?x:a)", .{}, error.UnexpectedToken },
+        .{ "(?ii:a)", .{}, error.UnexpectedToken },
+        .{ "(?-:a)", .{}, error.UnexpectedToken },
+    };
+    for (cases) |c| {
+        try testing.expectError(c[2], zregex.Regex.compileWithOptions(testing.allocator, c[0], c[1]));
+    }
+    // What `v` does implement still compiles, and without `v` `\q` is the
+    // letter q (Annex B).
+    for ([_][]const u8{ "[\\p{L}--\\p{Lu}]", "[[a-z]&&[^aeiou]]", "[\\p{L}--[a]]" }) |p| {
+        var re = try zregex.Regex.compileWithOptions(testing.allocator, p, v);
+        re.deinit();
+    }
+    var q = try zregex.Regex.compile(testing.allocator, "^\\q$");
+    defer q.deinit();
+    try testing.expect(try q.test_("q"));
+}
+
+fn fullMatch(pattern: []const u8, options: zregex.CompileOptions, subject: []const u8) !bool {
+    var re = try zregex.Regex.compileWithOptions(testing.allocator, pattern, options);
+    defer re.deinit();
+    return re.test_(subject);
+}
+
+test "E0: \\k<name> with duplicate names refers to the group that participated" {
+    // `\k<x>` used to resolve to the first `x` only, so after the second `x`
+    // captured it referred to an undefined group and matched empty. Values
+    // from V8 (Node 24).
+    const p = "^(?:(?<x>a)|(?<x>b))\\k<x>$";
+    try testing.expect(try fullMatch(p, .{}, "aa"));
+    try testing.expect(try fullMatch(p, .{}, "bb"));
+    try testing.expect(!try fullMatch(p, .{}, "ab"));
+    try testing.expect(try fullMatch(p, .{ .case_insensitive = true }, "bB"));
+}
+
+test "E0: \\1 is group 1 only; \\k<x> is every group named x" {
+    // The same pattern with the numbered and the named reference. Values
+    // from V8 (Node 24).
+    try testing.expect(!try fullMatch("^(?:(?<x>a)|(?<x>b))\\1$", .{}, "bb"));
+    try testing.expect(try fullMatch("^(?:(?<x>a)|(?<x>b))\\1$", .{}, "b"));
+    try testing.expect(try fullMatch("^(?:(?<x>a)|(?<x>b))\\k<x>$", .{}, "bb"));
+}
+
+test "E0: $<name> in replace with duplicate names" {
+    // Values from V8 (Node 24). The anchored pattern doesn't match "bb", so
+    // nothing is replaced; over "b" the second `x` is the one that captured.
+    var re = try zregex.Regex.compile(testing.allocator, "^(?:(?<x>a)|(?<x>b))$");
+    defer re.deinit();
+    const none = try re.replace(testing.allocator, "bb", "[$<x>]");
+    defer testing.allocator.free(none);
+    try testing.expectEqualStrings("bb", none);
+    const one = try re.replace(testing.allocator, "b", "[$<x>]");
+    defer testing.allocator.free(one);
+    try testing.expectEqualStrings("[b]", one);
+}
+
+test "E0: test262 named-groups/duplicate-names-exec.js and -match.js" {
+    // The assertions of both files (lines 14-35; the canonical harness,
+    // Node 22, skips them). Each row: pattern, subject, then match, group 1
+    // and group 2 (null: no match, or the group didn't participate).
+    const Row = struct { []const u8, []const u8, ?[]const u8, ?[]const u8, ?[]const u8 };
+    const rows = [_]Row{
+        .{ "(?:(?<x>a)|(?<x>b))\\k<x>", "aa", "aa", "a", null },
+        .{ "(?:(?<x>a)|(?<x>b))\\k<x>", "bb", "bb", null, "b" },
+        .{ "(?:(?:(?<x>a)|(?<x>b))\\k<x>){2}", "aabb", "aabb", null, "b" },
+        .{ "(?:(?:(?<x>a)|(?<x>b))\\k<x>){2}", "abab", null, null, null },
+        .{ "(?:(?<x>a)|(?<x>b))\\k<x>", "abab", null, null, null },
+        .{ "(?:(?<x>a)|(?<x>b))\\k<x>", "cdef", null, null, null },
+        .{ "^(?:(?<a>x)|(?<a>y)|z)\\k<a>$", "xx", "xx", "x", null },
+        .{ "^(?:(?<a>x)|(?<a>y)|z)\\k<a>$", "z", "z", null, null },
+        .{ "^(?:(?<a>x)|(?<a>y)|z)\\k<a>$", "zz", null, null, null },
+        .{ "(?<a>x)|(?:zy\\k<a>)", "zy", "zy", null, null },
+        .{ "^(?:(?<a>x)|(?<a>y)|z){2}\\k<a>$", "xz", "xz", null, null },
+        .{ "^(?:(?<a>x)|(?<a>y)|z){2}\\k<a>$", "yz", "yz", null, null },
+        .{ "^(?:(?<a>x)|(?<a>y)|z){2}\\k<a>$", "xzx", null, null, null },
+        .{ "^(?:(?<a>x)|(?<a>y)|z){2}\\k<a>$", "yzy", null, null, null },
+    };
+    for (rows) |r| {
+        var re = try zregex.Regex.compile(testing.allocator, r[0]);
+        defer re.deinit();
+        const m = try re.find(r[1]);
+        if (r[2]) |want| {
+            const got = m orelse return error.TestUnexpectedResult;
+            defer got.deinit();
+            try testing.expectEqualStrings(want, got.group(r[1]));
+            const want_caps = [2]?[]const u8{ r[3], r[4] };
+            for (want_caps, 1..) |want_cap, g| {
+                const cap = got.getCapture(g, r[1]);
+                if (want_cap) |w| try testing.expectEqualStrings(w, cap.?) else try testing.expect(cap == null);
+            }
+        } else {
+            if (m) |got| got.deinit();
+            try testing.expect(m == null);
+        }
+    }
+}

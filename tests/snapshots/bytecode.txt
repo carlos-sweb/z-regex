@@ -26,6 +26,15 @@
 # F4a(4) prep: `u` and `v` together are error:IncompatibleFlags (a SyntaxError
 # in ECMA-262, as analysis.Flags.parse already said): 5 of 699 outcomes
 # changed, exactly the `uv` entries.
+#
+# E0: `v` applies `u`'s early errors (the lexer's strict mode was off under
+# `v` alone): 48 of 699 outcomes changed, each a program before and an error
+# now, and V8 throws a SyntaxError for every one of them (checked in the E0
+# commit). No program changed.
+#
+# E0 (1b): `\k<name>` with duplicate names emits one BACK_REF per group of
+# that name: 3 of 699 outcomes changed, exactly `(?<a>x)|(?<a>y)\k<a>` under
+# "", `u` and `v` (BACK_REF 1 becomes BACK_REF 1; BACK_REF 2).
 1f65ed2fc157c741		5b2f5d	[/]
 0dcc096902c1f92d		5b2f2f5d	[//]
 a26f4e06b953761a		28612a29625c312b	(a*)b\\1+
@@ -413,27 +422,27 @@ error:IncompatibleFlags	uv	5b5b615d26265b615d5d5d	[[a]&&[a]]]
 error:UnmatchedBracket	u	5b5b615d26265b615d5d5d	[[a]&&[a]]]
 d6197ba0281785eb		5c70	\\p
 error:InvalidEscape	u	5c70	\\p
-d6197ba0281785eb	v	5c70	\\p
+error:InvalidEscape	v	5c70	\\p
 3c4fa27b831da21a		5c50	\\P
 error:InvalidEscape	u	5c50	\\P
-3c4fa27b831da21a	v	5c50	\\P
-8b886d658ea60caa	v	5c704c	\\pL
+error:InvalidEscape	v	5c50	\\P
+error:InvalidEscape	v	5c704c	\\pL
 9a2193b4a6309483		5c504c	\\PL
 error:InvalidEscape	u	5c504c	\\PL
-9a2193b4a6309483	v	5c504c	\\PL
+error:InvalidEscape	v	5c504c	\\PL
 a83fc1059dfa0d53		5c707d	\\p}
 error:InvalidEscape	u	5c707d	\\p}
-a83fc1059dfa0d53	v	5c707d	\\p}
+error:InvalidEscape	v	5c707d	\\p}
 1f9b9a88306d5c57		5c507d	\\P}
 error:InvalidEscape	u	5c507d	\\P}
-1f9b9a88306d5c57	v	5c507d	\\P}
-cedc142ce7311d00	v	5b5c707b7d5d	[\\p{}]
+error:InvalidEscape	v	5c507d	\\P}
+error:InvalidEscape	v	5b5c707b7d5d	[\\p{}]
 492297354f7b5685		5b5c507b7d5d	[\\P{}]
 error:InvalidEscape	u	5b5c507b7d5d	[\\P{}]
-492297354f7b5685	v	5b5c507b7d5d	[\\P{}]
+error:InvalidEscape	v	5b5c507b7d5d	[\\P{}]
 6172123bf140084c		5c707b	\\p{
 error:InvalidEscape	u	5c707b	\\p{
-6172123bf140084c	v	5c707b	\\p{
+error:InvalidEscape	v	5c707b	\\p{
 error:InvalidQuantifier		2e283f3c3d2e293f	.(?<=.)?
 error:InvalidQuantifier	u	2e283f3c3d2e293f	.(?<=.)?
 error:InvalidQuantifier	v	2e283f3c3d2e293f	.(?<=.)?
@@ -448,16 +457,16 @@ error:InvalidQuantifier	u	2e283f3c212e292a	.(?<!.)*
 error:InvalidQuantifier	v	2e283f3c212e292a	.(?<!.)*
 84da7543d3c8da83		2e283f3d2e293f	.(?=.)?
 error:InvalidQuantifier	u	2e283f3d2e293f	.(?=.)?
-84da7543d3c8da83	v	2e283f3d2e293f	.(?=.)?
+error:InvalidQuantifier	v	2e283f3d2e293f	.(?=.)?
 6e94f412958467b5		2e283f212e293f	.(?!.)?
 error:InvalidQuantifier	u	2e283f212e293f	.(?!.)?
-6e94f412958467b5	v	2e283f212e293f	.(?!.)?
+error:InvalidQuantifier	v	2e283f212e293f	.(?!.)?
 6f1221aa586697c8		2e283f3d2e297b322c337d	.(?=.){2,3}
 error:InvalidQuantifier	u	2e283f3d2e297b322c337d	.(?=.){2,3}
-6f1221aa586697c8	v	2e283f3d2e297b322c337d	.(?=.){2,3}
+error:InvalidQuantifier	v	2e283f3d2e297b322c337d	.(?=.){2,3}
 a3cc78a8e6cb20a4		283f3d61292a	(?=a)*
 error:InvalidQuantifier	u	283f3d61292a	(?=a)*
-a3cc78a8e6cb20a4	v	283f3d61292a	(?=a)*
+error:InvalidQuantifier	v	283f3d61292a	(?=a)*
 error:InvalidGroupName		283f3c613e2e295c6b	(?<a>.)\\k
 error:InvalidGroupName	u	283f3c613e2e295c6b	(?<a>.)\\k
 error:InvalidGroupName	v	283f3c613e2e295c6b	(?<a>.)\\k
@@ -473,48 +482,48 @@ error:InvalidGroupName	v	5c6b3c61283f3c613e6129	\\k<a(?<a>a)
 error:InvalidGroupName		5c6b283f3c613e2e29	\\k(?<a>.)
 error:InvalidGroupName	u	5c6b283f3c613e2e29	\\k(?<a>.)
 error:InvalidGroupName	v	5c6b283f3c613e2e29	\\k(?<a>.)
-07c52fe765143144	v	5c6b	\\k
-a58efb448eddeb3c	v	5c6b3c61	\\k<a
+error:InvalidGroupName	v	5c6b	\\k
+error:InvalidGroupName	v	5c6b3c61	\\k<a
 5465011088a917cf		5c6b3c3e	\\k<>
 error:InvalidGroupName	u	5c6b3c3e	\\k<>
-5465011088a917cf	v	5c6b3c3e	\\k<>
-4d0060bb3b6d95a2	v	5c6330	\\c0
-4607fae6dff451e8	v	5b5c63305d	[\\c0]
-8b1d757714d85995	v	5c63	\\c
-7ab1176b3b229586	v	5c7834	\\x4
+error:InvalidGroupName	v	5c6b3c3e	\\k<>
+error:InvalidEscape	v	5c6330	\\c0
+error:InvalidEscape	v	5b5c63305d	[\\c0]
+error:InvalidEscape	v	5c63	\\c
+error:InvalidEscape	v	5c7834	\\x4
 bbec5b2809fe0926		5c786731	\\xg1
 error:InvalidEscape	u	5c786731	\\xg1
-bbec5b2809fe0926	v	5c786731	\\xg1
+error:InvalidEscape	v	5c786731	\\xg1
 e5327b7394b019f7		5c753132	\\u12
 error:InvalidEscape	u	5c753132	\\u12
-e5327b7394b019f7	v	5c753132	\\u12
+error:InvalidEscape	v	5c753132	\\u12
 bf55b440cf3c1e27		5c757b312c7d	\\u{1,}
 error:InvalidEscape	u	5c757b312c7d	\\u{1,}
-bf55b440cf3c1e27	v	5c757b312c7d	\\u{1,}
+error:InvalidEscape	v	5c757b312c7d	\\u{1,}
 ba9ddb6a850bcd1e		5c757b7d	\\u{}
 error:InvalidEscape	u	5c757b7d	\\u{}
-ba9ddb6a850bcd1e	v	5c757b7d	\\u{}
+error:InvalidEscape	v	5c757b7d	\\u{}
 77fdd831aed0b881		5c757b3131303030307d	\\u{110000}
 error:InvalidEscape	u	5c757b3131303030307d	\\u{110000}
-77fdd831aed0b881	v	5c757b3131303030307d	\\u{110000}
+error:InvalidEscape	v	5c757b3131303030307d	\\u{110000}
 ff2d6ef7316e3e9d		5b5c757b3131303030307d5d	[\\u{110000}]
 error:InvalidEscape	u	5b5c757b3131303030307d5d	[\\u{110000}]
-ff2d6ef7316e3e9d	v	5b5c757b3131303030307d5d	[\\u{110000}]
+error:InvalidEscape	v	5b5c757b3131303030307d5d	[\\u{110000}]
 a11d17f6b6d94428		5b5c642d615d	[\\d-a]
 error:InvalidCharRange	u	5b5c642d615d	[\\d-a]
-a11d17f6b6d94428	v	5b5c642d615d	[\\d-a]
+error:InvalidCharRange	v	5b5c642d615d	[\\d-a]
 e1fcccabca86111d		5b5c732d5c645d	[\\s-\\d]
 error:InvalidCharRange	u	5b5c732d5c645d	[\\s-\\d]
-e1fcccabca86111d	v	5b5c732d5c645d	[\\s-\\d]
+error:InvalidCharRange	v	5b5c732d5c645d	[\\s-\\d]
 b73da3ef044b56a9		5b252d5c645d	[%-\\d]
 error:InvalidCharRange	u	5b252d5c645d	[%-\\d]
-b73da3ef044b56a9	v	5b252d5c645d	[%-\\d]
+error:InvalidCharRange	v	5b252d5c645d	[%-\\d]
 9475e375b57376dd		5b2d2d5c645d	[--\\d]
 error:InvalidCharRange	u	5b2d2d5c645d	[--\\d]
 error:InvalidClassSetOperand	v	5b2d2d5c645d	[--\\d]
 error:InvalidCharRange		5b5c707b4c7d2d7a5d	[\\p{L}-z]
 error:InvalidCharRange	u	5b5c707b4c7d2d7a5d	[\\p{L}-z]
-46b463093aa81012	v	5b5c707b4c7d2d7a5d	[\\p{L}-z]
+error:InvalidCharRange	v	5b5c707b4c7d2d7a5d	[\\p{L}-z]
 62164679a717bd9a		09	\t
 62164679a717bd9a	u	09	\t
 62164679a717bd9a	v	09	\t
@@ -593,41 +602,41 @@ b3df15df255a3720	v	5c7320616e64205c5320666f6c6c6f772045434d412d32363220576869746
 391816f7f78cd811		e280a7	\u2027
 391816f7f78cd811	u	e280a7	\u2027
 391816f7f78cd811	v	e280a7	\u2027
-c81b3770f8ac78d5	v	617b2c357d	a{,5}
+error:InvalidRepeat	v	617b2c357d	a{,5}
 21e1903f4c9018f6		617b7d	a{}
 error:InvalidRepeat	u	617b7d	a{}
-21e1903f4c9018f6	v	617b7d	a{}
+error:InvalidRepeat	v	617b7d	a{}
 4fd2561642ff6bcf		617b2c7d	a{,}
 error:InvalidRepeat	u	617b2c7d	a{,}
-4fd2561642ff6bcf	v	617b2c7d	a{,}
+error:InvalidRepeat	v	617b2c7d	a{,}
 e75b12d2e5aafbcf		617b	a{
 error:InvalidRepeat	u	617b	a{
-e75b12d2e5aafbcf	v	617b	a{
+error:InvalidRepeat	v	617b	a{
 3303a2b1d2bf3ec8		7b	{
 error:InvalidRepeat	u	7b	{
-3303a2b1d2bf3ec8	v	7b	{
+error:InvalidRepeat	v	7b	{
 091e6c4b985e6de0		617b31	a{1
 error:InvalidRepeat	u	617b31	a{1
-091e6c4b985e6de0	v	617b31	a{1
-5c2fe3b74a803606	v	617b312c	a{1,
+error:InvalidRepeat	v	617b31	a{1
+error:UnterminatedRepeat	v	617b312c	a{1,
 74a33cada5197696		617b312c32	a{1,2
 error:UnterminatedRepeat	u	617b312c32	a{1,2
-74a33cada5197696	v	617b312c32	a{1,2
+error:UnterminatedRepeat	v	617b312c32	a{1,2
 63373c009035ab6c		617b787d	a{x}
 error:InvalidRepeat	u	617b787d	a{x}
-63373c009035ab6c	v	617b787d	a{x}
+error:InvalidRepeat	v	617b787d	a{x}
 29d5709f4a4b0396		7d	}
 error:InvalidRepeat	u	7d	}
-29d5709f4a4b0396	v	7d	}
+error:InvalidRepeat	v	7d	}
 bc8e36c622519b9b		617d	a}
 error:InvalidRepeat	u	617d	a}
-bc8e36c622519b9b	v	617d	a}
+error:InvalidRepeat	v	617d	a}
 26685c70b6ee37da		5d	]
 error:UnmatchedBracket	u	5d	]
-26685c70b6ee37da	v	5d	]
+error:UnmatchedBracket	v	5d	]
 df9fb13dd1de4261		615d	a]
 error:UnmatchedBracket	u	615d	a]
-df9fb13dd1de4261	v	615d	a]
+error:UnmatchedBracket	v	615d	a]
 error:UnexpectedToken		7b317d	{1}
 error:UnexpectedToken	u	7b317d	{1}
 error:UnexpectedToken	v	7b317d	{1}
@@ -640,15 +649,15 @@ error:UnexpectedToken	v	7b312c327d	{1,2}
 error:UnexpectedToken		617c7b317d	a|{1}
 error:UnexpectedToken	u	617c7b317d	a|{1}
 error:UnexpectedToken	v	617c7b317d	a|{1}
-cd91986fd29fac51	v	5c38	\\8
+error:InvalidEscape	v	5c38	\\8
 f45620ffc98ad3ce		5c3031	\\01
 error:InvalidEscape	u	5c3031	\\01
-f45620ffc98ad3ce	v	5c3031	\\01
+error:InvalidEscape	v	5c3031	\\01
 f45620ffc98ad3ce		5b5c315d	[\\1]
 error:InvalidEscape	u	5b5c315d	[\\1]
-f45620ffc98ad3ce	v	5b5c315d	[\\1]
-cd91986fd29fac51	v	5b5c385d	[\\8]
-0cb1b71135281993	v	2861295c32	(a)\\2
+error:InvalidEscape	v	5b5c315d	[\\1]
+error:InvalidEscape	v	5b5c385d	[\\8]
+error:InvalidEscape	v	2861295c32	(a)\\2
 error:UnexpectedToken	v	612a2b	a*+
 error:UnexpectedToken		612b2b	a++
 error:UnexpectedToken	u	612b2b	a++
@@ -719,9 +728,9 @@ error:InvalidGroupName	v	283f3c5c7834313e6129	(?<\\x41>a)
 f9c92db5869e37c3		5c6b3c613e283f3c613e6229283f3c5c757b303343307d3e63295c6b3ccf803e	\\k<a>(?<a>b)(?<\\u{03C0}>c)\\k<\u03c0>
 f9c92db5869e37c3	u	5c6b3c613e283f3c613e6229283f3c5c757b303343307d3e63295c6b3ccf803e	\\k<a>(?<a>b)(?<\\u{03C0}>c)\\k<\u03c0>
 f9c92db5869e37c3	v	5c6b3c613e283f3c613e6229283f3c5c757b303343307d3e63295c6b3ccf803e	\\k<a>(?<a>b)(?<\\u{03C0}>c)\\k<\u03c0>
-26c395c1096d80b5		283f3c613e78297c283f3c613e79295c6b3c613e	(?<a>x)|(?<a>y)\\k<a>
-26c395c1096d80b5	u	283f3c613e78297c283f3c613e79295c6b3c613e	(?<a>x)|(?<a>y)\\k<a>
-26c395c1096d80b5	v	283f3c613e78297c283f3c613e79295c6b3c613e	(?<a>x)|(?<a>y)\\k<a>
+6580f943868d7dad		283f3c613e78297c283f3c613e79295c6b3c613e	(?<a>x)|(?<a>y)\\k<a>
+6580f943868d7dad	u	283f3c613e78297c283f3c613e79295c6b3c613e	(?<a>x)|(?<a>y)\\k<a>
+6580f943868d7dad	v	283f3c613e78297c283f3c613e79295c6b3c613e	(?<a>x)|(?<a>y)\\k<a>
 d7064fecff20f756		283f3c613e283f3c623e78295c6b3c623e29	(?<a>(?<b>x)\\k<b>)
 d7064fecff20f756	u	283f3c613e283f3c623e78295c6b3c623e29	(?<a>(?<b>x)\\k<b>)
 d7064fecff20f756	v	283f3c613e283f3c623e78295c6b3c623e29	(?<a>(?<b>x)\\k<b>)

@@ -733,10 +733,15 @@ pub const CodeGenerator = struct {
 
     /// Generate code for backreference
     fn generateBackRef(self: *Self, b: hir.Backref) !void {
-        if (b.indices.len != 1) return error.InvalidPattern;
         // Choose case-sensitive or case-insensitive based on the scope
         const opcode: Opcode = if (self.flags.ignore_case) .BACK_REF_I else .BACK_REF;
-        try self.writer.emit1(opcode, b.indices[0]);
+        // `\k<name>` with duplicate names: one index per group of that name.
+        // Duplicates are allowed only in mutually exclusive branches, so at
+        // most one of them participates. Emitting one BACK_REF per index is
+        // BackreferenceMatcher's semantics (ES2025): a group that didn't
+        // participate matches empty, so the sequence matches the one that
+        // did, or empty if none did.
+        for (b.indices) |index| try self.writer.emit1(opcode, index);
     }
 
     /// Generate code for a lookaround assertion: (?=...), (?!...), (?<=...)

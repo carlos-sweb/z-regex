@@ -86,7 +86,12 @@ pub const ParseError = error{
     UnknownUnicodeProperty,
     // `v`-mode (Unicode Sets) class set operations (`[A--B]` / `[A&&B]`)
     InvalidClassSetOperand,
-    ChainedClassSetOperatorNotSupported,
+    // `[A--B&&C]`: `--` and `&&` mixed in one class (a SyntaxError)
+    MixedClassSetOperators,
+    // Valid syntax zregex doesn't implement (lookbehind of variable length,
+    // `\q{...}`, chained or bare-character class set operands, properties
+    // of strings, RegExp modifiers): never a wrong result, always this.
+    UnsupportedFeature,
     // Parser nesting limit (see MAX_NESTING_DEPTH)
     NestingTooDeep,
     // More than 65535 capturing groups (group indices are u16, D9/D16)
@@ -705,6 +710,7 @@ pub const Parser = struct {
                 // Resolved in `finish`, once every group is known.
                 const node = try Node.createBackRef(self.allocator, 0);
                 errdefer node.deinit();
+                node.backref_named = true;
                 try self.pending_named_refs.append(self.allocator, .{ .node = node, .name = name });
                 return node;
             },
@@ -732,8 +738,27 @@ pub const Parser = struct {
             return Node.createUnicodeScript(self.allocator, idx, negated);
         }
 
-        const category = properties.resolveUnicodeProperty(name) orelse return error.UnknownUnicodeProperty;
+        const category = properties.resolveUnicodeProperty(name) orelse {
+            // A property of strings (`v` only, not negated) is valid syntax
+            // that isn't implemented (F5c); elsewhere it is a SyntaxError.
+            if (self.lexer.v_mode and !negated and isPropertyOfStrings(name)) return error.UnsupportedFeature;
+            return error.UnknownUnicodeProperty;
+        };
         return Node.createUnicodeProperty(self.allocator, @intFromEnum(category), negated);
+    }
+
+    /// The binary Unicode properties of strings (ECMA-262, table "Binary
+    /// Unicode property aliases for properties of strings"), valid only
+    /// under `v`.
+    fn isPropertyOfStrings(name: []const u8) bool {
+        const names = [_][]const u8{
+            "Basic_Emoji",                 "Emoji_Keycap_Sequence",
+            "RGI_Emoji_Modifier_Sequence", "RGI_Emoji_Flag_Sequence",
+            "RGI_Emoji_Tag_Sequence",      "RGI_Emoji_ZWJ_Sequence",
+            "RGI_Emoji",
+        };
+        for (names) |n| if (std.mem.eql(u8, n, name)) return true;
+        return false;
     }
 
     /// Parse character class: '[' '^'? charclass_item+ ']'
@@ -810,14 +835,22 @@ pub const Parser = struct {
             // characters.
             self.lexer.rewindTo(self.current_token.position);
             self.lexer.in_char_class = true;
-            try self.advance();
+            // A lexer error on the token after the nested class must free it
+            // (no errdefer: see the ownership note above).
+            self.advance() catch |err| {
+                nested.deinit();
+                return err;
+            };
 
             // No operator following a nested operand1 is out of this
             // feature's scope (no bare `[[a-z]]` double-bracket idiom) --
             // see `docs/KNOWN_LIMITATIONS.md`.
             if (!self.check(.class_minus_minus) and !self.check(.class_and_and)) {
                 nested.deinit();
-                return error.InvalidClassSetOperand;
+                // `[[a]]`, `[[a][b]]`: a union with a nested class is valid
+                // `v` syntax that isn't implemented (F5c).
+                if (self.check(.eof)) return error.UnmatchedBracket;
+                return error.UnsupportedFeature;
             }
             return try self.finishClassSetOp(nested, inverted);
         }
@@ -914,12 +947,19 @@ pub const Parser = struct {
                     try self.appendClassChar(class, '-');
                 }
                 try self.appendClassChar(class, '-');
+            } else if (self.lexer.v_mode and self.check(.lbracket)) {
+                // `[a[b]]`: a union with a nested class after other members,
+                // valid `v` syntax that isn't implemented (F5c).
+                return error.UnsupportedFeature;
             } else {
                 return error.UnexpectedToken;
             }
         }
 
         if (self.check(.class_minus_minus) or self.check(.class_and_and)) {
+            // `[--a]`: an operator with no left operand is a SyntaxError
+            // (the class's own errdefer frees it).
+            if (class.children.items.len == 0) return error.InvalidClassSetOperand;
             // `class.inverted` was set to the *outer* `^` above (correct
             // for an ordinary class), but a flat operand1 (as opposed to a
             // nested `[...]` operand1 with its own independent `^`) is
@@ -992,10 +1032,12 @@ pub const Parser = struct {
         var right_owned = true;
         errdefer if (right_owned) right.deinit();
 
-        // Exactly one operation, no chaining (`[A--B--C]`) -- see
-        // `docs/KNOWN_LIMITATIONS.md` for why this scope was chosen.
+        // Exactly one operation. A chain of the same operator
+        // (`[A--B--C]`) is valid `v` syntax that isn't implemented (F5c);
+        // mixing `--` and `&&` in one class is a SyntaxError.
         if (self.check(.class_minus_minus) or self.check(.class_and_and)) {
-            return error.ChainedClassSetOperatorNotSupported;
+            const same = self.check(.class_minus_minus) == (op == .difference);
+            return if (same) error.UnsupportedFeature else error.MixedClassSetOperators;
         }
 
         try self.consumeClassClose();
@@ -1032,7 +1074,12 @@ pub const Parser = struct {
             // literal characters instead.
             self.lexer.rewindTo(self.current_token.position);
             self.lexer.in_char_class = true;
-            try self.advance();
+            // A lexer error on the token after the nested class must free it
+            // (the caller owns it only once it is returned).
+            self.advance() catch |err| {
+                nested.deinit();
+                return err;
+            };
             return nested;
         }
         if (self.check(.unicode_prop) or self.check(.not_unicode_prop)) {
@@ -1041,6 +1088,10 @@ pub const Parser = struct {
             try self.advance();
             return self.resolveUnicodePropertyNode(name, negated);
         }
+        // A bare character or a shorthand (`[\p{L}--a]`, `[\w--\d]`) is a
+        // valid operand that isn't implemented (bug B, F5c); anything else
+        // (`]`, an operator, the end) is a SyntaxError.
+        if (self.isClassCharToken() or self.isShorthandClassToken()) return error.UnsupportedFeature;
         return error.InvalidClassSetOperand;
     }
 

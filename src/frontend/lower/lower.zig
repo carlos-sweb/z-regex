@@ -76,7 +76,7 @@ pub const Frontend = struct {
         errdefer gpa.destroy(self);
         self.gpa = gpa;
         self.lexer = Lexer.init(pattern);
-        self.lexer.unicode_mode = lex.unicode;
+        self.lexer.unicode_mode = lex.unicode or lex.v;
         self.lexer.v_mode = lex.v;
         self.lexer.code_units = !(lex.unicode or lex.v);
         self.lexer.possessive = lex.possessive;
@@ -148,14 +148,32 @@ const Lowerer = struct {
         };
     }
 
+    /// `\N` is group N. `\k<name>` is every group of that name, in order
+    /// (more than one only with duplicate names; `generateBackRef` says why
+    /// matching them in sequence is right).
+    fn backref(self: *Lowerer, n: *const AstNode) LowerError!*const Node {
+        const name: ?[]const u8 = if (!n.backref_named) null else for (self.names) |g| {
+            if (g.index == n.group_index) break g.name;
+        } else null;
+        var count: usize = 0;
+        if (name) |nm| {
+            for (self.names) |g| count += @intFromBool(std.mem.eql(u8, g.name, nm));
+        }
+        const indices = try self.arena.alloc(u16, @max(count, 1));
+        if (name) |nm| {
+            var i: usize = 0;
+            for (self.names) |g| if (std.mem.eql(u8, g.name, nm)) {
+                indices[i] = g.index;
+                i += 1;
+            };
+        } else indices[0] = n.group_index;
+        return self.make(.{ .backref = .{ .indices = indices } });
+    }
+
     noinline fn lowerLeaf(self: *Lowerer, n: *const AstNode) LowerError!*const Node {
         return switch (n.type) {
             .char => self.literalUnit(.{ .value = n.char_value, .raw_byte = n.char_value > 0x7F }),
-            .back_ref => blk: {
-                const indices = try self.arena.alloc(u16, 1);
-                indices[0] = n.group_index;
-                break :blk self.make(.{ .backref = .{ .indices = indices } });
-            },
+            .back_ref => self.backref(n),
             .anchor_start => self.make(.{ .assert = .caret }),
             .anchor_end => self.make(.{ .assert = .dollar }),
             .word_boundary => self.make(.{ .assert = .word_boundary }),

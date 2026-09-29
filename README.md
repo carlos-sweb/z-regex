@@ -4,7 +4,7 @@ An ECMA-262 regular expression engine in Zig, independent of the JavaScript engi
 
 [![Zig 0.16+](https://img.shields.io/badge/zig-0.16%2B-orange)](https://ziglang.org/)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
-[![test262](https://img.shields.io/badge/test262-2968%2F3017-blue)](scripts/test262/baseline.json)
+[![test262](https://img.shields.io/badge/test262-2968%2F3017%20run%2C%20821%20skipped-blue)](#compatibility)
 [![T0](https://img.shields.io/badge/T0-complete-green)](docs/REGEX_TIERS_PLAN.md)
 
 ## What it is
@@ -31,8 +31,8 @@ An ECMA-262 regular expression engine in Zig, independent of the JavaScript engi
 - **T2 (backreferences, lookaround): on the explicit-stack backtracker**, with a step budget.
   Lookbehind: fixed length without captures only (F6b step 1); the rest is
   `error.UnsupportedFeature` until full F6b.
-- **test262: 2968/3017 (98.4%)**: 12 lookbehind entries that passed before F6b's step 1 are
-  now `UnsupportedFeature` (see Compatibility).
+- **test262: 2968 of the 3017 entries that run (98.4%); 821 are skipped**, most of them
+  features zregex doesn't implement (`v`, RegExp modifiers): see Compatibility.
 - **Divergences from V8** in the differential: 0 different results; 2 patterns hit the step
   limit (T2).
 
@@ -62,7 +62,7 @@ same whichever runs it.
 With Zig 0.16. Add the dependency (this writes the hash into `build.zig.zon`):
 
 ```sh
-zig fetch --save https://github.com/carlos-sweb/z-regex/archive/refs/tags/v0.5.0.tar.gz
+zig fetch --save https://github.com/carlos-sweb/z-regex/archive/refs/tags/v0.5.1.tar.gz
 ```
 
 In `build.zig`:
@@ -188,10 +188,20 @@ against V8, Rust regex, PCRE2 and zig-regex.
 
 ## Compatibility
 
-- **test262: 2968/3017 (98.4%)**, the same status with UTF-16 and WTF-8 subjects. Baseline:
-  `scripts/test262/baseline.json`. The 49 not passing: 30 lookbehind entries that are
-  `UnsupportedFeature` (variable length or captures, full F6b), 4 host (JS lexer) and 15 not
-  extractable.
+- **test262: 2968 of the 3017 entries that run (98.4%)**, the same status with UTF-16 and
+  WTF-8 subjects. Baseline: `scripts/test262/baseline.json`. The 49 that run and don't pass:
+  30 lookbehind entries that are `UnsupportedFeature` (variable length or captures, full
+  F6b), 4 host (JS lexer) and 15 not extractable.
+- **821 test262 entries are skipped** and are not in 2968/3017:
+
+  | Skipped | Entries | Why |
+  |---|---|---|
+  | `v` flag | 312 | Partial in zregex (F5c); the harness skips the feature |
+  | RegExp modifiers (ES2025) | 377 | Not implemented, pending until further notice; the harness's Node (22) lacks them too |
+  | Duplicate named groups | 24 | Implemented; the harness's Node lacks them. With Node 24 every `named-groups` entry passes except the variable-length lookbehind one |
+  | `RegExp.escape` | 40 | A host function; its tests don't exercise zregex |
+  | Legacy RegExp (Annex B statics) | 52 | Host |
+  | Fail in V8 itself / host flag validation | 16 | Host |
 - **`differential-v8`** against `tests/differential/reference/diff-F7a.json`: 0 new, 0 gone,
   0 changed. It has no different result; 2 T2 patterns hit the step limit.
 - **Internal differential** (every capture slot, V8 as the arbiter where the executors
@@ -239,7 +249,13 @@ The cross-engine benchmark: `bench/compare/prepare.sh`, then `node bench/compare
 - **Lookbehind (F6b step 1):** only of fixed length without captures or backreferences
   inside (29 of the 34 lookbehind patterns in the npm corpus); any other is
   `error.UnsupportedFeature` (C API `ZREGEXP_ERROR_UNSUPPORTED`) until full F6b, which is
-  mandatory (z-interpreter needs all of it). The old 100-character window (D7) is gone.
+  mandatory (lookbehind is ES2018). The old 100-character window (D7) is gone.
+- **Valid syntax that isn't implemented is `error.UnsupportedFeature`** (C API
+  `ZREGEXP_ERROR_UNSUPPORTED`), never a wrong result: lookbehind of variable length or with
+  captures, and under `v` `\q{…}`, chained operations, a bare character as a set operand, a
+  union with a nested class, properties of strings. The table: KNOWN_LIMITATIONS, "E0".
+- **RegExp modifiers (ES2025)**, `(?i:…)`, `(?-m:…)`: not implemented, pending until further
+  notice; `(?i:a)` is `error.UnsupportedFeature`.
 - Patterns with a raw, non-UTF-8 byte (WTF-8 only) stay on the backtracker, as does a tagged
   program over the slot bound.
 
@@ -253,6 +269,12 @@ The full list, with measurements: [docs/KNOWN_LIMITATIONS.md](docs/KNOWN_LIMITAT
 - **v0.5.0:** F7a, F7b, B′ and C API error names (RepeatMatcher steps 4 and 2.b, compile
   cost, fixed-length lookbehind on the explicit-stack backtracker; test262 2968/3017;
   [release notes](docs/RELEASE_NOTES_v0.5.0.md)).
+- **v0.5.1 (E0):** honest errors: valid syntax that isn't implemented is
+  `UnsupportedFeature`; `v` applies `u`'s early errors
+  ([release notes](docs/RELEASE_NOTES_v0.5.1.md)).
+- **To 1.0** ([docs/plans/ROADMAP_1.0.md](docs/plans/ROADMAP_1.0.md)): E0 (v0.5.1) → E1, full
+  F6b (v0.6.0) → E3, F7c: API freeze and documentation (v1.0.0). RegExp modifiers: pending
+  until further notice.
 - **F5, T1 (Unicode):** F5a done (`u` and `\p{…}` on the VM, every UCD property name);
   F5b done (full case folding under `i`); F5c (full `v`) pending.
 - **F6a, T2 without lookbehind: done** (explicit-stack backtracker, capture trail,
