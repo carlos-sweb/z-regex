@@ -350,9 +350,17 @@ test "B′: a lookbehind of fixed length runs on the explicit-stack backtracker 
 
 test "B′: other lookbehinds are error.UnsupportedFeature, after syntax errors" {
     const a = testing.allocator;
-    for ([_][]const u8{ "(?<=a+)b", "(?<=a|bc)d", "(?<=(a))b", "(?<!(?:x|yz))", "(a)(?<=\\1)", "(?<=a?)b", "(?=(?<=a*))b" }) |p| {
+    // F6b(1): variable length without captures, backreferences or
+    // lookarounds inside runs outside `u`/`v` (V8's results).
+    try expectLookbehind("(?<=a+)b", "", "aaab", &.{ 3, 4 });
+    try expectLookbehind("(?<=a|bc)d", "", "bcd", &.{ 2, 3 });
+    try expectLookbehind("(?<!(?:x|yz))", "", "yz", &.{ 0, 0 });
+    try expectLookbehind("(?<=a?)b", "", "b", &.{ 0, 1 });
+    try expectLookbehind("(?=(?<=a*))b", "", "ab", &.{ 1, 2 });
+    for ([_][]const u8{ "(?<=(a))b", "(a)(?<=\\1)" }) |p| {
         try testing.expectError(error.UnsupportedFeature, zregex.Regex.compile(a, p));
     }
+    try testing.expectError(error.UnsupportedFeature, zregex.Regex.compileWithOptions(a, "(?<=a+)b", .{ .unicode = true }));
     // `(?<=\u{1F600}|ab)`: two and two code units without `u`, one and two
     // code points with it.
     var cu = try zregex.Regex.compile(a, "(?<=\u{1F600}|ab)c");

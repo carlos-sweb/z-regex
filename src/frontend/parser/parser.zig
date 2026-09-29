@@ -88,7 +88,7 @@ pub const ParseError = error{
     InvalidClassSetOperand,
     // `[A--B&&C]`: `--` and `&&` mixed in one class (a SyntaxError)
     MixedClassSetOperators,
-    // Valid syntax zregex doesn't implement (lookbehind of variable length,
+    // Valid syntax zregex doesn't implement (some lookbehinds, see compile.zig,
     // `\q{...}`, chained or bare-character class set operands, properties
     // of strings, RegExp modifiers): never a wrong result, always this.
     UnsupportedFeature,

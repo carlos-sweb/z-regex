@@ -11,6 +11,7 @@ const Allocator = std.mem.Allocator;
 const hir = @import("ir").hir;
 const bytecode = @import("../bytecode/writer.zig");
 const opcodes = @import("../bytecode/opcodes.zig");
+const format = @import("../bytecode/format.zig");
 const bittable_mod = @import("utils").bittable;
 const BitTable = bittable_mod.BitTable;
 const casefold = @import("unicode").casefold;
@@ -106,6 +107,9 @@ pub const CodeGenerator = struct {
     empty_check: bool = false,
     /// REPEAT_MARK marks handed out (`CompileResult.mark_count`).
     marks: u16 = 0,
+    /// Inside the body of a variable lookbehind (F6b(1)): sequences and
+    /// literals are emitted in reverse and matched right to left.
+    backward: bool = false,
 
     /// A lookahead of the bytecode: LOOKAHEAD/NEGATIVE_LOOKAHEAD at `pc`,
     /// its LOOKAHEAD_END at `end`.
@@ -165,7 +169,13 @@ pub const CodeGenerator = struct {
     fn generateNode(self: *Self, node: *const Node) CodegenError!void {
         if (self.programBytes() > MAX_PROGRAM_BYTES) return error.PatternTooLarge;
         switch (node.*) {
-            .seq => |items| for (items) |item| try self.generateNode(item),
+            .seq => |items| if (self.backward) {
+                var i = items.len;
+                while (i > 0) {
+                    i -= 1;
+                    try self.generateNode(items[i]);
+                }
+            } else for (items) |item| try self.generateNode(item),
             .alt => |items| try self.generateAlternation(items),
             .repeat => |r| try self.generateRepeat(r),
             .capture => |c| try self.generateGroup(c),
@@ -183,7 +193,13 @@ pub const CodeGenerator = struct {
     noinline fn generateLeaf(self: *Self, node: *const Node) CodegenError!void {
         switch (node.*) {
             .empty => {},
-            .literal => |lit| for (lit.units) |unit| try self.generateUnit(unit),
+            .literal => |lit| if (self.backward) {
+                var i = lit.units.len;
+                while (i > 0) {
+                    i -= 1;
+                    try self.generateUnit(lit.units[i]);
+                }
+            } else for (lit.units) |unit| try self.generateUnit(unit),
             .char_set => |cs| try self.generateCharSet(node, cs),
             .backref => |b| try self.generateBackRef(b),
             .assert => |a| try self.generateAssert(a),
@@ -747,25 +763,52 @@ pub const CodeGenerator = struct {
     /// Generate code for a lookaround assertion: (?=...), (?!...), (?<=...)
     /// or (?<!...)
     fn generateLook(self: *Self, l: hir.Look) !void {
-        const opcode: Opcode = if (l.behind)
+        // A lookbehind of fixed length without captures runs forward from
+        // `len` characters back (B′); any other runs its body backward.
+        const fixed: ?u32 = if (l.behind and hir.captureRange(l.body) == null) hir.fixedLength(l.body) else null;
+        const variable = l.behind and fixed == null;
+        // Captures in a backward body are F6b(2); `compile` rejects them first.
+        if (variable and hir.captureRange(l.body) != null) return error.UnsupportedFeature;
+        const opcode: Opcode = if (variable)
+            (if (l.negated) .NEGATIVE_LOOKBEHIND else .LOOKBEHIND)
+        else if (l.behind)
             (if (l.negated) .NEGATIVE_LOOKBEHIND_FIXED else .LOOKBEHIND_FIXED)
         else
             (if (l.negated) .NEGATIVE_LOOKAHEAD else .LOOKAHEAD);
 
         // A lookahead's operand is unused (the executor finds its END by
-        // scanning). A lookbehind's is its body's length in characters
-        // (B′): `compile` rejects any other lookbehind before this.
+        // scanning). A fixed lookbehind's is its body's length in characters.
         const pc = self.writer.offset();
-        try self.writer.emit1(opcode, if (l.behind) hir.fixedLength(l.body) orelse return error.UnsupportedFeature else 0);
+        try self.writer.emit1(opcode, fixed orelse 0);
 
-        // Generate the lookaround pattern
+        // Generate the lookaround pattern: backward only for a variable
+        // lookbehind's body. A lookaround nested in a lookahead or in a fixed
+        // lookbehind's body sets its own direction.
+        const saved = self.backward;
+        self.backward = variable;
+        defer self.backward = saved;
+        const body_start = self.writer.offset();
         try self.generateNode(l.body);
+        // The body's atoms become backward atoms (`*_B`: the forward opcode
+        // with the high bit set, same operands). `compile` admits no capture,
+        // backreference or lookaround inside such a body (F6b(1)).
+        if (variable) {
+            const code = self.writer.code.items;
+            var at = body_start;
+            while (at < code.len) {
+                const inst = format.decodeInstruction(code, at) catch return error.InvalidPattern;
+                if (inst.opcode.category() == .character_match and inst.opcode != .CHAR2) code[at] |= 0x80;
+                at += inst.size;
+            }
+        }
 
         // Emit end marker
         const end = self.writer.offset();
         try self.writer.emitSimple(if (l.behind) .LOOKBEHIND_END else .LOOKAHEAD_END);
         // A lookbehind's body is delegated forward from `len` characters
-        // back, as a lookahead's is from where it stands.
+        // back, as a lookahead's is from where it stands. A variable one
+        // isn't delegated (LookLinear backward is for 1.x).
+        if (variable) return;
         try self.look_sites.append(self.allocator, .{ .pc = @intCast(pc), .end = @intCast(end), .body = l.body, .flags = self.flags });
     }
 };

@@ -259,6 +259,15 @@ pub const Opcode = enum(u8) {
     /// Format: [NEGATIVE_LOOKBEHIND_FIXED len:u32 ... LOOKBEHIND_END]
     NEGATIVE_LOOKBEHIND_FIXED = 0x53,
 
+    /// Positive lookbehind of variable length (F6b(1)): its body is emitted
+    /// backward, made of backward atoms (`*_B`), and matched right to left
+    /// from where it stands. Format: [LOOKBEHIND 0:u32 ... LOOKBEHIND_END]
+    LOOKBEHIND = 0x56,
+
+    /// Negative lookbehind of variable length (F6b(1)).
+    /// Format: [NEGATIVE_LOOKBEHIND 0:u32 ... LOOKBEHIND_END]
+    NEGATIVE_LOOKBEHIND = 0x57,
+
     /// End of lookahead assertion
     /// Format: [LOOKAHEAD_END]
     LOOKAHEAD_END = 0x54,
@@ -286,17 +295,47 @@ pub const Opcode = enum(u8) {
     /// Format: [BYTE b:u8]
     BYTE = 0x70,
 
+    // Backward atoms (F6b(1)): the atom with the high bit set reads the
+    // character before the position and moves to its start. Only the body
+    // of a variable lookbehind holds them (the codegen sets the bit).
+    CHAR_B = 0x80,
+    CHAR32_B = 0x81,
+    CHAR_RANGE_B = 0x83,
+    CHAR_RANGE_INV_B = 0x84,
+    CHAR_CLASS_B = 0x85,
+    CHAR_CLASS_INV_B = 0x86,
+    CHAR_ANY_B = 0x87,
+    CHAR_SET_B = 0x88,
+    CHAR_SET_INV_B = 0x89,
+    UNICODE_PROPERTY_B = 0x8A,
+    UNICODE_PROPERTY_INV_B = 0x8B,
+    UNICODE_SCRIPT_B = 0x8C,
+    UNICODE_SCRIPT_INV_B = 0x8D,
+    UNICODE_SCRIPT_EXTENSIONS_B = 0x8E,
+    UNICODE_SCRIPT_EXTENSIONS_INV_B = 0x8F,
+    BYTE_B = 0xF0,
+
     _,
+
+    /// Whether this is a backward atom (`*_B`).
+    pub inline fn isBackward(self: Opcode) bool {
+        return @intFromEnum(self) >= 0x80;
+    }
+
+    /// The forward atom of a backward one.
+    pub inline fn forward(self: Opcode) Opcode {
+        return @enumFromInt(@intFromEnum(self) & 0x7F);
+    }
 
     /// Get the category of this opcode
     pub fn category(self: Opcode) OpcodeCategory {
         return switch (self) {
-            .CHAR, .CHAR32, .BYTE, .CHAR2, .CHAR_RANGE, .CHAR_RANGE_INV, .CHAR_CLASS, .CHAR_CLASS_INV, .CHAR_ANY, .CHAR_SET, .CHAR_SET_INV, .UNICODE_PROPERTY, .UNICODE_PROPERTY_INV, .UNICODE_SCRIPT, .UNICODE_SCRIPT_INV, .UNICODE_SCRIPT_EXTENSIONS, .UNICODE_SCRIPT_EXTENSIONS_INV => .character_match,
+            .CHAR, .CHAR32, .BYTE, .CHAR2, .CHAR_RANGE, .CHAR_RANGE_INV, .CHAR_CLASS, .CHAR_CLASS_INV, .CHAR_ANY, .CHAR_SET, .CHAR_SET_INV, .UNICODE_PROPERTY, .UNICODE_PROPERTY_INV, .UNICODE_SCRIPT, .UNICODE_SCRIPT_INV, .UNICODE_SCRIPT_EXTENSIONS, .UNICODE_SCRIPT_EXTENSIONS_INV, .CHAR_B, .CHAR32_B, .BYTE_B, .CHAR_RANGE_B, .CHAR_RANGE_INV_B, .CHAR_CLASS_B, .CHAR_CLASS_INV_B, .CHAR_ANY_B, .CHAR_SET_B, .CHAR_SET_INV_B, .UNICODE_PROPERTY_B, .UNICODE_PROPERTY_INV_B, .UNICODE_SCRIPT_B, .UNICODE_SCRIPT_INV_B, .UNICODE_SCRIPT_EXTENSIONS_B, .UNICODE_SCRIPT_EXTENSIONS_INV_B => .character_match,
             .MATCH, .GOTO, .SPLIT, .SPLIT_GREEDY, .SPLIT_LAZY, .SPLIT_POSSESSIVE, .LOOP => .control_flow,
             .SAVE_START, .SAVE_END, .SAVE_START_NAMED, .SAVE_END_NAMED, .CLEAR_CAPTURE, .REPEAT_MARK, .REPEAT_CHECK => .capture,
             .BACK_REF, .BACK_REF_I => .backreference,
             .LINE_START, .LINE_END, .WORD_BOUNDARY, .NOT_WORD_BOUNDARY, .STRING_START, .STRING_END => .assertion,
-            .LOOKAHEAD, .NEGATIVE_LOOKAHEAD, .LOOKBEHIND_FIXED, .NEGATIVE_LOOKBEHIND_FIXED, .LOOKAHEAD_END, .LOOKBEHIND_END => .lookaround,
+            .LOOKAHEAD, .NEGATIVE_LOOKAHEAD, .LOOKBEHIND_FIXED, .NEGATIVE_LOOKBEHIND_FIXED, .LOOKBEHIND, .NEGATIVE_LOOKBEHIND, .LOOKAHEAD_END, .LOOKBEHIND_END => .lookaround,
             .PUSH_POS, .CHECK_POS => .special,
             _ => .unknown,
         };
@@ -306,16 +345,16 @@ pub const Opcode = enum(u8) {
     pub fn size(self: Opcode) u8 {
         return switch (self) {
             // 1 byte (opcode only)
-            .CHAR, .CHAR_ANY, .MATCH, .LINE_START, .LINE_END, .WORD_BOUNDARY, .NOT_WORD_BOUNDARY, .STRING_START, .STRING_END, .LOOKAHEAD_END, .LOOKBEHIND_END, .PUSH_POS, .CHECK_POS => 1,
+            .CHAR, .CHAR_ANY, .MATCH, .LINE_START, .LINE_END, .WORD_BOUNDARY, .NOT_WORD_BOUNDARY, .STRING_START, .STRING_END, .LOOKAHEAD_END, .LOOKBEHIND_END, .PUSH_POS, .CHECK_POS, .CHAR_B, .CHAR_ANY_B => 1,
 
             // 3 bytes (opcode + u16 capture group, D9)
             .SAVE_START, .SAVE_END, .BACK_REF, .BACK_REF_I, .CLEAR_CAPTURE, .REPEAT_MARK, .REPEAT_CHECK => 3,
 
             // 2 bytes (opcode + u8)
-            .UNICODE_PROPERTY, .UNICODE_PROPERTY_INV, .UNICODE_SCRIPT, .UNICODE_SCRIPT_INV, .UNICODE_SCRIPT_EXTENSIONS, .UNICODE_SCRIPT_EXTENSIONS_INV, .BYTE => 2,
+            .UNICODE_PROPERTY, .UNICODE_PROPERTY_INV, .UNICODE_SCRIPT, .UNICODE_SCRIPT_INV, .UNICODE_SCRIPT_EXTENSIONS, .UNICODE_SCRIPT_EXTENSIONS_INV, .BYTE, .UNICODE_PROPERTY_B, .UNICODE_PROPERTY_INV_B, .UNICODE_SCRIPT_B, .UNICODE_SCRIPT_INV_B, .UNICODE_SCRIPT_EXTENSIONS_B, .UNICODE_SCRIPT_EXTENSIONS_INV_B, .BYTE_B => 2,
 
             // 5 bytes (opcode + u32)
-            .CHAR32, .CHAR_SET, .CHAR_SET_INV, .LOOKAHEAD, .NEGATIVE_LOOKAHEAD, .LOOKBEHIND_FIXED, .NEGATIVE_LOOKBEHIND_FIXED => 5,
+            .CHAR32, .CHAR_SET, .CHAR_SET_INV, .LOOKAHEAD, .NEGATIVE_LOOKAHEAD, .LOOKBEHIND_FIXED, .NEGATIVE_LOOKBEHIND_FIXED, .LOOKBEHIND, .NEGATIVE_LOOKBEHIND, .CHAR32_B, .CHAR_SET_B, .CHAR_SET_INV_B => 5,
 
             // 7 bytes (opcode + u16 + u32)
             .SAVE_START_NAMED, .SAVE_END_NAMED => 7,
@@ -324,7 +363,7 @@ pub const Opcode = enum(u8) {
             .GOTO => 5,
 
             // 9 bytes (opcode + 2 * u32)
-            .CHAR2, .CHAR_RANGE, .CHAR_RANGE_INV => 9,
+            .CHAR2, .CHAR_RANGE, .CHAR_RANGE_INV, .CHAR_RANGE_B, .CHAR_RANGE_INV_B => 9,
 
             // 10 bytes (opcode + u8 + u32 + i32)
             .LOOP => 10,
@@ -333,7 +372,7 @@ pub const Opcode = enum(u8) {
             .SPLIT, .SPLIT_GREEDY, .SPLIT_LAZY, .SPLIT_POSSESSIVE => 9,
 
             // 33 bytes (opcode + 32 bytes bit table)
-            .CHAR_CLASS, .CHAR_CLASS_INV => 33,
+            .CHAR_CLASS, .CHAR_CLASS_INV, .CHAR_CLASS_B, .CHAR_CLASS_INV_B => 33,
 
             _ => 1, // Unknown opcodes default to 1 byte
         };

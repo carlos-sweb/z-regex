@@ -78,7 +78,7 @@ pub fn decodeInstruction(bytecode: []const u8, offset: usize) !Instruction {
     // Decode operands based on opcode
     switch (opcode) {
         // No operands
-        .CHAR, .CHAR_ANY, .MATCH, .LINE_START, .LINE_END, .WORD_BOUNDARY, .NOT_WORD_BOUNDARY, .STRING_START, .STRING_END, .LOOKAHEAD_END, .LOOKBEHIND_END, .PUSH_POS, .CHECK_POS => {},
+        .CHAR, .CHAR_ANY, .MATCH, .LINE_START, .LINE_END, .WORD_BOUNDARY, .NOT_WORD_BOUNDARY, .STRING_START, .STRING_END, .LOOKAHEAD_END, .LOOKBEHIND_END, .PUSH_POS, .CHECK_POS, .CHAR_B, .CHAR_ANY_B => {},
 
         // u16 capture group (D9)
         .SAVE_START, .SAVE_END, .BACK_REF, .BACK_REF_I, .CLEAR_CAPTURE, .REPEAT_MARK, .REPEAT_CHECK => {
@@ -87,20 +87,20 @@ pub fn decodeInstruction(bytecode: []const u8, offset: usize) !Instruction {
         },
 
         // 1 byte operand
-        .UNICODE_PROPERTY, .UNICODE_PROPERTY_INV, .UNICODE_SCRIPT, .UNICODE_SCRIPT_INV, .UNICODE_SCRIPT_EXTENSIONS, .UNICODE_SCRIPT_EXTENSIONS_INV, .BYTE => {
+        .UNICODE_PROPERTY, .UNICODE_PROPERTY_INV, .UNICODE_SCRIPT, .UNICODE_SCRIPT_INV, .UNICODE_SCRIPT_EXTENSIONS, .UNICODE_SCRIPT_EXTENSIONS_INV, .BYTE, .UNICODE_PROPERTY_B, .UNICODE_PROPERTY_INV_B, .UNICODE_SCRIPT_B, .UNICODE_SCRIPT_INV_B, .UNICODE_SCRIPT_EXTENSIONS_B, .UNICODE_SCRIPT_EXTENSIONS_INV_B, .BYTE_B => {
             inst.operands[0] = bytecode[offset + 1];
             inst.operand_count = 1;
         },
 
         // CHAR_CLASS and CHAR_CLASS_INV: 32 bytes inline bit table
         // Table data starts at offset + 1, executor reads it directly from bytecode
-        .CHAR_CLASS, .CHAR_CLASS_INV => {
+        .CHAR_CLASS, .CHAR_CLASS_INV, .CHAR_CLASS_B, .CHAR_CLASS_INV_B => {
             // No operands to decode - executor will read table from bytecode
             inst.operand_count = 0;
         },
 
         // 4 byte operand (u32)
-        .CHAR32, .CHAR_SET, .CHAR_SET_INV, .LOOKAHEAD, .NEGATIVE_LOOKAHEAD, .LOOKBEHIND_FIXED, .NEGATIVE_LOOKBEHIND_FIXED => {
+        .CHAR32, .CHAR_SET, .CHAR_SET_INV, .LOOKAHEAD, .NEGATIVE_LOOKAHEAD, .LOOKBEHIND_FIXED, .NEGATIVE_LOOKBEHIND_FIXED, .LOOKBEHIND, .NEGATIVE_LOOKBEHIND, .CHAR32_B, .CHAR_SET_B, .CHAR_SET_INV_B => {
             inst.operands[0] = readU32(bytecode[offset + 1 ..]);
             inst.operand_count = 1;
         },
@@ -113,7 +113,7 @@ pub fn decodeInstruction(bytecode: []const u8, offset: usize) !Instruction {
         },
 
         // 2 * u32
-        .CHAR2, .CHAR_RANGE, .CHAR_RANGE_INV => {
+        .CHAR2, .CHAR_RANGE, .CHAR_RANGE_INV, .CHAR_RANGE_B, .CHAR_RANGE_INV_B => {
             inst.operands[0] = readU32(bytecode[offset + 1 ..]);
             inst.operands[1] = readU32(bytecode[offset + 5 ..]);
             inst.operand_count = 2;
@@ -156,7 +156,7 @@ pub fn encodeInstruction(inst: Instruction, buffer: []u8) !usize {
     // Encode operands based on opcode
     switch (inst.opcode) {
         // No operands
-        .CHAR, .CHAR_ANY, .MATCH, .LINE_START, .LINE_END, .WORD_BOUNDARY, .NOT_WORD_BOUNDARY, .STRING_START, .STRING_END, .LOOKAHEAD_END, .LOOKBEHIND_END, .PUSH_POS, .CHECK_POS => {},
+        .CHAR, .CHAR_ANY, .MATCH, .LINE_START, .LINE_END, .WORD_BOUNDARY, .NOT_WORD_BOUNDARY, .STRING_START, .STRING_END, .LOOKAHEAD_END, .LOOKBEHIND_END, .PUSH_POS, .CHECK_POS, .CHAR_B, .CHAR_ANY_B => {},
 
         // u16 capture group (D9)
         .SAVE_START, .SAVE_END, .BACK_REF, .BACK_REF_I, .CLEAR_CAPTURE, .REPEAT_MARK, .REPEAT_CHECK => {
@@ -165,19 +165,19 @@ pub fn encodeInstruction(inst: Instruction, buffer: []u8) !usize {
         },
 
         // 1 byte operand
-        .UNICODE_PROPERTY, .UNICODE_PROPERTY_INV, .UNICODE_SCRIPT, .UNICODE_SCRIPT_INV, .UNICODE_SCRIPT_EXTENSIONS, .UNICODE_SCRIPT_EXTENSIONS_INV, .BYTE => {
+        .UNICODE_PROPERTY, .UNICODE_PROPERTY_INV, .UNICODE_SCRIPT, .UNICODE_SCRIPT_INV, .UNICODE_SCRIPT_EXTENSIONS, .UNICODE_SCRIPT_EXTENSIONS_INV, .BYTE, .UNICODE_PROPERTY_B, .UNICODE_PROPERTY_INV_B, .UNICODE_SCRIPT_B, .UNICODE_SCRIPT_INV_B, .UNICODE_SCRIPT_EXTENSIONS_B, .UNICODE_SCRIPT_EXTENSIONS_INV_B, .BYTE_B => {
             buffer[pos] = @intCast(inst.operands[0]);
             pos += 1;
         },
 
         // 2 byte operand (u16)
-        .CHAR_CLASS, .CHAR_CLASS_INV => {
+        .CHAR_CLASS, .CHAR_CLASS_INV, .CHAR_CLASS_B, .CHAR_CLASS_INV_B => {
             writeU16(buffer[pos..], @intCast(inst.operands[0]));
             pos += 2;
         },
 
         // 4 byte operand (u32)
-        .CHAR32, .CHAR_SET, .CHAR_SET_INV, .LOOKAHEAD, .NEGATIVE_LOOKAHEAD, .LOOKBEHIND_FIXED, .NEGATIVE_LOOKBEHIND_FIXED => {
+        .CHAR32, .CHAR_SET, .CHAR_SET_INV, .LOOKAHEAD, .NEGATIVE_LOOKAHEAD, .LOOKBEHIND_FIXED, .NEGATIVE_LOOKBEHIND_FIXED, .LOOKBEHIND, .NEGATIVE_LOOKBEHIND, .CHAR32_B, .CHAR_SET_B, .CHAR_SET_INV_B => {
             writeU32(buffer[pos..], inst.operands[0]);
             pos += 4;
         },
@@ -191,7 +191,7 @@ pub fn encodeInstruction(inst: Instruction, buffer: []u8) !usize {
         },
 
         // 2 * u32
-        .CHAR2, .CHAR_RANGE, .CHAR_RANGE_INV => {
+        .CHAR2, .CHAR_RANGE, .CHAR_RANGE_INV, .CHAR_RANGE_B, .CHAR_RANGE_INV_B => {
             writeU32(buffer[pos..], inst.operands[0]);
             pos += 4;
             writeU32(buffer[pos..], inst.operands[1]);
