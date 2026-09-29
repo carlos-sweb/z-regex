@@ -1002,3 +1002,82 @@ test "E0: v applies u's early errors; invalid class set syntax stays a SyntaxErr
     defer q.deinit();
     try testing.expect(try q.test_("q"));
 }
+
+fn fullMatch(pattern: []const u8, options: zregex.CompileOptions, subject: []const u8) !bool {
+    var re = try zregex.Regex.compileWithOptions(testing.allocator, pattern, options);
+    defer re.deinit();
+    return re.test_(subject);
+}
+
+test "E0: \\k<name> with duplicate names refers to the group that participated" {
+    // `\k<x>` used to resolve to the first `x` only, so after the second `x`
+    // captured it referred to an undefined group and matched empty. Values
+    // from V8 (Node 24).
+    const p = "^(?:(?<x>a)|(?<x>b))\\k<x>$";
+    try testing.expect(try fullMatch(p, .{}, "aa"));
+    try testing.expect(try fullMatch(p, .{}, "bb"));
+    try testing.expect(!try fullMatch(p, .{}, "ab"));
+    try testing.expect(try fullMatch(p, .{ .case_insensitive = true }, "bB"));
+}
+
+test "E0: \\1 is group 1 only; \\k<x> is every group named x" {
+    // The same pattern with the numbered and the named reference. Values
+    // from V8 (Node 24).
+    try testing.expect(!try fullMatch("^(?:(?<x>a)|(?<x>b))\\1$", .{}, "bb"));
+    try testing.expect(try fullMatch("^(?:(?<x>a)|(?<x>b))\\1$", .{}, "b"));
+    try testing.expect(try fullMatch("^(?:(?<x>a)|(?<x>b))\\k<x>$", .{}, "bb"));
+}
+
+test "E0: $<name> in replace with duplicate names" {
+    // Values from V8 (Node 24). The anchored pattern doesn't match "bb", so
+    // nothing is replaced; over "b" the second `x` is the one that captured.
+    var re = try zregex.Regex.compile(testing.allocator, "^(?:(?<x>a)|(?<x>b))$");
+    defer re.deinit();
+    const none = try re.replace(testing.allocator, "bb", "[$<x>]");
+    defer testing.allocator.free(none);
+    try testing.expectEqualStrings("bb", none);
+    const one = try re.replace(testing.allocator, "b", "[$<x>]");
+    defer testing.allocator.free(one);
+    try testing.expectEqualStrings("[b]", one);
+}
+
+test "E0: test262 named-groups/duplicate-names-exec.js and -match.js" {
+    // The assertions of both files (lines 14-35; the canonical harness,
+    // Node 22, skips them). Each row: pattern, subject, then match, group 1
+    // and group 2 (null: no match, or the group didn't participate).
+    const Row = struct { []const u8, []const u8, ?[]const u8, ?[]const u8, ?[]const u8 };
+    const rows = [_]Row{
+        .{ "(?:(?<x>a)|(?<x>b))\\k<x>", "aa", "aa", "a", null },
+        .{ "(?:(?<x>a)|(?<x>b))\\k<x>", "bb", "bb", null, "b" },
+        .{ "(?:(?:(?<x>a)|(?<x>b))\\k<x>){2}", "aabb", "aabb", null, "b" },
+        .{ "(?:(?:(?<x>a)|(?<x>b))\\k<x>){2}", "abab", null, null, null },
+        .{ "(?:(?<x>a)|(?<x>b))\\k<x>", "abab", null, null, null },
+        .{ "(?:(?<x>a)|(?<x>b))\\k<x>", "cdef", null, null, null },
+        .{ "^(?:(?<a>x)|(?<a>y)|z)\\k<a>$", "xx", "xx", "x", null },
+        .{ "^(?:(?<a>x)|(?<a>y)|z)\\k<a>$", "z", "z", null, null },
+        .{ "^(?:(?<a>x)|(?<a>y)|z)\\k<a>$", "zz", null, null, null },
+        .{ "(?<a>x)|(?:zy\\k<a>)", "zy", "zy", null, null },
+        .{ "^(?:(?<a>x)|(?<a>y)|z){2}\\k<a>$", "xz", "xz", null, null },
+        .{ "^(?:(?<a>x)|(?<a>y)|z){2}\\k<a>$", "yz", "yz", null, null },
+        .{ "^(?:(?<a>x)|(?<a>y)|z){2}\\k<a>$", "xzx", null, null, null },
+        .{ "^(?:(?<a>x)|(?<a>y)|z){2}\\k<a>$", "yzy", null, null, null },
+    };
+    for (rows) |r| {
+        var re = try zregex.Regex.compile(testing.allocator, r[0]);
+        defer re.deinit();
+        const m = try re.find(r[1]);
+        if (r[2]) |want| {
+            const got = m orelse return error.TestUnexpectedResult;
+            defer got.deinit();
+            try testing.expectEqualStrings(want, got.group(r[1]));
+            const want_caps = [2]?[]const u8{ r[3], r[4] };
+            for (want_caps, 1..) |want_cap, g| {
+                const cap = got.getCapture(g, r[1]);
+                if (want_cap) |w| try testing.expectEqualStrings(w, cap.?) else try testing.expect(cap == null);
+            }
+        } else {
+            if (m) |got| got.deinit();
+            try testing.expect(m == null);
+        }
+    }
+}

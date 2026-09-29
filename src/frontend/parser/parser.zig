@@ -710,6 +710,7 @@ pub const Parser = struct {
                 // Resolved in `finish`, once every group is known.
                 const node = try Node.createBackRef(self.allocator, 0);
                 errdefer node.deinit();
+                node.backref_named = true;
                 try self.pending_named_refs.append(self.allocator, .{ .node = node, .name = name });
                 return node;
             },

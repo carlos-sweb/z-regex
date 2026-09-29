@@ -84,6 +84,11 @@ pub const Node = struct {
     /// Group index (for capture groups and backreferences)
     group_index: u16 = 0,
 
+    /// A `back_ref` written `\k<name>`: with duplicate names it refers to
+    /// every group of that name (the lowering collects them), where `\N`
+    /// refers to group N only.
+    backref_named: bool = false,
+
     /// Whether this is an inverted/negated character class
     inverted: bool = false,
 

@@ -31,6 +31,10 @@
 # `v` alone): 48 of 699 outcomes changed, each a program before and an error
 # now, and V8 throws a SyntaxError for every one of them (checked in the E0
 # commit). No program changed.
+#
+# E0 (1b): `\k<name>` with duplicate names emits one BACK_REF per group of
+# that name: 3 of 699 outcomes changed, exactly `(?<a>x)|(?<a>y)\k<a>` under
+# "", `u` and `v` (BACK_REF 1 becomes BACK_REF 1; BACK_REF 2).
 1f65ed2fc157c741		5b2f5d	[/]
 0dcc096902c1f92d		5b2f2f5d	[//]
 a26f4e06b953761a		28612a29625c312b	(a*)b\\1+
@@ -724,9 +728,9 @@ error:InvalidGroupName	v	283f3c5c7834313e6129	(?<\\x41>a)
 f9c92db5869e37c3		5c6b3c613e283f3c613e6229283f3c5c757b303343307d3e63295c6b3ccf803e	\\k<a>(?<a>b)(?<\\u{03C0}>c)\\k<\u03c0>
 f9c92db5869e37c3	u	5c6b3c613e283f3c613e6229283f3c5c757b303343307d3e63295c6b3ccf803e	\\k<a>(?<a>b)(?<\\u{03C0}>c)\\k<\u03c0>
 f9c92db5869e37c3	v	5c6b3c613e283f3c613e6229283f3c5c757b303343307d3e63295c6b3ccf803e	\\k<a>(?<a>b)(?<\\u{03C0}>c)\\k<\u03c0>
-26c395c1096d80b5		283f3c613e78297c283f3c613e79295c6b3c613e	(?<a>x)|(?<a>y)\\k<a>
-26c395c1096d80b5	u	283f3c613e78297c283f3c613e79295c6b3c613e	(?<a>x)|(?<a>y)\\k<a>
-26c395c1096d80b5	v	283f3c613e78297c283f3c613e79295c6b3c613e	(?<a>x)|(?<a>y)\\k<a>
+6580f943868d7dad		283f3c613e78297c283f3c613e79295c6b3c613e	(?<a>x)|(?<a>y)\\k<a>
+6580f943868d7dad	u	283f3c613e78297c283f3c613e79295c6b3c613e	(?<a>x)|(?<a>y)\\k<a>
+6580f943868d7dad	v	283f3c613e78297c283f3c613e79295c6b3c613e	(?<a>x)|(?<a>y)\\k<a>
 d7064fecff20f756		283f3c613e283f3c623e78295c6b3c623e29	(?<a>(?<b>x)\\k<b>)
 d7064fecff20f756	u	283f3c613e283f3c623e78295c6b3c623e29	(?<a>(?<b>x)\\k<b>)
 d7064fecff20f756	v	283f3c613e283f3c623e78295c6b3c623e29	(?<a>(?<b>x)\\k<b>)
