@@ -420,6 +420,17 @@ pub fn build(b: *std.Build) void {
     const f0c_step = b.step("f0c", "Tier histogram of a regex corpus (scripts/f0c/extract.mjs output)");
     f0c_step.dependOn(&run_f0c.step);
 
+    // E1 P2 (docs/plans/E1.md): the lookbehind oracle without V8. Fails on
+    // any discrepancy between (?<=B) and "^(?:B)$ matches some slice ending
+    // at the position".
+    const lbdiff_module = b.createModule(.{ .root_source_file = b.path("tools/lbdiff.zig"), .target = target, .optimize = .ReleaseSafe });
+    lbdiff_module.addImport("zregex", addModules(b, target, .ReleaseSafe, false).get("zregex"));
+    const run_lbdiff = b.addRunArtifact(b.addExecutable(.{ .name = "lbdiff", .root_module = lbdiff_module }));
+    run_lbdiff.setCwd(b.path("."));
+    run_lbdiff.has_side_effects = true;
+    const lbdiff_step = b.step("lbdiff", "Lookbehind oracle without V8: (?<=B) against ^(?:B)$ on the slices ending at each position");
+    lbdiff_step.dependOn(&run_lbdiff.step);
+
     // Performance baseline (bench/bench.zig, docs/REGEX_TIERS_PLAN.md F0d).
     // Always ReleaseFast, whatever -Doptimize says, so numbers are comparable.
     const bench_zregex = addModules(b, target, .ReleaseFast, false).get("zregex");
