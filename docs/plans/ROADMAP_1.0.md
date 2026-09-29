@@ -17,7 +17,7 @@ llegue en 1.x solo quita casos de error y nunca añade errores nuevos: es aditiv
 | **E0** | Errores honestos: `\q{…}` bajo `v` y los demás casos válidos no implementados dan `UnsupportedFeature`, y `v` aplica los early errors de `u`. `\k<nombre>` con nombres duplicados mira el grupo que participó (hallado con Node 24). Badge y README honestos. D2: medir test262 con Node 24 | 2–3 | v0.5.1 |
 | **E1** | P1 (inventario de opcodes que consumen) → P2 (oráculo sin V8) → P3 (spike, decide si se sigue) → F6b completo. LookLinear hacia atrás, a 1.x | 13–17 | v0.6.0 |
 | **E3** | F7c: API (namespace `internal`, quitar `Optimizer`, `opt_level` y `LOOP`, regla de errores), documentación (`ARCHITECTURE.md`, `PROJECT_STRUCTURE.md`, `KNOWN_LIMITATIONS.md` dividido en limitaciones e historial, `README.es.md`), benchmarks re-medidos, gate | 7–9 | **v1.0.0** |
-| 1.1+ | Bug B y encadenado de `v`, LookLinear hacia atrás, laxitud de sintaxis bajo `v` | — | — |
+| 1.1+ | Bug B y encadenado de `v`, LookLinear hacia atrás, laxitud de sintaxis bajo `v`, lookbehind hacia atrás bajo `u`/`v`, lookarounds anidados en un lookbehind hacia atrás | — | — |
 
 **E2 (modificadores ES2025) no se hace:** decisión del 2026-09-29, pendientes hasta nuevo
 aviso (`docs/plans/F7.md`, Decisiones 4). Desde E0 son `UnsupportedFeature`.
@@ -39,7 +39,9 @@ aviso (`docs/plans/F7.md`, Decisiones 4). Desde E0 son `UnsupportedFeature`.
    parada mínima.
 2. **Tras P3:** si el spike dice que no, se para con B′ y se documenta el lookbehind
    variable como `UnsupportedFeature`.
-3. **Tras E1 (v0.6.0):** ES2023 completo, sin freeze.
+3. **Tras E1 (v0.6.0):** lookbehind completo en modo code-unit (fijo, variable, con capturas,
+   con backreferences). ES2018 sin `u`; ES2023 sin lookbehind bajo `u`/`v` y sin lookarounds
+   anidados. Esas dos van a 1.x.
 4. **Tras E3 (v1.0.0):** el cierre.
 
 ## Forma de trabajo
