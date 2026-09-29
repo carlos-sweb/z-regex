@@ -4,6 +4,7 @@
   "description": "test262 harness for zregex (docs/REGEX_TIERS_PLAN.md, F0b). Tooling only; not a dependency of the library.",
   "type": "module",
   "dependencies": {
+    "@eslint-community/regexpp": "4.12.2",
     "koffi": "3.3.1"
   }
 }
