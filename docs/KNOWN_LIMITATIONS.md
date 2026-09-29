@@ -783,9 +783,8 @@ starts inside a character. That also fixes captures that were silently wrong:
   the same before F3d). `tests/code_unit_tests.zig` asserts that error. When F5 completes
   `v` they will compile and those assertions must change: that is expected, not a
   regression.
-- **Consumers:** z-string and z-interprete stay on their pinned versions (z-interprete on
-  F1c); F3's changes reach them only when they move the pin. After F3d a consumer that
-  doesn't set `CompileOptions.unicode` for a `u` pattern gets code-unit semantics.
+- **Consumers:** after F3d a consumer that doesn't set `CompileOptions.unicode` for a `u`
+  pattern gets code-unit semantics.
 
 ### F3d: code units without `u` (F3 closed)
 
@@ -816,8 +815,7 @@ starts inside a character. That also fixes captures that were silently wrong:
   The semantics are right: with an unlimited budget both give no match, like V8. F6a fixes
   them when the budget becomes per execution.
 - **Consumers:** after F3d a consumer that doesn't set `CompileOptions.unicode` (or `v`)
-  for a `u` pattern gets code-unit semantics. z-string and z-interprete stay on their
-  pins until they move them.
+  for a `u` pattern gets code-unit semantics.
 
 #### Bytecode snapshot: justified changes per phase
 
@@ -1488,12 +1486,12 @@ whose literal can't be extracted are `unextracted`; a non-`u` `lastIndex`
 between the halves of a surrogate pair can't be expressed in WTF-8. Details
 in `scripts/test262/README.md`.
 
-### Behavior changes in F1 (for consumers such as z-string)
+### Behavior changes in F1 (for consumers)
 
 F1 (`docs/REGEX_TIERS_PLAN.md`) makes the parser and matcher follow ECMA-262 where
-they didn't, so some patterns now compile or match differently. z-string pins zregex
-to a commit (`85afd1f`), so none of this reaches it until the pin is bumped; when it
-is, run z-string's `zig build test`. Changes so far (F1a):
+they didn't, so some patterns now compile or match differently. A consumer pinned to an
+earlier commit sees none of this until it bumps the pin; when it does, it should run its
+own tests. Changes so far (F1a):
 
 - **`u`-mode strictness.** Under `unicode = true`, malformed `\p`/`\P`, `\c`, `\x`,
   `\u` (and `\u{...}` above U+10FFFF), a `\N` past the last capturing group, a
@@ -1668,7 +1666,7 @@ after the parser's SyntaxErrors (C API: `ZREGEXP_ERROR_UNSUPPORTED = 9`; no new 
 variable length (`(?<=a+)`, `(?<=a|bc)`), a capture group or a backreference inside
 (`(?<=(a))`, `(?<=\1)`), and also a variable-length lookbehind in code that never runs
 (inside a `{0}`), which the old code generator dropped. Full F6b (matching backward) lifts
-the error; it is mandatory (z-interpreter needs all of lookbehind).
+the error; it is mandatory (lookbehind is ES2018, and it is the only gap older than ES2024).
 
 **The recursive matcher is gone.** Every pattern runs on the explicit-stack backtracker;
 `recursive_matcher.zig` became `core.zig` (the state and the atom checks, without the
@@ -1736,6 +1734,14 @@ corpus, UTF-16), four patterns, all zero-width at that position:
 ---
 
 ## Genuinely unimplemented
+
+### RegExp modifiers (ES2025): pending until further notice
+
+`(?i:…)`, `(?-m:…)` and the other forms of ES2025's modifiers are not implemented:
+`(?i:a)` is a compile error (`UnexpectedToken`). Decision (2026-09-29): pending until
+further notice, not on the way to 1.0. Their 377 test262 entries are skipped because the
+harness's Node lacks the feature, so they are not counted in 2968/3017. What already
+exists and what is missing: `docs/plans/F7.md`, "Decisiones", 4.
 
 ### Unicode case folding under `v` (F5c)
 
@@ -1871,6 +1877,7 @@ strictness is itself only the unrecognized-escape slice — see above).
 | `u` flag: malformed `\x`/`\u`/`\c`/`\k`/`\p`, bad backrefs still lenient | ❌ Not implemented |
 | `v` flag (`CompileOptions.v`): class set ops `[A--B]`/`[A&&B]`, single op, no chaining | ✅ Implemented |
 | `v` flag: chaining/deep nesting, `\q{...}`, `v`-only reserved punctuators, full `u` strictness | ❌ Not implemented |
+| RegExp modifiers `(?i:…)` (ES2025) | ❌ Not implemented; pending until further notice |
 | Quantified backreference to an empty capture (e.g. `\1+`) crashing | ✅ Fixed (Phase 6) |
 | test262 conformance sample (`zig build test-conformance`) | ✅ Added (Phase 6) — 168/168 (100%) |
 | Metacharacters as literals inside `[...]` (e.g. `[*&$]`, `[.]`) | ✅ Fixed (Phase 6) |

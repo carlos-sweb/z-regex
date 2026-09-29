@@ -239,7 +239,9 @@ The cross-engine benchmark: `bench/compare/prepare.sh`, then `node bench/compare
 - **Lookbehind (F6b step 1):** only of fixed length without captures or backreferences
   inside (29 of the 34 lookbehind patterns in the npm corpus); any other is
   `error.UnsupportedFeature` (C API `ZREGEXP_ERROR_UNSUPPORTED`) until full F6b, which is
-  mandatory (z-interpreter needs all of it). The old 100-character window (D7) is gone.
+  mandatory (lookbehind is ES2018). The old 100-character window (D7) is gone.
+- **RegExp modifiers (ES2025)**, `(?i:…)`, `(?-m:…)`: not implemented, pending until further
+  notice; `(?i:a)` is a compile error.
 - Patterns with a raw, non-UTF-8 byte (WTF-8 only) stay on the backtracker, as does a tagged
   program over the slot bound.
 

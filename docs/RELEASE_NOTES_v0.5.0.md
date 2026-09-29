@@ -78,8 +78,8 @@ instead of running on the recursive matcher.
 - Retiring it and reporting the error was an approved decision (D7).
 - All 30 lookbehind entries that don't pass are `UnsupportedFeature`; none fails at run time.
 - Full F6b (matching backward, variable length and captures) lifts the error. It recovers
-  these 12 and the other 18 lookbehind entries: 2968 + 30 = **2998**. It is mandatory,
-  because z-interpreter needs all of lookbehind.
+  these 12 and the other 18 lookbehind entries: 2968 + 30 = **2998**. It is mandatory:
+  lookbehind is ES2018.
 
 ## C API: error names
 
