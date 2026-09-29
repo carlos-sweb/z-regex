@@ -162,9 +162,8 @@ pub const RegexError = parser_mod.ParseError || generator_mod.CodegenError || Al
     /// `unicode` and `v` together, a SyntaxError in ECMA-262.
     IncompatibleFlags,
     /// A valid pattern this engine can't run yet: a lookbehind with a
-    /// capture group, a backreference or (if of variable length) a
-    /// lookaround inside, or of variable length under `u`/`v` (the rest of
-    /// F6b), `\q{...}`, a chained or bare-character class
+    /// backreference or (if matched backward) a lookaround inside, or of
+    /// variable length or with captures under `u`/`v` (the rest of F6b), `\q{...}`, a chained or bare-character class
     /// set operand or a union with a nested class under `v`, a property of
     /// strings, RegExp modifiers. Valid syntax that isn't implemented is
     /// always this error, never a wrong result. C API:

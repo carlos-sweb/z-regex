@@ -1029,10 +1029,10 @@ test "\\q{...} and RegExp modifiers are ZREGEXP_ERROR_UNSUPPORTED (E0)" {
     try expectLastError(.ZREGEXP_ERROR_UNSUPPORTED, "UnsupportedFeature");
 }
 
-test "a lookbehind with a backreference or a capture inside is ZREGEXP_ERROR_UNSUPPORTED (B′, F6b(1))" {
+test "a lookbehind with a backreference inside is ZREGEXP_ERROR_UNSUPPORTED (F6b(2))" {
     try std.testing.expect(zregex_compile("(a)(?<=\\1)b", null) == null);
     try expectLastError(.ZREGEXP_ERROR_UNSUPPORTED, "UnsupportedFeature");
-    try std.testing.expect(zregex_compile_n("(?<=(a))b", 9, null) == null);
+    try std.testing.expect(zregex_compile_n("(?<=\\1(a))b", 11, null) == null);
     try std.testing.expectEqual(ZRegexError.ZREGEXP_ERROR_UNSUPPORTED, zregex_last_error());
     try std.testing.expectEqualStrings("UnsupportedFeature", std.mem.span(zregex_last_error_name()));
     // Fixed length, no captures: runs.

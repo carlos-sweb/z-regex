@@ -357,7 +357,13 @@ test "B′: other lookbehinds are error.UnsupportedFeature, after syntax errors"
     try expectLookbehind("(?<!(?:x|yz))", "", "yz", &.{ 0, 0 });
     try expectLookbehind("(?<=a?)b", "", "b", &.{ 0, 1 });
     try expectLookbehind("(?=(?<=a*))b", "", "ab", &.{ 1, 2 });
-    for ([_][]const u8{ "(?<=(a))b", "(a)(?<=\\1)" }) |p| {
+    // F6b(2): captures inside, saved right to left (the second group is
+    // matched first and takes all it can).
+    try expectLookbehind("(?<=(a))b", "", "ab", &.{ 1, 2, 0, 1 });
+    try expectLookbehind("(?<=(a+))b", "", "aaab", &.{ 3, 4, 0, 3 });
+    try expectLookbehind("(?<=(\\d+)(\\d+))$", "", "1053", &.{ 4, 4, 0, 1, 1, 4 });
+    try expectLookbehind("(?<!(^|[ab]))\\w{2}", "", "abcdef", &.{ 3, 5, -1, -1 });
+    for ([_][]const u8{ "(?<=\\1(a))b", "(a)(?<=\\1)" }) |p| {
         try testing.expectError(error.UnsupportedFeature, zregex.Regex.compile(a, p));
     }
     try testing.expectError(error.UnsupportedFeature, zregex.Regex.compileWithOptions(a, "(?<=a+)b", .{ .unicode = true }));

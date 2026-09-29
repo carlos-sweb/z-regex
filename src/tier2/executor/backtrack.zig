@@ -33,10 +33,11 @@
 //!   barrier as a lookahead; its end must be exactly where the lookbehind
 //!   stands. A body of fixed length always ends there, and without captures
 //!   the direction it's matched in can't show.
-//! - a lookbehind of variable length (F6b(1): no captures, backreferences or
-//!   lookarounds inside, not under `u`/`v`; `compile` rejects any other)
-//!   runs its body of backward atoms (`*_B`) right to left from where it
-//!   stands, under the same barrier; its body may end anywhere before.
+//! - any other lookbehind (F6b(1), (2): variable length or captures, no
+//!   backreferences or lookarounds inside, not under `u`/`v`; `compile`
+//!   rejects the rest) runs its body of backward atoms (`*_B`) right to
+//!   left from where it stands, under the same barrier; its body may end
+//!   anywhere before, and a group inside saves its end first.
 
 const std = @import("std");
 const Allocator = std.mem.Allocator;
@@ -124,7 +125,7 @@ pub const Choice = struct {
     pos: usize,
     /// `star_greedy`: the star's first index in `positions`. `star_lazy`:
     /// the pc of the starred atom. `look`: bit 0 set for a negative
-    /// lookaround, bit 1 for a variable lookbehind (F6b(1): its body may end
+    /// lookaround, bit 1 for a backward lookbehind (F6b: its body may end
     /// anywhere).
     a: usize = 0,
 

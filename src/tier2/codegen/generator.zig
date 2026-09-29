@@ -107,8 +107,9 @@ pub const CodeGenerator = struct {
     empty_check: bool = false,
     /// REPEAT_MARK marks handed out (`CompileResult.mark_count`).
     marks: u16 = 0,
-    /// Inside the body of a variable lookbehind (F6b(1)): sequences and
-    /// literals are emitted in reverse and matched right to left.
+    /// Inside the body of a lookbehind matched backward (F6b): sequences and
+    /// literals are emitted in reverse, a group's SAVE order swapped, and
+    /// everything matched right to left.
     backward: bool = false,
 
     /// A lookahead of the bytecode: LOOKAHEAD/NEGATIVE_LOOKAHEAD at `pc`,
@@ -721,14 +722,11 @@ pub const CodeGenerator = struct {
 
     /// Generate code for capture group: (...)
     fn generateGroup(self: *Self, c: hir.Capture) !void {
-        // SAVE_START
-        try self.writer.emit1(.SAVE_START, c.index);
-
-        // Generate group content
+        // Backward (F6b(2)), the group's end is reached first: SAVE_END, the
+        // body in reverse, SAVE_START.
+        try self.writer.emit1(if (self.backward) .SAVE_END else .SAVE_START, c.index);
         try self.generateNode(c.body);
-
-        // SAVE_END
-        try self.writer.emit1(.SAVE_END, c.index);
+        try self.writer.emit1(if (self.backward) .SAVE_START else .SAVE_END, c.index);
     }
 
     // =========================================================================
@@ -767,8 +765,6 @@ pub const CodeGenerator = struct {
         // `len` characters back (B′); any other runs its body backward.
         const fixed: ?u32 = if (l.behind and hir.captureRange(l.body) == null) hir.fixedLength(l.body) else null;
         const variable = l.behind and fixed == null;
-        // Captures in a backward body are F6b(2); `compile` rejects them first.
-        if (variable and hir.captureRange(l.body) != null) return error.UnsupportedFeature;
         const opcode: Opcode = if (variable)
             (if (l.negated) .NEGATIVE_LOOKBEHIND else .LOOKBEHIND)
         else if (l.behind)
@@ -790,8 +786,8 @@ pub const CodeGenerator = struct {
         const body_start = self.writer.offset();
         try self.generateNode(l.body);
         // The body's atoms become backward atoms (`*_B`: the forward opcode
-        // with the high bit set, same operands). `compile` admits no capture,
-        // backreference or lookaround inside such a body (F6b(1)).
+        // with the high bit set, same operands). `compile` admits no
+        // backreference or lookaround inside such a body (F6b(3)).
         if (variable) {
             const code = self.writer.code.items;
             var at = body_start;

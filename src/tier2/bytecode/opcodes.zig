@@ -259,12 +259,12 @@ pub const Opcode = enum(u8) {
     /// Format: [NEGATIVE_LOOKBEHIND_FIXED len:u32 ... LOOKBEHIND_END]
     NEGATIVE_LOOKBEHIND_FIXED = 0x53,
 
-    /// Positive lookbehind of variable length (F6b(1)): its body is emitted
+    /// Positive lookbehind of variable length or with captures (F6b): its body is emitted
     /// backward, made of backward atoms (`*_B`), and matched right to left
     /// from where it stands. Format: [LOOKBEHIND 0:u32 ... LOOKBEHIND_END]
     LOOKBEHIND = 0x56,
 
-    /// Negative lookbehind of variable length (F6b(1)).
+    /// Negative lookbehind of variable length or with captures (F6b).
     /// Format: [NEGATIVE_LOOKBEHIND 0:u32 ... LOOKBEHIND_END]
     NEGATIVE_LOOKBEHIND = 0x57,
 
@@ -297,7 +297,7 @@ pub const Opcode = enum(u8) {
 
     // Backward atoms (F6b(1)): the atom with the high bit set reads the
     // character before the position and moves to its start. Only the body
-    // of a variable lookbehind holds them (the codegen sets the bit).
+    // of a backward lookbehind holds them (the codegen sets the bit).
     CHAR_B = 0x80,
     CHAR32_B = 0x81,
     CHAR_RANGE_B = 0x83,
