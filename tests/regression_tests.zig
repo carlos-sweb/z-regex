@@ -363,10 +363,26 @@ test "B′: other lookbehinds are error.UnsupportedFeature, after syntax errors"
     try expectLookbehind("(?<=(a+))b", "", "aaab", &.{ 3, 4, 0, 3 });
     try expectLookbehind("(?<=(\\d+)(\\d+))$", "", "1053", &.{ 4, 4, 0, 1, 1, 4 });
     try expectLookbehind("(?<!(^|[ab]))\\w{2}", "", "abcdef", &.{ 3, 5, -1, -1 });
-    for ([_][]const u8{ "(?<=\\1(a))b", "(a)(?<=\\1)" }) |p| {
+    // F6b(3): backreferences inside, compared right to left against the
+    // text before the position; a group to the right is matched first.
+    try expectLookbehind("(a)(?<=\\1)b", "", "aab", &.{ 1, 3, 1, 2 });
+    try expectLookbehind("(?<=\\1(a))b", "", "aab", &.{ 2, 3, 1, 2 });
+    try expectLookbehind("(?<=\\1(a))b", "", "ab", null);
+    try expectLookbehind("(?<=(\\w)\\1)x", "", "aax", &.{ 2, 3, 1, 2 }); // \1 not set yet: empty
+    try expectLookbehind("(?<=\\1(\\w+))x", "", "abcabcx", &.{ 6, 7, 3, 6 });
+    try expectLookbehind("(?<=\\1\\1(a))b", "", "aaab", &.{ 3, 4, 2, 3 });
+    try expectLookbehind("(?<!\\1(a))b", "", "aab", null);
+    // Under `i`, equal characters of different lengths in WTF-8 (U+2C65 is
+    // three bytes, U+023A two).
+    try expectLookbehind("(?<=\\1(\u{2C65}))x", "i", "\u{23A}\u{2C65}x", &.{ 2, 3, 1, 2 });
+    try expectLookbehind("(?<=\\1(\u{23A}))x", "i", "\u{2C65}\u{23A}x", &.{ 2, 3, 1, 2 });
+    // Still unsupported: a lookaround inside a backward body (1.x), and any
+    // backward body under `u`/`v`.
+    for ([_][]const u8{ "(?<=(?=a)b+)c", "(?<=a+(?!b))c" }) |p| {
         try testing.expectError(error.UnsupportedFeature, zregex.Regex.compile(a, p));
     }
     try testing.expectError(error.UnsupportedFeature, zregex.Regex.compileWithOptions(a, "(?<=a+)b", .{ .unicode = true }));
+    try testing.expectError(error.UnsupportedFeature, zregex.Regex.compileWithOptions(a, "(?<=\\1(a))b", .{ .unicode = true }));
     // `(?<=\u{1F600}|ab)`: two and two code units without `u`, one and two
     // code points with it.
     var cu = try zregex.Regex.compile(a, "(?<=\u{1F600}|ab)c");

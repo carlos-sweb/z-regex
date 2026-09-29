@@ -39,9 +39,9 @@ older internal notes had previously (incorrectly) listed as broken:
 - **Lookahead** `(?=...)`, `(?!...)` and **lookbehind** `(?<=...)`, `(?<!...)` — all four
   forms are zero-width and behave correctly (verified with `find`, not `test_`, since
   these assertions don't consume input — see the `test_` vs `find` note below). Since
-  F6b step 1 a lookbehind has to be of fixed length without captures, or (F6b(1), (2))
-  outside `u`/`v` without backreferences or lookarounds inside; any other is
-  `error.UnsupportedFeature` (see "F6b step 1 (B′)", "F6b(1)" and "F6b(2)").
+  F6b step 1 a lookbehind has to be of fixed length without captures, or (F6b(1)-(3))
+  outside `u`/`v` without a lookaround inside; any other is `error.UnsupportedFeature`
+  (see "F6b step 1 (B′)", "F6b(1)", "F6b(2)" and "F6b(3)").
 - **`\W`, `\S` negation** — correctly inverted (an older internal note claimed these were
   "parsed but not correctly inverted"; that is no longer true).
 - **Counted quantifiers** `{n}`, `{n,}`, `{n,m}` and their lazy forms `{n,m}?`.
@@ -1800,9 +1800,9 @@ backreference or lookaround inside runs backward too, whether its length is fixe
 generator emits a group as `SAVE_END`, the body in reverse, `SAVE_START`: the group's end
 is reached first, as in the spec's backward matching, so `(?<=(\d+)(\d+))$` on `"1053"`
 gives `"1"` and `"053"` (the second group, matched first, takes all it can). The trail
-undoes a negative lookbehind's captures as before. Still `error.UnsupportedFeature`: a
-backreference inside (F6b(3)), a lookaround inside a backward body, and any backward body
-under `u`/`v`.
+undoes a negative lookbehind's captures as before. Still `error.UnsupportedFeature` after
+F6b(2): a backreference inside (lifted by F6b(3), below), a lookaround inside a backward
+body, and any backward body under `u`/`v`.
 
 **Measured.**
 - test262: 2972 -> **2984** in UTF-16 and WTF-8 (`lookBehind/{alternations, captures,
@@ -1821,6 +1821,39 @@ under `u`/`v`.
 - `differential-v8` identical to `diff-F7a.json`; pfdiff, t1diff and lldiff unchanged.
 - Binary: ReleaseFast 1,109,728 -> 1,109,712 B (-16), ReleaseSmall 702,664 -> 702,632 B
   (-32).
+
+### F6b(3): lookbehind backreferences, right to left
+
+**What runs.** Outside `u`/`v`, a lookbehind with a backreference inside runs backward (a
+backreference is never of fixed length, so B′ never takes one). In a backward body the code
+generator emits it as `BACK_REF_B` / `BACK_REF_I_B` (`BACK_REF | 0x80`), and
+`checkBackRefBack` compares the group's text from its end to its start against the text
+before the position, ending at the start of what matched: the spec's BackreferenceMatcher
+with direction backward. Each side is decoded with `decodeBefore` on its own, so under `i`
+equal characters of different lengths in WTF-8 compare (U+2C65 is three bytes, U+023A
+two). A group to the right of the backreference is matched first; one that hasn't
+participated yet matches empty (`(?<=(\w)\1)x` on `"aax"` gives `[2,3]`, V8 too).
+
+**Not implemented (a 1.x decision, B6): a lookaround nested inside a lookbehind matched
+backward is `error.UnsupportedFeature`.** `(?<=a(?=b)c+)` and `nested-lookaround.js` are the
+cases. A lookaround inside a fixed lookbehind (B′, forward) and a backward lookbehind inside
+a fixed one (`(?<=a(?<=b+))`, different barriers) run. Also still unsupported: any backward
+body under `u`/`v`.
+
+**Measured.**
+- test262: 2984 -> **2994** in UTF-16 and WTF-8 (`lookBehind/{back-references,
+  back-references-to-captures, mutual-recursive, sliced-strings, start-of-line}.js`, sloppy
+  and strict); `lookBehind/` 22/34 -> 32/34. The 2 left are `nested-lookaround` (1.x);
+  `named-groups/lookbehind.js` (2, under `u`) is the other lookbehind entry not passing.
+- Against V8 (`lbdiff-v8`): the 1,279 of fixed length unchanged (the same 6); of the 840
+  patterns F6b(2) left out for a backreference inside, 572 now agree with V8 and 268 are
+  still `UnsupportedFeature` for a lookaround inside; none new or changed. The 1,568 left
+  are all `UnsupportedFeature`: 724 under `u`/`v`, 844 with a lookaround inside.
+- Oracle without V8 (`lbdiff`): unchanged, 13,142 pairs, 0 discrepancies (its domain
+  excludes backreferences; lbdiff-v8 and test262 cover them).
+- `differential-v8` identical to `diff-F7a.json`; pfdiff, t1diff and lldiff unchanged.
+- Binary: ReleaseFast 1,109,712 -> 1,111,536 B (+1,824), ReleaseSmall 702,632 -> 704,328 B
+  (+1,696).
 
 ### Known divergence: V8 matches inside a surrogate pair under `u`/`v`
 

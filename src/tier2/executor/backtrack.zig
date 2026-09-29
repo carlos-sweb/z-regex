@@ -33,11 +33,12 @@
 //!   barrier as a lookahead; its end must be exactly where the lookbehind
 //!   stands. A body of fixed length always ends there, and without captures
 //!   the direction it's matched in can't show.
-//! - any other lookbehind (F6b(1), (2): variable length or captures, no
-//!   backreferences or lookarounds inside, not under `u`/`v`; `compile`
+//! - any other lookbehind (F6b(1)-(3): variable length, captures or
+//!   backreferences, no lookarounds inside, not under `u`/`v`; `compile`
 //!   rejects the rest) runs its body of backward atoms (`*_B`) right to
 //!   left from where it stands, under the same barrier; its body may end
-//!   anywhere before, and a group inside saves its end first.
+//!   anywhere before, a group inside saves its end first, and a
+//!   backreference compares right to left (`BACK_REF_B`).
 
 const std = @import("std");
 const Allocator = std.mem.Allocator;
@@ -441,7 +442,7 @@ pub fn BacktrackerFor(comptime Unit: type) type {
                     pos_ptr.* = r.end_pos;
                 },
 
-                .CHAR_B, .CHAR32_B, .CHAR_RANGE_B, .CHAR_RANGE_INV_B, .CHAR_CLASS_B, .CHAR_CLASS_INV_B, .CHAR_ANY_B, .CHAR_SET_B, .CHAR_SET_INV_B, .UNICODE_PROPERTY_B, .UNICODE_PROPERTY_INV_B, .UNICODE_SCRIPT_B, .UNICODE_SCRIPT_INV_B, .UNICODE_SCRIPT_EXTENSIONS_B, .UNICODE_SCRIPT_EXTENSIONS_INV_B, .BYTE_B => {
+                .CHAR_B, .CHAR32_B, .CHAR_RANGE_B, .CHAR_RANGE_INV_B, .CHAR_CLASS_B, .CHAR_CLASS_INV_B, .CHAR_ANY_B, .CHAR_SET_B, .CHAR_SET_INV_B, .UNICODE_PROPERTY_B, .UNICODE_PROPERTY_INV_B, .UNICODE_SCRIPT_B, .UNICODE_SCRIPT_INV_B, .UNICODE_SCRIPT_EXTENSIONS_B, .UNICODE_SCRIPT_EXTENSIONS_INV_B, .BYTE_B, .BACK_REF_B, .BACK_REF_I_B => {
                     const r = try self.core.matchSingleInstructionBack(inst, pc, pos);
                     if (!r.matched) return false;
                     pos_ptr.* = r.end_pos;

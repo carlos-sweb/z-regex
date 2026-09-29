@@ -786,14 +786,15 @@ pub const CodeGenerator = struct {
         const body_start = self.writer.offset();
         try self.generateNode(l.body);
         // The body's atoms become backward atoms (`*_B`: the forward opcode
-        // with the high bit set, same operands). `compile` admits no
-        // backreference or lookaround inside such a body (F6b(3)).
+        // with the high bit set, same operands), backreferences included
+        // (F6b(3)). `compile` admits no lookaround inside such a body.
         if (variable) {
             const code = self.writer.code.items;
             var at = body_start;
             while (at < code.len) {
                 const inst = format.decodeInstruction(code, at) catch return error.InvalidPattern;
-                if (inst.opcode.category() == .character_match and inst.opcode != .CHAR2) code[at] |= 0x80;
+                const cat = inst.opcode.category();
+                if ((cat == .character_match and inst.opcode != .CHAR2) or cat == .backreference) code[at] |= 0x80;
                 at += inst.size;
             }
         }

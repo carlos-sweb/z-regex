@@ -241,9 +241,10 @@ pub fn fixedLength(node: *const Node) ?u32 {
 /// - B′: a body of fixed length (`fixedLength`) with no capture group
 ///   inside, matched forward from `L` characters back; it ends exactly where
 ///   the lookbehind stands, and without captures the direction can't show.
-/// - F6b(1) and (2): outside code-point mode (`code_point` = `u` or `v`),
-///   any other body without a backreference or a lookaround inside, matched
-///   backward (`*_B` atoms; a capture group inside is saved right to left).
+/// - F6b(1) to (3): outside code-point mode (`code_point` = `u` or `v`),
+///   any other body without a lookaround inside, matched backward (`*_B`
+///   atoms; a capture group inside is saved right to left, a backreference
+///   compared right to left).
 /// Anything else is `error.UnsupportedFeature` until the rest of F6b.
 pub fn lookbehindsSupported(node: *const Node, code_point: bool) bool {
     return switch (node.*) {
@@ -260,12 +261,12 @@ pub fn lookbehindsSupported(node: *const Node, code_point: bool) bool {
     };
 }
 
-/// A body F6b matches backward so far: no backreference (F6b(3)) or
-/// lookaround inside.
+/// A body F6b matches backward: no lookaround inside (one nested in a
+/// backward body is for 1.x).
 fn backwardBody(node: *const Node) bool {
     return switch (node.*) {
-        .empty, .literal, .char_set, .assert => true,
-        .backref, .look => false,
+        .empty, .literal, .char_set, .assert, .backref => true,
+        .look => false,
         .seq, .alt => |items| for (items) |item| {
             if (!backwardBody(item)) break false;
         } else true,
@@ -483,8 +484,8 @@ test "hir: fixedLength and lookbehindsSupported (B′, F6b(1))" {
     const deep: Node = .{ .repeat = .{ .min = 0, .max = null, .policy = .greedy, .syntax_form = .star, .body = &in_ahead } };
     try t.expect(!lookbehindsSupported(&deep, true));
     try t.expect(lookbehindsSupported(&seq, true));
-    // Outside it (F6b(1), (2)), also a body without a backreference or a
-    // lookaround inside, captures included (matched backward).
+    // Outside it (F6b(1)-(3)), also a body without a lookaround inside,
+    // captures and backreferences included (matched backward).
     try t.expect(lookbehindsSupported(&lb_var, false));
     try t.expect(lookbehindsSupported(&deep, false));
     try t.expect(lookbehindsSupported(&lb_cap, false));
@@ -496,7 +497,8 @@ test "hir: fixedLength and lookbehindsSupported (B′, F6b(1))" {
     const lb_br_items = [_]*const Node{ &ab, &br };
     const lb_br_body: Node = .{ .seq = &lb_br_items };
     const lb_br: Node = .{ .look = .{ .behind = true, .negated = false, .body = &lb_br_body } };
-    try t.expect(!lookbehindsSupported(&lb_br, false));
+    try t.expect(lookbehindsSupported(&lb_br, false));
+    try t.expect(!lookbehindsSupported(&lb_br, true));
     const var_caret_items = [_]*const Node{ &caret, &ahead_var };
     const var_caret: Node = .{ .seq = &var_caret_items };
     const lb_var_caret: Node = .{ .look = .{ .behind = true, .negated = true, .body = &var_caret } };

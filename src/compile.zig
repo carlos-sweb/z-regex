@@ -185,9 +185,9 @@ fn frontend(allocator: Allocator, pattern: []const u8, options: CompileOptions) 
         .multiline = options.multiline,
         .dot_all = options.dot_all,
     });
-    // B′ and F6b(1), (2): the backtracker runs a lookbehind of fixed length
-    // without captures, and outside `u`/`v` any other without
-    // backreferences or lookarounds inside; any other is a valid
+    // B′ and F6b(1)-(3): the backtracker runs a lookbehind of fixed length
+    // without captures, and outside `u`/`v` any other without a lookaround
+    // inside; any other is a valid
     // pattern this engine can't run yet (not a SyntaxError: the parser's
     // errors came first).
     if (!hir.lookbehindsSupported(fe.root, options.unicode or options.v)) {
