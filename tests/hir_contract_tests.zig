@@ -41,7 +41,14 @@ fn check(pattern: []const u8, flags: []const u8) !void {
     defer ast.deinit();
     var arena = std.heap.ArenaAllocator.init(a);
     defer arena.deinit();
-    const root = try zregex.lower.lower(arena.allocator(), ast, .{ .ignore_case = has(flags, 'i'), .dot_all = has(flags, 's') }, &.{}, .{ .unicode = has(flags, 'u'), .v = has(flags, 'v') });
+    const root = zregex.lower.lower(arena.allocator(), ast, .{ .ignore_case = has(flags, 'i'), .dot_all = has(flags, 's') }, &.{}, .{ .unicode = has(flags, 'u'), .v = has(flags, 'v') }) catch |err| {
+        // Under `iv` a property, a negated class with foldable members or a
+        // set operation on an operand that isn't fold-closed is unsupported
+        // (F7c-0): no set to check, and `compile` says the same.
+        if (err != error.UnsupportedFeature) return err;
+        try testing.expectError(error.UnsupportedFeature, zregex.Regex.compileWithOptions(a, pattern, .{ .case_insensitive = has(flags, 'i'), .dot_all = has(flags, 's'), .unicode = has(flags, 'u'), .v = has(flags, 'v') }));
+        return;
+    };
     const body = root.modifier_scope.body;
     // `[a]`-style lone members lower to a literal; only char_set nodes here.
     if (body.* != .char_set) return;

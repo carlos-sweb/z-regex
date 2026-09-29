@@ -1873,11 +1873,50 @@ further notice, not on the way to 1.0. Their 377 test262 entries are skipped bec
 harness's Node lacks the feature, so they are not counted in 2968/3017. What already
 exists and what is missing: `docs/plans/F7.md`, "Decisiones", 4.
 
-### Unicode case folding under `v` (F5c)
+### `v` with `i` (F7c-0)
 
-Fixed in F5b for `i` with and without `u` (see "F5b" above: ranges, classes and
-`\p{...}` fold). Under `v`, sets still fold with the pre-F5b rule (ASCII letters and a
-literal's simple pair); `v` with `i` is F5c.
+Up to 0.6.0, under `v` with `i` sets folded with the pre-F5b rule (ASCII letters and a
+literal's simple pair): a silent wrong result, which the freeze doesn't allow. Since F7c-0:
+- **Literals and classes fold as under `iu`** (F5b's `unicode` folding, the long s and the
+  Kelvin sign included): `/[a-z]/iv` matches U+212A and U+017F, `/k/iv` the Kelvin sign,
+  `/σ/iv` "ς", `/ß/iv` "ẞ", `/[\w]/iv` "ſ". `\b` already used the extended WordCharacters.
+- **`error.UnsupportedFeature`** where `v`'s MaybeSimpleCaseFolding differs from `iu` or
+  might (F5c, 1.x):
+  - every property escape, `\p{...}` or `\P{...}`, alone, in a class or in a set
+    operation. Under `v`, `\P{Lu}` complements after folding (V8: `/\P{Lu}/iv` doesn't
+    match "a", `/\P{Lu}/iu` does);
+  - a negated class whose members aren't closed under the folding (`[^a-z]`);
+  - a set operation (`--`, `&&`) with an operand that isn't closed under the folding
+    (`[[a-z]--[q]]`). Closed operands fold to themselves, so `[[0-9]--[5]]` still runs.
+- **`\p{ASCII}` and the Kelvin sign:** V8 doesn't match U+212A with `/\p{ASCII}/iv`
+  (it does with `iu`, and with `/[a-z]/iv`). By our reading of the spec (MaybeSimpleCaseFolding,
+  Canonicalize) it should. V8 is the reference; revisit in F5c if the spec says otherwise.
+  Under `iv` the property is `UnsupportedFeature`, so the difference can't show.
+
+**Measured** (`ivdiff`: every pattern with `i` and `v` of the F2c corpus, npm and test262's
+literals that V8 accepts, 1,059; 22 fixed subjects plus the case variants of each
+pattern's literals, every `lastIndex`, UTF-16, all slots):
+
+| | Before | After |
+|---|---|---|
+| Compile | 1,026 | 221 |
+| … same result as V8 | 727 | **221** |
+| … different result, no error | **299** | **0** |
+| `UnsupportedFeature` | 33 | 838 |
+
+Of the 805 newly rejected, 551 agreed with V8 before on these subjects and 254 didn't; 45
+that differed now agree. Without `v`, or with `u` instead, nothing changes.
+
+The lookbehind differentials also hold `iv` patterns:
+- **`lbdiff-v8`:** 6 fixed-length patterns with `iv` are now `UnsupportedFeature`. One of them,
+  `(?<=[^À-Ö\p{Lu}]\p{ASCII}{0})/imv`, was one of the 6 fixed ones with a different result
+  (the `iv` one), so 5 are left. No new different result. The reference is now
+  `tests/differential/reference/lbdiff-v8-f7c0.json` (`lbdiff-v8-v051.json` archived).
+- **`lbdiff` (the oracle):** still 0 discrepancies. Its counts move, cosmetically: the `iv`
+  bodies now rejected fall under "invalid" (it compiles the body alone first) instead of B′:
+  - invalid: 16 -> 672;
+  - B′: 15,532 -> 14,904;
+  - compared: 13,142 -> 13,116.
 
 ### `u` (Unicode mode) flag — partial; `v` (Unicode Sets mode) flag — partial
 
@@ -2000,7 +2039,7 @@ strictness is itself only the unrecognized-escape slice — see above).
 | `\p{...}`/`\P{...}` as a character-class member (`[\p{L}\d]`, up to 4 tests) | ✅ Implemented (Phase 3) |
 | Unicode case folding: literal non-ASCII char (standalone or single class member) | ✅ Implemented (Phase 4) |
 | Unicode case folding: non-ASCII ranges (`[À-Ö]`), `\p{...}`, `\w`/`\W`, backreferences, `\b` (`i`, `iu`) | ✅ Implemented (F5b) |
-| Unicode case folding under `v` (`iv` sets) | ❌ Not implemented (F5c) |
+| Unicode case folding under `v` (`iv`) | ✅ Literals and classes as `iu` (F7c-0); properties, negated foldable classes and set operations on open operands are `UnsupportedFeature` (F5c) |
 | `sticky` option (`y` flag) + `Regex.findAt` | ✅ Added (Phase 5a) |
 | `getCaptureIndices`/`getNamedCaptureIndices` (`d` flag equivalent) | ✅ Added (Phase 5a) |
 | `u` flag (`CompileOptions.unicode`): strict unrecognized-escape rejection | ✅ Implemented (Phase 5b) |

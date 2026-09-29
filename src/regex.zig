@@ -2338,8 +2338,15 @@ test "Regex: the CharSet table counts toward PatternTooLarge (F2b)" {
 test "Regex: compiling classes leaks nothing on any allocation failure (F2b)" {
     const Run = struct {
         fn run(allocator: std.mem.Allocator) !void {
-            var re = try Regex.compileWithOptions(allocator, "[\u{E9}\\p{L}][^\\P{N}a][[^a-z]&&\\p{L}]", .{ .v = true, .case_insensitive = true });
+            var re = try Regex.compileWithOptions(allocator, "[\u{E9}\\p{L}][^\\P{N}a][[^a-z]&&\\p{L}]", .{ .v = true });
             re.deinit();
+            // Under `iv` (F7c-0): the folded path, and a rejected operand.
+            var ri = try Regex.compileWithOptions(allocator, "[\u{E9}a-z][^0-9][[0-9]&&[0-5]]", .{ .v = true, .case_insensitive = true });
+            ri.deinit();
+            if (Regex.compileWithOptions(allocator, "[\u{E9}a][[a-z]&&[a-m]]", .{ .v = true, .case_insensitive = true })) |r| {
+                r.deinit();
+                return error.TestUnexpectedResult;
+            } else |err| if (err != error.UnsupportedFeature) return err;
         }
     };
     try std.testing.checkAllAllocationFailures(std.testing.allocator, Run.run, .{});

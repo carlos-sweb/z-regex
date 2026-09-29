@@ -48,7 +48,8 @@ An ECMA-262 regular expression engine in Zig, independent of the JavaScript engi
 | Alternation, prefilters, fast paths | T0 | OK |
 | `u`, `\p{…}` | T1 | OK (T0's linear VM, F5a) |
 | Unicode case folding under `i` (with and without `u`) | T1 | OK (T0's linear VM, F5b) |
-| `v`, `\q{…}`, case folding under `v` | T1 | F5c (runs on the backtracker) |
+| `v`, `\q{…}` | T1 | F5c (runs on the backtracker) |
+| Case folding under `v` (`iv`) | T1 | Literals and classes as `iu` (F7c-0); properties, negated foldable classes and set operations on open operands: `error.UnsupportedFeature` |
 | Backreferences | T2 | OK (backtracker) |
 | Lookahead | T2 | OK (backtracker) |
 | Lookbehind: fixed length without captures (any mode), or variable length, captures and backreferences inside (no `u`/`v`) | T2 | OK (backtracker; backward atoms since v0.6.0, F6b) |

@@ -34,6 +34,20 @@ nuevo).
 - **(b) Dar `UnsupportedFeature` a `i`+`v` con sets que el plegado viejo no cubre.** Es lo que hizo E0 con `\q{}`. Rechaza patrones que hoy compilan y a veces aciertan: hay que medir cuántos en los corpus.
 - **(c) Documentarlo como divergencia conocida.** Contradice la regla de E0 («nunca un resultado incorrecto»).
 
+**Cerrado en F7c-0 con (b″)** (decisión del usuario, tras medir (b′) y (b″) con prototipos):
+- con `iv`, literales y clases usan el plegado de F5b en modo Unicode (el de `iu`);
+- `UnsupportedFeature` en toda propiedad, en toda clase negada con miembros plegables y en las operaciones de conjuntos con un operando no cerrado bajo el plegado.
+
+| Con `iv` (1,059 patrones) | Compilan | Coinciden con V8 | Distintos sin error | `UnsupportedFeature` |
+|---|---|---|---|---|
+| Antes | 1,026 | 727 | 299 | 33 |
+| (b′): solo el plegado de `iu` y los operandos cerrados | 594 | 580 | 14 | 465 |
+| **(b″), implementada** | **221** | **221** | **0** | **838** |
+
+`lbdiff-v8` pasa a la referencia `lbdiff-v8-f7c0.json` (la de v0.5.1, archivada): 6 patrones fijos con `iv` pasan a `UnsupportedFeature`, uno de ellos el de las 6 diferencias. `lbdiff` sigue con 0 discrepancias; sus cuentas se mueven (invalid 16 → 672, B′ 15,532 → 14,904, comparados 13,142 → 13,116), porque los cuerpos `iv` rechazados cuentan como «invalid».
+
+(b′) no bastaba: bajo `v`, `\P{…}` complementa después de plegar, y V8 no hace coincidir el signo Kelvin con `\p{ASCII}/iv`. Detalle en `KNOWN_LIMITATIONS.md`, «`v` with `i` (F7c-0)».
+
 ## 1. API pública actual
 
 `src/main.zig` tiene **61 declaraciones `pub`**: 60 `pub const` y `placeholder()`.
@@ -186,7 +200,7 @@ Medido con la `.so` de `c5aa744` contra V8 (Node 22):
 
 | Sub-fase | Contenido | Días | ¿Bloquea v0.7.0? |
 |---|---|---|---|
-| **F7c-0** | Decidir y resolver `i`+`v` (sección 0). Con la opción (b): routing, tests y medir el corpus | (b) 1; (a) sin estimar | **Sí** (el freeze) |
+| **F7c-0** ✅ | `i`+`v` resuelto con (b″) (sección 0) | 1 | **Sí** (el freeze) |
 | **F7c-1** | Herramientas al repo: `pfdiff`/`tagck`, `t1diff`, `lldiff`, corpus, referencias, `scripts/gate.sh` con limpieza de caché y `measure_binary.sh` | 1–1.5 | Sí: es el gate de las fases siguientes y del período de producción |
 | **F7c-2** | Código muerto: `Optimizer`, `OptLevel`, `opt_level`, `placeholder`, `LOOP`, `CHAR2` (valores reservados), sus tests | 0.5–1 | Sí (API) |
 | **F7c-3** | `zregex.internal`: mover 44 símbolos, exportar `RegexError`, adaptar 12 archivos y las herramientas; resolver los «sin decidir» de la sección 4 | 1.5–2 | Sí |

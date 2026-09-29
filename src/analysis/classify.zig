@@ -522,7 +522,8 @@ test "a property keeps its Tier and feature even when its set is ASCII (F2d)" {
     const a = try classify("[\\p{ASCII}]", "iu");
     try testing.expect(a.features.contains(.property_escape));
     try testing.expect(a.features.contains(.ignore_case_unicode));
-    const v = try classify("[[a]--[b]]", "iv");
+    // Operands closed under the folding: `iv` keeps them (F7c-0).
+    const v = try classify("[[0]--[1]]", "iv");
     try testing.expect(v.features.contains(.class_set_operation));
     try testing.expectEqual(Tier.unicode, v.min_tier.?);
     // A class's own [^...] doesn't make ASCII members non-ASCII.

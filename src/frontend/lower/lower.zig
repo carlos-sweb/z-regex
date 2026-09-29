@@ -13,15 +13,16 @@
 //! can hold (a property opcode, a byte range, a 256-bit table) is encoded
 //! as a CHAR_SET instead. The executors match the widened set as it is.
 //!
-//! **Under `v` with `i`** the pre-F5b rule stays (F5c), faithful to what
-//! the code generator did from the AST before F2c. In particular a
-//! class's CharSet is built with the case-folding rule of the path the class
-//! took before, which is not the spec's:
-//! - a class that fits the ASCII bitmap folds the ASCII letters of its
-//!   literals AND ranges (`[a-z]` under `i` matches `A`);
-//! - any other class folds only its literals, with the simple case mapping
-//!   (`[a-zé]` under `i` matches `É` but not `A`); property members and the
-//!   operands of a `v` set operation don't fold.
+//! **Under `v` with `i` (F7c-0)** literals and classes fold as under `iu`
+//! (the `unicode` mode). What `v`'s MaybeSimpleCaseFolding would treat
+//! differently from `iu` is `error.UnsupportedFeature` (F5c, 1.x):
+//! - every property escape, `\p{...}` or `\P{...}`, alone, in a class or in
+//!   a set operation (under `v` a `\P{...}` complements after folding; and
+//!   V8, the reference, doesn't match the Kelvin sign with `\p{ASCII}`);
+//! - a negated class whose members aren't closed under the folding;
+//! - a set operation (`--`, `&&`) with an operand that isn't closed under
+//!   the folding (a closed one folds to itself, so the operation on the
+//!   unfolded operands is the spec's).
 //!
 //! Needs the Unicode tables (property ranges, case mapping), so it lives
 //! outside `ir/`.
@@ -43,7 +44,7 @@ const CharSet = charset_mod.CharSet;
 const Range = charset_mod.Range;
 const MAX_CODEPOINT = charset_mod.MAX_CODEPOINT;
 
-pub const LowerError = error{ OutOfMemory, InvalidPattern };
+pub const LowerError = error{ OutOfMemory, InvalidPattern, UnsupportedFeature };
 
 pub const GroupName = struct { name: []const u8, index: u16 };
 
@@ -108,8 +109,8 @@ pub const Frontend = struct {
 /// `names` (index -> name of each named group) is borrowed. `lex` says which
 /// case folding `i` means (F5b).
 pub fn lower(arena: Allocator, root: *const AstNode, flags: hir.Flags, names: []const GroupName, lex: LexOptions) LowerError!*const Node {
-    const fold: ?casefold.FoldMode = if (!flags.ignore_case or lex.v) null else if (lex.unicode) .unicode else .legacy;
-    var l: Lowerer = .{ .arena = arena, .flags = flags, .names = names, .fold = fold };
+    const fold: ?casefold.FoldMode = if (!flags.ignore_case) null else if (lex.unicode or lex.v) .unicode else .legacy;
+    var l: Lowerer = .{ .arena = arena, .flags = flags, .names = names, .fold = fold, .v_fold = flags.ignore_case and lex.v };
     const body = try l.lowerNode(root);
     return l.make(.{ .modifier_scope = .{ .flags = flags, .body = body } });
 }
@@ -119,8 +120,12 @@ const Lowerer = struct {
     /// The flags of the scope being lowered (only the root scope in F2c).
     flags: hir.Flags,
     names: []const GroupName,
-    /// F5b's folding under `i` (null without `i`, and under `v`: F5c).
+    /// F5b's folding under `i` (null without `i`; `unicode` under `v` too
+    /// since F7c-0).
     fold: ?casefold.FoldMode = null,
+    /// `v` with `i` (F7c-0): what `v` folds unlike `iu` is
+    /// `error.UnsupportedFeature` (see the file comment).
+    v_fold: bool = false,
 
     fn make(self: *Lowerer, node: Node) LowerError!*const Node {
         const p = try self.arena.create(Node);
@@ -394,6 +399,7 @@ const Lowerer = struct {
     }
 
     noinline fn lowerProperty(self: *Lowerer, n: *const AstNode) LowerError!*const Node {
+        if (self.v_fold) return error.UnsupportedFeature;
         // The property's own code points; a standalone `\P{...}` is the
         // node's `inverted`, applied once by `charSetNode` (the opcode's
         // `_INV` form), not by `propertyMembers`.
@@ -416,6 +422,7 @@ const Lowerer = struct {
     }
 
     noinline fn lowerClassSetOp(self: *Lowerer, n: *const AstNode) LowerError!*const Node {
+        if (self.v_fold and hasProperty(n)) return error.UnsupportedFeature;
         return self.charSetNodeFrom(try self.classSetOpMembers(n), n.inverted, .set, .{ .property = hasProperty(n), .set_operation = true });
     }
 
@@ -424,6 +431,13 @@ const Lowerer = struct {
         const children = n.children.items;
         // `[]` (D3): an empty table, never matches.
         if (children.len == 0 and !n.inverted) return self.charSetNode(try CharSet.fromRanges(self.arena, &.{}), false, .set);
+        if (self.v_fold) {
+            if (hasProperty(n)) return error.UnsupportedFeature;
+            if (n.inverted) {
+                const plain = try self.classMembers(n, false);
+                if (!(try fold_mod.foldSet(self.arena, plain, .unicode)).eql(plain)) return error.UnsupportedFeature;
+            }
+        }
 
         for (children) |child| switch (child.type) {
             .unicode_property, .unicode_script, .unicode_script_extensions => return self.charSetNodeFrom(try self.classMembersAny(n), n.inverted, .set, .{ .property = true }),
@@ -585,16 +599,22 @@ const Lowerer = struct {
     }
 
     /// One operand of a `v` set operation: a class (its members, then its
-    /// own `[^...]` as a complement) or a bare `\p{...}`. No folding.
+    /// own `[^...]` as a complement) or a bare `\p{...}`. Not folded: under
+    /// `iv` it must be closed under the folding (F7c-0).
     fn classSetOperand(self: *Lowerer, n: *const AstNode) LowerError!CharSet {
-        return switch (n.type) {
+        const set = switch (n.type) {
             .char_class => blk: {
                 const members = try self.classMembers(n, false);
-                break :blk if (n.inverted) members.complement(self.arena) else members;
+                break :blk if (n.inverted) try members.complement(self.arena) else members;
             },
-            .unicode_property, .unicode_script, .unicode_script_extensions => self.propertyMembers(n),
-            else => error.InvalidPattern,
+            .unicode_property, .unicode_script, .unicode_script_extensions => try self.propertyMembers(n),
+            else => return error.InvalidPattern,
         };
+        // Under `iv` (F7c-0): an operand closed under the folding folds to
+        // itself, so the operation on the unfolded operands is the spec's.
+        // Any other needs `v`'s MaybeSimpleCaseFolding (F5c, 1.x).
+        if (self.fold) |mode| if (!(try fold_mod.foldSet(self.arena, set, mode)).eql(set)) return error.UnsupportedFeature;
+        return set;
     }
 
     /// `[A--B]` / `[A&&B]` without the outermost `[^...]` (the node's
@@ -786,10 +806,10 @@ test "lower: classes keep their pre-F2c encoding and folding path" {
         \\  char_set set ranges=7 0-2F 3A-40 5B-5E 60-60 ...
         \\
     );
-    // Under `v`, the pre-F5b rule (F5c).
+    // Under `v` too since F7c-0: the `iu` folding (the long s and the Kelvin sign).
     try expectLowered("[a-z\u{E9}]", .{ .flags = .{ .ignore_case = true }, .v = true },
         \\scope i
-        \\  char_set set ranges=3 61-7A C9-C9 E9-E9
+        \\  char_set set ranges=6 41-5A 61-7A C9-C9 E9-E9 ...
         \\
     );
     try expectLowered("[]", .{},

@@ -300,6 +300,7 @@ fn expectLookbehind(pattern: []const u8, flags: []const u8, input: []const u8, w
         var re = try zregex.Regex.compileWithOptions(a, pattern, .{
             .case_insensitive = std.mem.indexOfScalar(u8, flags, 'i') != null,
             .unicode = std.mem.indexOfScalar(u8, flags, 'u') != null,
+            .v = std.mem.indexOfScalar(u8, flags, 'v') != null,
             .t2_look_linear = linear,
         });
         defer re.deinit();
@@ -346,6 +347,32 @@ test "B′: a lookbehind of fixed length runs on the explicit-stack backtracker 
     try expectLookbehind("(?<=K)x", "iu", "\u{212A}x", &.{ 1, 2 });
     // RepeatMatcher step 2.b now applies to patterns with a lookbehind.
     try expectLookbehind("(?<=x)(a*)*", "", "xaa", &.{ 1, 3, 1, 3 });
+}
+
+// F7c-0: under `v` with `i`, literals and classes fold as under `iu` (the
+// long s and the Kelvin sign included); what `v` would fold otherwise is
+// error.UnsupportedFeature. V8's results.
+test "F7c-0: v with i folds like iu; properties, negated foldable classes and open operands are unsupported" {
+    const a = testing.allocator;
+    try expectLookbehind("[a-z]", "iv", "\u{212A}", &.{ 0, 1 });
+    try expectLookbehind("[a-z]", "iv", "\u{17F}", &.{ 0, 1 });
+    try expectLookbehind("k", "iv", "\u{212A}", &.{ 0, 1 });
+    try expectLookbehind("\u{3C3}", "iv", "\u{3C2}", &.{ 0, 1 });
+    try expectLookbehind("\u{DF}", "iv", "\u{1E9E}", &.{ 0, 1 });
+    try expectLookbehind("[\\w]", "iv", "\u{17F}", &.{ 0, 1 });
+    // A set operation on operands closed under the folding still compiles.
+    try expectLookbehind("[[0-9]--[5]]", "iv", "7", &.{ 0, 1 });
+    try expectLookbehind("[[0-9]--[5]]", "iv", "5", null);
+    for ([_][]const u8{ "[[a-z]--[q]]", "[\\p{Lu}--[A-Z]]", "\\p{Lu}", "\\P{Lu}", "[^a-z]", "[\\p{ASCII}]" }) |p| {
+        try testing.expectError(error.UnsupportedFeature, zregex.Regex.compileWithOptions(a, p, .{ .v = true, .case_insensitive = true }));
+    }
+    // Without `i`, or with `u` instead of `v`, nothing changes.
+    for ([_][]const u8{ "\\p{Lu}", "[^a-z]", "[[a-z]--[q]]" }) |p| {
+        var re = try zregex.Regex.compileWithOptions(a, p, .{ .v = true });
+        re.deinit();
+    }
+    var ru = try zregex.Regex.compileWithOptions(a, "[^a-z]\\P{Lu}", .{ .unicode = true, .case_insensitive = true });
+    ru.deinit();
 }
 
 test "B′: other lookbehinds are error.UnsupportedFeature, after syntax errors" {

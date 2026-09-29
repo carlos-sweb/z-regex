@@ -405,7 +405,7 @@ pub fn build(b: *std.Build) void {
     // Lookbehind differential against V8 (E1): every pattern of
     // tests/corpus/lookbehind.tsv, checked against the committed reference
     // run; fails on any new or changed pattern.
-    const run_lbdiff_v8 = b.addSystemCommand(&.{ "node", "scripts/test262/lbdiff-v8.mjs", "--check", "tests/differential/reference/lbdiff-v8-v051.json", "--lib" });
+    const run_lbdiff_v8 = b.addSystemCommand(&.{ "node", "scripts/test262/lbdiff-v8.mjs", "--check", "tests/differential/reference/lbdiff-v8-f7c0.json", "--lib" });
     run_lbdiff_v8.addArtifactArg(test262_lib);
     run_lbdiff_v8.has_side_effects = true;
     const lbdiff_v8_step = b.step("lbdiff-v8", "Compare zregex with V8 on the lookbehind corpus against its reference (needs Node + koffi)");
