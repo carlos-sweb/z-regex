@@ -5,7 +5,7 @@ zregex regex engine. Every claim below was checked by direct execution against t
 current source tree (compiling small probe programs against the `zregex` module and
 observing the actual result), not inferred from design docs or past status reports.
 
-## Version: 0.5.0 (F7a: bugs D and E, RepeatMatcher steps 4 and 2.b on the backtracker; F7b: compile cost, loop guard, LookLinear under `iu`, C API `max_steps`; F6b step 1 (B′): fixed-length lookbehind on the explicit-stack backtracker, the recursive matcher retired, any other lookbehind is `UnsupportedFeature`; every C API function records the error name; test262 2968/3017; see "Fixed in F7a", "F7b closed" and "F6b step 1 (B′)" below; release notes: `docs/RELEASE_NOTES_v0.5.0.md`). 0.4.0 was F5a: `u` and `\p{...}` on T0's VM; F6a: explicit-stack backtracker, capture trail, LookLinear; F5b: full case folding under `i`; test262 2978/3017; see "F5a", "F6a" and "F5b" below). 0.3.2 was 0.3.0 plus the SIMD pairwise literal search in the literal fast path (0.3.1) and `Regex.iterator` (0.3.2). 0.3.0 closed T0: F4a and F4b, test262 2856/3017; see "F4a" and "F4b" below. v0.2.0 was F1 (test262 2846/3017, see "F1 closed" below). The rest of this
+## Version: 0.5.1 (E0: valid syntax that isn't implemented is `error.UnsupportedFeature`, never a wrong result, and `v` applies `u`'s early errors; see "E0: honest errors" below). 0.5.0 was F7a: bugs D and E, RepeatMatcher steps 4 and 2.b on the backtracker; F7b: compile cost, loop guard, LookLinear under `iu`, C API `max_steps`; F6b step 1 (B′): fixed-length lookbehind on the explicit-stack backtracker, the recursive matcher retired, any other lookbehind is `UnsupportedFeature`; every C API function records the error name; test262 2968/3017; see "Fixed in F7a", "F7b closed" and "F6b step 1 (B′)" below; release notes: `docs/RELEASE_NOTES_v0.5.0.md`). 0.4.0 was F5a: `u` and `\p{...}` on T0's VM; F6a: explicit-stack backtracker, capture trail, LookLinear; F5b: full case folding under `i`; test262 2978/3017; see "F5a", "F6a" and "F5b" below). 0.3.2 was 0.3.0 plus the SIMD pairwise literal search in the literal fast path (0.3.1) and `Regex.iterator` (0.3.2). 0.3.0 closed T0: F4a and F4b, test262 2856/3017; see "F4a" and "F4b" below. v0.2.0 was F1 (test262 2846/3017, see "F1 closed" below). The rest of this
 header describes the earlier state: 402/402 unit/integration tests passing, 168/168 (100%) on a test262-derived
 conformance sample (Phases 0, 1, 2 (now including duplicate named groups across
 mutually exclusive alternation branches, e.g. `(?<x>a)|(?<x>b)`, matching JS exactly),
@@ -416,7 +416,7 @@ older internal notes had previously (incorrectly) listed as broken:
   this flag — see the dedicated `u`/`v` section below.
 - **`CompileOptions.v` (JS `v` flag), partial** *(added later in the session)* —
   character-class set operations, `[A--B]` (difference) and `[A&&B]` (intersection),
-  exactly one per class (no chaining, `error.ChainedClassSetOperatorNotSupported`; no
+  exactly one per class (no chaining: `error.UnsupportedFeature` since E0; no
   nesting beyond one bracket level), each operand an ordinary class body, a bare
   `\p{...}`/`\P{...}` atom, or a nested (possibly `[^...]`-negated) `[...]` class. Since
   F2b the operation is computed at compile time with CharSet algebra (intersection or
@@ -1134,8 +1134,8 @@ snapshot and the internal differentials use it. Neither is changed in F7b.
   values and their aliases (`\p{gc=Cn}`, `\p{gc=LC}`, `\p{gc=punct}`, ...);
   `\p{gc=Alphabetic}`, `\p{gc=Alpha}`, `\p{gc=ASCII}`, `\p{gc=Any}`,
   `\p{gc=Assigned}` are SyntaxErrors, as in V8.
-- With `v`, `[\p{L}--a]` (a single character as a subtraction operand) is
-  `InvalidClassSetOperand`; V8 accepts it. For F5c.
+- With `v`, `[\p{L}--a]` (a single character as a subtraction operand) was
+  `InvalidClassSetOperand`; V8 accepts it. Since E0 it is `UnsupportedFeature`; for F5c.
 - `\u{...}` without `u`/`v` is read as a code point escape (`/\u{1F600}/` matches
   `😀`); ECMA-262 (Annex B) and V8 read `\u` as the letter `u` followed by `{1F600}`
   as text (and `/\u{2}/` as `uu`). Found while verifying the bug A fix; not fixed.
@@ -1559,7 +1559,68 @@ incorrect examples in this repository's own README and doc comments.
 
 ## Confirmed bugs (still open)
 
-None. (D17, `\u{H+}` without `u`/`v`, was fixed in F7a: see "Fixed in F7a" below.)
+None. (The backreference to a duplicated group name was fixed in E0, and D17 in F7a: see
+"Fixed in E0" and "Fixed in F7a" below.)
+
+### Fixed in E0
+
+- **A backreference to a duplicated group name only looked at the first group of that
+  name** *(found in E0, running test262 with Node 24)*: `/^(?:(?<x>a)|(?<x>b))\k<x>$/`
+  didn't match "bb" (V8: it does). The parser resolved `\k<x>` to the first `x` only, so
+  when the other `x` participated it referred to an undefined group and matched empty: a
+  wrong result without an error. Now `\k<name>` refers to every group of that name (the
+  HIR's `Backref.indices`, a list from the start) and the code generator emits one
+  `BACK_REF` per index. Duplicates are allowed only in mutually exclusive branches and
+  RepeatMatcher step 4 clears them each iteration, so at most one participates; a group
+  that didn't matches empty, so the sequence is BackreferenceMatcher's semantics
+  (ES2025). `\1` still refers to group 1 only. `getNamedCapture` and `$<name>` already
+  took the group that participated. test262 with Node 24: `named-groups/duplicate-names-
+  exec.js` and `duplicate-names-match.js` (sloppy and strict, 4 entries) pass in UTF-16
+  and WTF-8; their assertions are ported to `tests/regression_tests.zig`, since the
+  canonical harness (Node 22) skips them. Bytecode snapshot: 3 of 699 outcomes, exactly
+  `(?<a>x)|(?<a>y)\k<a>` under "", `u` and `v`.
+
+### E0: honest errors (0.5.1)
+
+**Rule (from here to 1.0 and after):** valid syntax that zregex doesn't implement is
+`error.UnsupportedFeature` (C API `ZREGEXP_ERROR_UNSUPPORTED`, code 9), never a wrong result
+and never a SyntaxError name. What `v` doesn't implement:
+
+| Pattern | V8 | Before E0 | Since E0 |
+|---|---|---|---|
+| `[\q{a}]` (`\q{...}`) | valid | **wrong result**: `\q` was the letter q | `UnsupportedFeature` |
+| `\q`, `[\q]`, `\q{a}`, `\z` | SyntaxError | accepted | `InvalidEscape` |
+| `[\p{L}--\d]`, `[\p{L}--a]` (a bare operand, bug B) | valid | `InvalidClassSetOperand` | `UnsupportedFeature` |
+| `[[a][b]]`, `[a[b]]` (a union with nested classes) | valid | `InvalidClassSetOperand` / `UnexpectedToken` | `UnsupportedFeature` |
+| `[A--B--C]`, `[A&&B&&C]` (the same operator chained) | valid | `ChainedClassSetOperatorNotSupported` | `UnsupportedFeature` |
+| `[A--B&&C]` (operators mixed) | SyntaxError | `ChainedClassSetOperatorNotSupported` | `MixedClassSetOperators` |
+| `[a--]`, `[--a]` | SyntaxError | `InvalidClassSetOperand` | the same |
+| `\p{RGI_Emoji}` and the other 6 properties of strings | valid | `UnknownUnicodeProperty` | `UnsupportedFeature` |
+| `\P{RGI_Emoji}`; those names with `u` | SyntaxError | `UnknownUnicodeProperty` | the same |
+| `(?i:a)`, `(?-m:a)`, `(?i-s:a)` (RegExp modifiers, any flags) | valid (ES2025) | `UnexpectedToken` | `UnsupportedFeature` |
+| `(?x:a)`, `(?i)`, `(?ii:a)`, `(?-:a)` | SyntaxError | `UnexpectedToken` | the same |
+
+- **`v` applies `u`'s early errors.** The lexer's strict mode was set from `u` only
+  (`lower.zig`), so under `v` alone zregex accepted what `u` rejects. Over the internal
+  corpora (44,443 unique patterns) 340 changed status: 335 compiled or were
+  `UnsupportedFeature` and are now a SyntaxError, and V8 rejects every one; of the other 5,
+  4 are forms of the table (V8 accepts them) and 1 is the limit case below. The 3,667 `v` patterns that compile before and after give the same
+  matches. The bytecode snapshot changed in 48 of 699 outcomes, each a program before and
+  an error now, V8 rejecting every one; no program changed.
+- **A leak it made reachable:** a lexer error right after a nested class under `v` didn't
+  free that class (`parser.zig`, the two places that re-fetch the token after a nested
+  `]`). Latent before, since that error needed strict mode; the fuzz stress found it with
+  `v` applying it. Fixed; `[[a]\z]` and `[[a]--[b]\z]` with `v` are regression tests. The
+  fuzz checker counts `UnsupportedFeature` as a defined compile error, not as a
+  SyntaxError: it is also raised after the parser (a lookbehind of variable length), where
+  analyze classifies the pattern.
+- **Limit of the rule:** a pattern that is invalid *and* uses a form that isn't implemented
+  reports the first one it reaches: `[A--\d]\w(?!a){2}` with `v` is `UnsupportedFeature`
+  (the class comes first), where V8 reports the SyntaxError of the quantified lookahead.
+  Both are compile errors; neither is a wrong result.
+- **Still accepted under `v`, V8 rejects** (for 1.1, with bug B and chaining): an unescaped
+  ClassSetSyntaxCharacter (`[(]`), the reserved double punctuators (`[a!!b]`), a range as a
+  set operand (`[a-z--[aeiou]]`).
 
 ### Fixed in F7a
 
@@ -1738,7 +1799,7 @@ corpus, UTF-16), four patterns, all zero-width at that position:
 ### RegExp modifiers (ES2025): pending until further notice
 
 `(?i:…)`, `(?-m:…)` and the other forms of ES2025's modifiers are not implemented:
-`(?i:a)` is a compile error (`UnexpectedToken`). Decision (2026-09-29): pending until
+`(?i:a)` is `error.UnsupportedFeature` (since E0; `UnexpectedToken` before). Decision (2026-09-29): pending until
 further notice, not on the way to 1.0. Their 377 test262 entries are skipped because the
 harness's Node lacks the feature, so they are not counted in 2968/3017. What already
 exists and what is missing: `docs/plans/F7.md`, "Decisiones", 4.
@@ -1754,7 +1815,7 @@ literal's simple pair); `v` with `i` is F5c.
 ```zig
 regex.Regex.compileWithOptions(allocator, "\\q", .{ .unicode = true }); // error.InvalidEscape
 regex.Regex.compile(allocator, "\\q"); // matches literal "q" -- unicode defaults to false
-regex.Regex.compileWithOptions(allocator, "[\\p{L}--[a]--[b]]", .{ .v = true }); // error.ChainedClassSetOperatorNotSupported
+regex.Regex.compileWithOptions(allocator, "[\\p{L}--[a]--[b]]", .{ .v = true }); // error.UnsupportedFeature (since E0)
 ```
 
 `CompileOptions.unicode` *(added after Phase 4)* exists now. This engine is already
@@ -1783,7 +1844,7 @@ quantified lookahead, and a class escape used as a range endpoint (`[\d-a]`); se
 `CompileOptions.v` *(added later in the session)* exists too, covering exactly one
 piece of real `v`-mode syntax: character-class set operations, difference (`[A--B]`,
 matches `A` but not `B`) and intersection (`[A&&B]`, matches both) — **but only a single
-operation per class, no chaining (`[A--B--C]` is `error.ChainedClassSetOperatorNotSupported`)
+operation per class, no chaining (`[A--B--C]` is `error.UnsupportedFeature` since E0)
 and no nesting beyond one bracket level**. Each operand (`A`/`B`) is either an ordinary
 class body (`\p{L}`, `a-z\d`, a bare `\p{...}`/`\P{...}` atom, ...) or a nested `[...]`
 class, which may itself be `[^...]`-negated (`[[a-z]&&[^x]]`). Since F2b the operation
