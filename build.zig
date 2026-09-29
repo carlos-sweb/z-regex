@@ -402,6 +402,15 @@ pub fn build(b: *std.Build) void {
     const differential_step = b.step("differential-v8", "Compare zregex with V8 on generated patterns (needs Node + koffi)");
     differential_step.dependOn(&run_differential.step);
 
+    // Lookbehind differential against V8 (E1): every pattern of
+    // tests/corpus/lookbehind.tsv, checked against the committed reference
+    // run; fails on any new or changed pattern.
+    const run_lbdiff_v8 = b.addSystemCommand(&.{ "node", "scripts/test262/lbdiff-v8.mjs", "--check", "tests/differential/reference/lbdiff-v8-v051.json", "--lib" });
+    run_lbdiff_v8.addArtifactArg(test262_lib);
+    run_lbdiff_v8.has_side_effects = true;
+    const lbdiff_v8_step = b.step("lbdiff-v8", "Compare zregex with V8 on the lookbehind corpus against its reference (needs Node + koffi)");
+    lbdiff_v8_step.dependOn(&run_lbdiff_v8.step);
+
     // F0c (docs/REGEX_TIERS_PLAN.md §5.6): tier histogram of a regex corpus
     // built by scripts/f0c/extract.mjs. `zig build f0c -- corpus.tsv`.
     const f0c_module = b.createModule(.{ .root_source_file = b.path("tools/f0c.zig"), .target = target, .optimize = .ReleaseSafe });
@@ -410,6 +419,17 @@ pub fn build(b: *std.Build) void {
     if (b.args) |a| run_f0c.addArgs(a);
     const f0c_step = b.step("f0c", "Tier histogram of a regex corpus (scripts/f0c/extract.mjs output)");
     f0c_step.dependOn(&run_f0c.step);
+
+    // E1 P2 (docs/plans/E1.md): the lookbehind oracle without V8. Fails on
+    // any discrepancy between (?<=B) and "^(?:B)$ matches some slice ending
+    // at the position".
+    const lbdiff_module = b.createModule(.{ .root_source_file = b.path("tools/lbdiff.zig"), .target = target, .optimize = .ReleaseSafe });
+    lbdiff_module.addImport("zregex", addModules(b, target, .ReleaseSafe, false).get("zregex"));
+    const run_lbdiff = b.addRunArtifact(b.addExecutable(.{ .name = "lbdiff", .root_module = lbdiff_module }));
+    run_lbdiff.setCwd(b.path("."));
+    run_lbdiff.has_side_effects = true;
+    const lbdiff_step = b.step("lbdiff", "Lookbehind oracle without V8: (?<=B) against ^(?:B)$ on the slices ending at each position");
+    lbdiff_step.dependOn(&run_lbdiff.step);
 
     // Performance baseline (bench/bench.zig, docs/REGEX_TIERS_PLAN.md F0d).
     // Always ReleaseFast, whatever -Doptimize says, so numbers are comparable.

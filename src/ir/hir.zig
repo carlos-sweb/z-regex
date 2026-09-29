@@ -204,7 +204,7 @@ pub fn nullable(node: *const Node) bool {
 /// when `min == max`; an alternation when all its branches agree. A
 /// backreference, a raw byte (one byte of WTF-8, not a character) and a
 /// length past `u32` are not fixed. Captures don't change the length:
-/// whether a lookbehind may hold one is `lookbehindsFixed`'s business.
+/// whether a lookbehind may hold one is `lookbehindsSupported`'s business.
 pub fn fixedLength(node: *const Node) ?u32 {
     return switch (node.*) {
         .empty, .assert, .look => 0,
@@ -237,21 +237,42 @@ pub fn fixedLength(node: *const Node) ?u32 {
 }
 
 /// Whether every lookbehind in `node`'s subtree is one the explicit-stack
-/// backtracker runs (B′): a body of fixed length (`fixedLength`) with no
-/// capture group inside. Such a body matched forward from `L` characters
-/// back ends exactly where the lookbehind stands, and without captures the
-/// direction can't show. Anything else is `error.UnsupportedFeature` until
-/// F6b matches backward.
-pub fn lookbehindsFixed(node: *const Node) bool {
+/// backtracker runs. Two kinds:
+/// - B′: a body of fixed length (`fixedLength`) with no capture group
+///   inside, matched forward from `L` characters back; it ends exactly where
+///   the lookbehind stands, and without captures the direction can't show.
+/// - F6b(1) to (3): outside code-point mode (`code_point` = `u` or `v`),
+///   any other body without a lookaround inside, matched backward (`*_B`
+///   atoms; a capture group inside is saved right to left, a backreference
+///   compared right to left).
+/// Anything else is `error.UnsupportedFeature` until the rest of F6b.
+pub fn lookbehindsSupported(node: *const Node, code_point: bool) bool {
     return switch (node.*) {
         .empty, .literal, .char_set, .backref, .assert => true,
         .seq, .alt => |items| for (items) |item| {
-            if (!lookbehindsFixed(item)) break false;
+            if (!lookbehindsSupported(item, code_point)) break false;
         } else true,
-        .repeat => |r| lookbehindsFixed(r.body),
-        .capture => |c| lookbehindsFixed(c.body),
-        .look => |l| (!l.behind or (fixedLength(l.body) != null and captureRange(l.body) == null)) and lookbehindsFixed(l.body),
-        .modifier_scope => |m| lookbehindsFixed(m.body),
+        .repeat => |r| lookbehindsSupported(r.body, code_point),
+        .capture => |c| lookbehindsSupported(c.body, code_point),
+        .look => |l| (!l.behind or
+            (fixedLength(l.body) != null and captureRange(l.body) == null) or
+            (!code_point and backwardBody(l.body))) and lookbehindsSupported(l.body, code_point),
+        .modifier_scope => |m| lookbehindsSupported(m.body, code_point),
+    };
+}
+
+/// A body F6b matches backward: no lookaround inside (one nested in a
+/// backward body is for 1.x).
+fn backwardBody(node: *const Node) bool {
+    return switch (node.*) {
+        .empty, .literal, .char_set, .assert, .backref => true,
+        .look => false,
+        .seq, .alt => |items| for (items) |item| {
+            if (!backwardBody(item)) break false;
+        } else true,
+        .repeat => |r| backwardBody(r.body),
+        .capture => |c| backwardBody(c.body),
+        .modifier_scope => |m| backwardBody(m.body),
     };
 }
 
@@ -378,7 +399,7 @@ test "hir: collectCaptures is pre-order over the whole subtree" {
     try std.testing.expectEqualSlices(u16, &.{ 1, 2, 3 }, list.items);
 }
 
-test "hir: fixedLength and lookbehindsFixed (B′)" {
+test "hir: fixedLength and lookbehindsSupported (B′, F6b(1))" {
     const a = std.testing.allocator;
     const t = std.testing;
     const ab_units = [_]LitUnit{ .{ .value = 'a' }, .{ .value = 'b' } };
@@ -444,24 +465,44 @@ test "hir: fixedLength and lookbehindsFixed (B′)" {
     const huge: Node = .{ .repeat = .{ .min = std.math.maxInt(u32), .max = std.math.maxInt(u32), .policy = .greedy, .syntax_form = .counted, .body = &ab } };
     try t.expectEqual(@as(?u32, null), fixedLength(&huge));
 
-    // lookbehindsFixed: every lookbehind fixed and capture-free, nested too.
+    // In code-point mode (`u`/`v`), B′ only: every lookbehind fixed and
+    // capture-free, nested too.
     const lb_ok: Node = .{ .look = .{ .behind = true, .negated = true, .body = &seq } };
-    try t.expect(lookbehindsFixed(&lb_ok));
+    try t.expect(lookbehindsSupported(&lb_ok, true));
     const lb_var: Node = .{ .look = .{ .behind = true, .negated = false, .body = &ahead_var } };
-    try t.expect(!lookbehindsFixed(&lb_var));
+    try t.expect(!lookbehindsSupported(&lb_var, true));
     const lb_cap: Node = .{ .look = .{ .behind = true, .negated = false, .body = &cap } };
-    try t.expect(!lookbehindsFixed(&lb_cap));
+    try t.expect(!lookbehindsSupported(&lb_cap, true));
     const la_cap: Node = .{ .look = .{ .behind = false, .negated = false, .body = &cap } };
-    try t.expect(lookbehindsFixed(&la_cap)); // a lookahead may capture
+    try t.expect(lookbehindsSupported(&la_cap, true)); // a lookahead may capture
     const inner_items = [_]*const Node{ &ab, &lb_var };
     const inner: Node = .{ .seq = &inner_items };
     const lb_nested: Node = .{ .look = .{ .behind = true, .negated = false, .body = &inner } };
     try t.expectEqual(@as(?u32, 2), fixedLength(&inner)); // the nested lookbehind is zero-width…
-    try t.expect(!lookbehindsFixed(&lb_nested)); // …but not fixed itself
+    try t.expect(!lookbehindsSupported(&lb_nested, true)); // …but not fixed itself
     const in_ahead: Node = .{ .look = .{ .behind = false, .negated = false, .body = &lb_var } };
     const deep: Node = .{ .repeat = .{ .min = 0, .max = null, .policy = .greedy, .syntax_form = .star, .body = &in_ahead } };
-    try t.expect(!lookbehindsFixed(&deep));
-    try t.expect(lookbehindsFixed(&seq));
+    try t.expect(!lookbehindsSupported(&deep, true));
+    try t.expect(lookbehindsSupported(&seq, true));
+    // Outside it (F6b(1)-(3)), also a body without a lookaround inside,
+    // captures and backreferences included (matched backward).
+    try t.expect(lookbehindsSupported(&lb_var, false));
+    try t.expect(lookbehindsSupported(&deep, false));
+    try t.expect(lookbehindsSupported(&lb_cap, false));
+    try t.expect(lookbehindsSupported(&lb_nested, false)); // B′ holding an F6b(1)
+    const var_look_items = [_]*const Node{ &ahead_var, &look_ahead };
+    const var_look: Node = .{ .seq = &var_look_items };
+    const lb_var_look: Node = .{ .look = .{ .behind = true, .negated = false, .body = &var_look } };
+    try t.expect(!lookbehindsSupported(&lb_var_look, false)); // no lookaround inside a variable body
+    const lb_br_items = [_]*const Node{ &ab, &br };
+    const lb_br_body: Node = .{ .seq = &lb_br_items };
+    const lb_br: Node = .{ .look = .{ .behind = true, .negated = false, .body = &lb_br_body } };
+    try t.expect(lookbehindsSupported(&lb_br, false));
+    try t.expect(!lookbehindsSupported(&lb_br, true));
+    const var_caret_items = [_]*const Node{ &caret, &ahead_var };
+    const var_caret: Node = .{ .seq = &var_caret_items };
+    const lb_var_caret: Node = .{ .look = .{ .behind = true, .negated = true, .body = &var_caret } };
+    try t.expect(lookbehindsSupported(&lb_var_caret, false)); // assertions are fine
 }
 
 test "hir: dump" {

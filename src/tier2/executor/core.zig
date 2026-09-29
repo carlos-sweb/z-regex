@@ -209,7 +209,7 @@ pub fn captureSlotsIn(bytecode: []const u8) usize {
     while (pc < bytecode.len) {
         const inst = format.decodeInstruction(bytecode, pc) catch break;
         switch (inst.opcode) {
-            .SAVE_START, .SAVE_END, .SAVE_START_NAMED, .SAVE_END_NAMED, .CLEAR_CAPTURE, .BACK_REF, .BACK_REF_I => {
+            .SAVE_START, .SAVE_END, .SAVE_START_NAMED, .SAVE_END_NAMED, .CLEAR_CAPTURE, .BACK_REF, .BACK_REF_I, .BACK_REF_B, .BACK_REF_I_B => {
                 slots = @max(slots, @as(usize, inst.operands[0]) + 1);
             },
             else => {},
@@ -253,6 +253,9 @@ pub fn CoreFor(comptime Unit: type) type {
         word_fold: bool = false,
 
         const Self = @This();
+
+        /// What a single-atom check returns: whether it matched, and where.
+        pub const AtomResult = struct { matched: bool, end_pos: usize };
 
         /// Error set of the atom checks.
         pub const MatchError = error{ OutOfMemory, UnknownOpcode, UnexpectedEndOfBytecode, StepLimitExceeded, InvalidCharSet };
@@ -482,7 +485,7 @@ pub fn CoreFor(comptime Unit: type) type {
         /// limit (found via test262-derived conformance testing).
         fn isQuantifiableAtomOpcode(opcode: Opcode) bool {
             return switch (opcode) {
-                .CHAR, .CHAR_ANY, .CHAR32, .BYTE, .CHAR2, .CHAR_RANGE, .CHAR_RANGE_INV, .CHAR_CLASS, .CHAR_CLASS_INV, .CHAR_SET, .CHAR_SET_INV, .UNICODE_PROPERTY, .UNICODE_PROPERTY_INV, .UNICODE_SCRIPT, .UNICODE_SCRIPT_INV, .UNICODE_SCRIPT_EXTENSIONS, .UNICODE_SCRIPT_EXTENSIONS_INV, .BACK_REF, .BACK_REF_I => true,
+                .CHAR, .CHAR_ANY, .CHAR32, .BYTE, .CHAR2, .CHAR_RANGE, .CHAR_RANGE_INV, .CHAR_CLASS, .CHAR_CLASS_INV, .CHAR_SET, .CHAR_SET_INV, .UNICODE_PROPERTY, .UNICODE_PROPERTY_INV, .UNICODE_SCRIPT, .UNICODE_SCRIPT_INV, .UNICODE_SCRIPT_EXTENSIONS, .UNICODE_SCRIPT_EXTENSIONS_INV, .BACK_REF, .BACK_REF_I, .CHAR_B, .CHAR32_B, .CHAR_RANGE_B, .CHAR_RANGE_INV_B, .CHAR_CLASS_B, .CHAR_CLASS_INV_B, .CHAR_ANY_B, .CHAR_SET_B, .CHAR_SET_INV_B, .UNICODE_PROPERTY_B, .UNICODE_PROPERTY_INV_B, .UNICODE_SCRIPT_B, .UNICODE_SCRIPT_INV_B, .UNICODE_SCRIPT_EXTENSIONS_B, .UNICODE_SCRIPT_EXTENSIONS_INV_B, .BYTE_B, .BACK_REF_B, .BACK_REF_I_B => true,
                 else => false,
             };
         }
@@ -522,7 +525,7 @@ pub fn CoreFor(comptime Unit: type) type {
 
         /// Match a single instruction without advancing PC
         /// Used by star quantifiers to match the repeated element
-        pub fn matchSingleInstruction(self: *Self, inst: Instruction, pc: usize, pos: usize) MatchError!struct { matched: bool, end_pos: usize } {
+        pub fn matchSingleInstruction(self: *Self, inst: Instruction, pc: usize, pos: usize) MatchError!AtomResult {
             switch (inst.opcode) {
                 .BYTE => {
                     // A raw byte: compared, not decoded (see opcodes.zig); never
@@ -586,11 +589,56 @@ pub fn CoreFor(comptime Unit: type) type {
                     return .{ .matched = r.matched, .end_pos = r.end_pos };
                 },
 
+                .CHAR_B, .CHAR32_B, .CHAR_RANGE_B, .CHAR_RANGE_INV_B, .CHAR_CLASS_B, .CHAR_CLASS_INV_B, .CHAR_ANY_B, .CHAR_SET_B, .CHAR_SET_INV_B, .UNICODE_PROPERTY_B, .UNICODE_PROPERTY_INV_B, .UNICODE_SCRIPT_B, .UNICODE_SCRIPT_INV_B, .UNICODE_SCRIPT_EXTENSIONS_B, .UNICODE_SCRIPT_EXTENSIONS_INV_B, .BYTE_B, .BACK_REF_B, .BACK_REF_I_B => return self.matchSingleInstructionBack(inst, pc, pos),
+
                 else => {
                     // For other instructions (shouldn't happen in star loop)
                     return .{ .matched = false, .end_pos = pos };
                 },
             }
+        }
+
+        /// A backward atom (`*_B`, F6b): the forward atom's test on the
+        /// character before `pos`, ending at its start.
+        pub fn matchSingleInstructionBack(self: *Self, inst: Instruction, pc: usize, pos: usize) MatchError!AtomResult {
+            const no: AtomResult = .{ .matched = false, .end_pos = pos };
+            var f = inst;
+            f.opcode = inst.opcode.forward();
+            if (f.opcode == .BACK_REF or f.opcode == .BACK_REF_I) {
+                const r = self.checkBackRefBack(pos, f.operands[0], f.opcode == .BACK_REF_I);
+                return .{ .matched = r.matched, .end_pos = r.end_pos };
+            }
+            if (f.opcode == .BYTE) {
+                if (Unit != u8 or pos == 0 or self.input[pos - 1] != f.operands[0]) return no;
+                return .{ .matched = true, .end_pos = pos - 1 };
+            }
+            const d = self.decodeBefore(pos) orelse return no;
+            const matched = switch (f.opcode) {
+                .CHAR32, .CHAR, .CHAR_ANY, .CHAR_RANGE, .CHAR_RANGE_INV, .CHAR_CLASS, .CHAR_CLASS_INV => try self.charMatches(f, pc, d),
+                .CHAR_SET, .CHAR_SET_INV => blk: {
+                    const idx = f.operands[0];
+                    if (idx >= self.charsets.len) return error.InvalidCharSet;
+                    const in_set = self.charsets[idx].contains(d.value);
+                    break :blk if (f.opcode == .CHAR_SET_INV) !in_set else in_set;
+                },
+                .UNICODE_PROPERTY, .UNICODE_PROPERTY_INV => blk: {
+                    if (pc + 2 > self.bytecode.len) return error.UnexpectedEndOfBytecode;
+                    const in_category = properties.isInCategory(d.value, @enumFromInt(self.bytecode[pc + 1]));
+                    break :blk if (f.opcode == .UNICODE_PROPERTY_INV) !in_category else in_category;
+                },
+                .UNICODE_SCRIPT, .UNICODE_SCRIPT_INV => blk: {
+                    if (pc + 2 > self.bytecode.len) return error.UnexpectedEndOfBytecode;
+                    const in_script = properties.isInScript(d.value, self.bytecode[pc + 1]);
+                    break :blk if (f.opcode == .UNICODE_SCRIPT_INV) !in_script else in_script;
+                },
+                .UNICODE_SCRIPT_EXTENSIONS, .UNICODE_SCRIPT_EXTENSIONS_INV => blk: {
+                    if (pc + 2 > self.bytecode.len) return error.UnexpectedEndOfBytecode;
+                    const in_script = properties.isInScriptExtensions(d.value, self.bytecode[pc + 1]);
+                    break :blk if (f.opcode == .UNICODE_SCRIPT_EXTENSIONS_INV) !in_script else in_script;
+                },
+                else => false,
+            };
+            return .{ .matched = matched, .end_pos = if (matched) d.pos else pos };
         }
 
         /// The pc of the LOOKAHEAD_END or LOOKBEHIND_END that closes the
@@ -601,7 +649,7 @@ pub fn CoreFor(comptime Unit: type) type {
             var depth: usize = 1;
             while (pc < self.bytecode.len) {
                 const inst = try format.decodeInstruction(self.bytecode, pc);
-                const opens = if (behind) inst.opcode == .LOOKBEHIND_FIXED or inst.opcode == .NEGATIVE_LOOKBEHIND_FIXED else inst.opcode == .LOOKAHEAD or inst.opcode == .NEGATIVE_LOOKAHEAD;
+                const opens = if (behind) inst.opcode == .LOOKBEHIND_FIXED or inst.opcode == .NEGATIVE_LOOKBEHIND_FIXED or inst.opcode == .LOOKBEHIND or inst.opcode == .NEGATIVE_LOOKBEHIND else inst.opcode == .LOOKAHEAD or inst.opcode == .NEGATIVE_LOOKAHEAD;
                 if (opens) depth += 1;
                 if (inst.opcode == (if (behind) Opcode.LOOKBEHIND_END else Opcode.LOOKAHEAD_END)) {
                     depth -= 1;
@@ -672,6 +720,41 @@ pub fn CoreFor(comptime Unit: type) type {
             }
             _ = cap_len;
 
+            return .{ .matched = true, .end_pos = cur_pos };
+        }
+
+        /// `checkBackRef` backward (F6b(3), inside a lookbehind's body): the
+        /// group's text compared from its end to its start against the text
+        /// before `pos`, one character at a time with `decodeBefore` on both
+        /// sides (under `i` in WTF-8 they may take different lengths); it
+        /// ends at the start of what matched. A group that hasn't participated
+        /// matches empty, as forward.
+        pub fn checkBackRefBack(self: *Self, pos: usize, group: usize, case_insensitive: bool) AtomResult {
+            const no: AtomResult = .{ .matched = false, .end_pos = pos };
+            if (group >= self.capture_slots) return no;
+            const capture = self.caps()[group];
+            if (!capture.isValid()) return .{ .matched = true, .end_pos = pos };
+            const cap_start = capture.start.?;
+            const cap_end = capture.end.?;
+            // Backward, a group re-entered holds the new end with the
+            // previous iteration's start (end <= start): not participated.
+            if (cap_end < cap_start) return .{ .matched = true, .end_pos = pos };
+            const decode_mode: Mode = if (case_insensitive) self.mode else .code_unit;
+            const fold_mode: casefold.FoldMode = if (self.mode == .code_point) .unicode else .legacy;
+            var cap_pos = cap_end;
+            var cur_pos = pos;
+            while (cap_pos > cap_start) {
+                const a = self.subject().decodeBefore(decode_mode, cap_pos).?;
+                const b = self.subject().decodeBefore(decode_mode, cur_pos) orelse return no;
+                const eq = if (case_insensitive)
+                    casefold.canonicalize(a.value, fold_mode) == casefold.canonicalize(b.value, fold_mode)
+                else
+                    a.value == b.value;
+                const same_len = case_insensitive or cap_pos - a.pos == cur_pos - b.pos;
+                if (!eq or a.invalid != b.invalid or !same_len) return no;
+                cap_pos = a.pos;
+                cur_pos = b.pos;
+            }
             return .{ .matched = true, .end_pos = cur_pos };
         }
 

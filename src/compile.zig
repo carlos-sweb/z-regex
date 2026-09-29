@@ -185,10 +185,12 @@ fn frontend(allocator: Allocator, pattern: []const u8, options: CompileOptions) 
         .multiline = options.multiline,
         .dot_all = options.dot_all,
     });
-    // B′ (F6b step 1): the backtracker runs a lookbehind of fixed length
-    // without captures; any other is a valid pattern this engine can't run
-    // yet (not a SyntaxError: the parser's errors came first).
-    if (!hir.lookbehindsFixed(fe.root)) {
+    // B′ and F6b(1)-(3): the backtracker runs a lookbehind of fixed length
+    // without captures, and outside `u`/`v` any other without a lookaround
+    // inside; any other is a valid
+    // pattern this engine can't run yet (not a SyntaxError: the parser's
+    // errors came first).
+    if (!hir.lookbehindsSupported(fe.root, options.unicode or options.v)) {
         fe.deinit();
         return error.UnsupportedFeature;
     }

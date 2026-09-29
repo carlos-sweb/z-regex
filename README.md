@@ -4,7 +4,7 @@ An ECMA-262 regular expression engine in Zig, independent of the JavaScript engi
 
 [![Zig 0.16+](https://img.shields.io/badge/zig-0.16%2B-orange)](https://ziglang.org/)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
-[![test262](https://img.shields.io/badge/test262-2968%2F3017%20run%2C%20821%20skipped-blue)](#compatibility)
+[![test262](https://img.shields.io/badge/test262-2994%2F3017%20run%2C%20821%20skipped-blue)](#compatibility)
 [![T0](https://img.shields.io/badge/T0-complete-green)](docs/REGEX_TIERS_PLAN.md)
 
 ## What it is
@@ -29,9 +29,10 @@ An ECMA-262 regular expression engine in Zig, independent of the JavaScript engi
   and `\p{…}` run on T0's linear VM (code-point mode); since F5b, so does case folding
   under `i` (with and without `u`). `v` (F5c) still runs on the backtracker.
 - **T2 (backreferences, lookaround): on the explicit-stack backtracker**, with a step budget.
-  Lookbehind: fixed length without captures only (F6b step 1); the rest is
-  `error.UnsupportedFeature` until full F6b.
-- **test262: 2968 of the 3017 entries that run (98.4%); 821 are skipped**, most of them
+  Lookbehind: fixed length without captures (F6b step 1), and outside `u`/`v` any other
+  without a lookaround inside, captures and backreferences included (F6b(1)-(3)); the rest
+  is `error.UnsupportedFeature`.
+- **test262: 2994 of the 3017 entries that run (99.2%); 821 are skipped**, most of them
   features zregex doesn't implement (`v`, RegExp modifiers): see Compatibility.
 - **Divergences from V8** in the differential: 0 different results; 2 patterns hit the step
   limit (T2).
@@ -50,8 +51,8 @@ An ECMA-262 regular expression engine in Zig, independent of the JavaScript engi
 | `v`, `\q{…}`, case folding under `v` | T1 | F5c (runs on the backtracker) |
 | Backreferences | T2 | OK (backtracker) |
 | Lookahead | T2 | OK (backtracker) |
-| Lookbehind, fixed length, no captures | T2 | OK (backtracker, F6b step 1) |
-| Lookbehind, variable length or with captures | T2 | `error.UnsupportedFeature` (full F6b) |
+| Lookbehind: fixed length without captures (any mode), or variable length, captures and backreferences inside (no `u`/`v`) | T2 | OK (backtracker; backward atoms since v0.6.0, F6b) |
+| Lookbehind with a lookaround inside a backward body, or matched backward under `u`/`v` | T2 | `error.UnsupportedFeature` (lookaround inside: 1.x) |
 
 "OK" means it works and passes the tests. It does **not** mean optimized. Which executor runs a
 pattern is decided at compile time from the pattern (`zregex.analyze`); the results are the
@@ -62,7 +63,7 @@ same whichever runs it.
 With Zig 0.16. Add the dependency (this writes the hash into `build.zig.zon`):
 
 ```sh
-zig fetch --save https://github.com/carlos-sweb/z-regex/archive/refs/tags/v0.5.1.tar.gz
+zig fetch --save https://github.com/carlos-sweb/z-regex/archive/refs/tags/v0.6.0.tar.gz
 ```
 
 In `build.zig`:
@@ -188,11 +189,12 @@ against V8, Rust regex, PCRE2 and zig-regex.
 
 ## Compatibility
 
-- **test262: 2968 of the 3017 entries that run (98.4%)**, the same status with UTF-16 and
-  WTF-8 subjects. Baseline: `scripts/test262/baseline.json`. The 49 that run and don't pass:
-  30 lookbehind entries that are `UnsupportedFeature` (variable length or captures, full
-  F6b), 4 host (JS lexer) and 15 not extractable.
-- **821 test262 entries are skipped** and are not in 2968/3017:
+- **test262: 2994 of the 3017 entries that run (99.2%)**, the same status with UTF-16 and
+  WTF-8 subjects. Baseline: `scripts/test262/baseline.json`. The 23 that run and don't pass:
+  4 lookbehind entries that are `UnsupportedFeature` (2 with a lookaround inside a backward
+  lookbehind, `nested-lookaround`, a 1.x decision; 2 under `u`, `named-groups/lookbehind`),
+  4 host (JS lexer) and 15 not extractable.
+- **821 test262 entries are skipped** and are not in 2994/3017:
 
   | Skipped | Entries | Why |
   |---|---|---|
@@ -246,13 +248,16 @@ The cross-engine benchmark: `bench/compare/prepare.sh`, then `node bench/compare
   non-ASCII ranges is partial.
 - **T2 uses the current backtracker**, bounded by a step budget: a pathological pattern stops
   with `error.StepLimitExceeded` instead of an answer.
-- **Lookbehind (F6b step 1):** only of fixed length without captures or backreferences
-  inside (29 of the 34 lookbehind patterns in the npm corpus); any other is
-  `error.UnsupportedFeature` (C API `ZREGEXP_ERROR_UNSUPPORTED`) until full F6b, which is
-  mandatory (lookbehind is ES2018). The old 100-character window (D7) is gone.
+- **Lookbehind (F6b, v0.6.0):** of fixed length without captures or
+  backreferences inside (29 of the 34 lookbehind patterns in the npm corpus), or outside
+  `u`/`v` any other without a lookaround inside (captures saved and backreferences compared
+  right to left); any other is `error.UnsupportedFeature` (C API
+  `ZREGEXP_ERROR_UNSUPPORTED`). A lookaround inside a backward lookbehind is a 1.x decision.
+  The old 100-character window (D7) is gone.
 - **Valid syntax that isn't implemented is `error.UnsupportedFeature`** (C API
-  `ZREGEXP_ERROR_UNSUPPORTED`), never a wrong result: lookbehind of variable length or with
-  captures, and under `v` `\q{…}`, chained operations, a bare character as a set operand, a
+  `ZREGEXP_ERROR_UNSUPPORTED`), never a wrong result: a lookbehind matched backward (variable
+  length, captures or backreferences inside) under `u`/`v` or with a lookaround inside,
+  and under `v` `\q{…}`, chained operations, a bare character as a set operand, a
   union with a nested class, properties of strings. The table: KNOWN_LIMITATIONS, "E0".
 - **RegExp modifiers (ES2025)**, `(?i:…)`, `(?-m:…)`: not implemented, pending until further
   notice; `(?i:a)` is `error.UnsupportedFeature`.
@@ -272,6 +277,9 @@ The full list, with measurements: [docs/KNOWN_LIMITATIONS.md](docs/KNOWN_LIMITAT
 - **v0.5.1 (E0):** honest errors: valid syntax that isn't implemented is
   `UnsupportedFeature`; `v` applies `u`'s early errors
   ([release notes](docs/RELEASE_NOTES_v0.5.1.md)).
+- **v0.6.0 (E1, F6b):** lookbehind matched backward outside `u`/`v`: variable length,
+  captures and backreferences inside; test262 2994/3017
+  ([release notes](docs/RELEASE_NOTES_v0.6.0.md)).
 - **To 1.0** ([docs/plans/ROADMAP_1.0.md](docs/plans/ROADMAP_1.0.md)): E0 (v0.5.1) → E1, full
   F6b (v0.6.0) → E3, F7c: API freeze and documentation (v1.0.0). RegExp modifiers: pending
   until further notice.
@@ -279,9 +287,10 @@ The full list, with measurements: [docs/KNOWN_LIMITATIONS.md](docs/KNOWN_LIMITAT
   F5b done (full case folding under `i`); F5c (full `v`) pending.
 - **F6a, T2 without lookbehind: done** (explicit-stack backtracker, capture trail,
   LookLinear; F6a(1)–(3)).
-- **F6b, lookbehind:** step 1 done (B′: fixed length without captures, on the
-  explicit-stack backtracker; the recursive matcher is retired); step 2, variable length
-  and captures (matching backward), pending and mandatory.
+- **F6b, lookbehind: closed in v0.6.0.** B′ (fixed length without captures, forward) and
+  matching backward outside `u`/`v` (variable length, captures, backreferences). Not
+  covered, `UnsupportedFeature`: a lookaround inside a backward lookbehind (1.x) and any
+  backward lookbehind under `u`/`v`.
 
 No dates. Phases and exit criteria: [docs/REGEX_TIERS_PLAN.md](docs/REGEX_TIERS_PLAN.md).
 

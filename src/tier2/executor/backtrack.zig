@@ -28,12 +28,17 @@
 //!   captures stay and a later backtrack past it still undoes them (the
 //!   recursive matcher kept them: bug F, F6A_PRECHECK.md). A negative one
 //!   always undoes the trail to its barrier.
-//! - a lookbehind (B′: fixed length `L`, no captures; `compile` rejects any
-//!   other) steps `L` characters back and runs its body forward from there,
-//!   under the same barrier as a lookahead; its end must be exactly where
-//!   the lookbehind stands. A body of fixed length always ends there, and
-//!   without captures the direction it's matched in can't show. Variable
-//!   length and captures need matching backward (full F6b).
+//! - a lookbehind of fixed length `L` without captures (B′) steps `L`
+//!   characters back and runs its body forward from there, under the same
+//!   barrier as a lookahead; its end must be exactly where the lookbehind
+//!   stands. A body of fixed length always ends there, and without captures
+//!   the direction it's matched in can't show.
+//! - any other lookbehind (F6b(1)-(3): variable length, captures or
+//!   backreferences, no lookarounds inside, not under `u`/`v`; `compile`
+//!   rejects the rest) runs its body of backward atoms (`*_B`) right to
+//!   left from where it stands, under the same barrier; its body may end
+//!   anywhere before, a group inside saves its end first, and a
+//!   backreference compares right to left (`BACK_REF_B`).
 
 const std = @import("std");
 const Allocator = std.mem.Allocator;
@@ -120,7 +125,9 @@ pub const Choice = struct {
     /// the lookaround stands (a lookbehind's body must end there).
     pos: usize,
     /// `star_greedy`: the star's first index in `positions`. `star_lazy`:
-    /// the pc of the starred atom. `look`: 1 for a negative lookahead.
+    /// the pc of the starred atom. `look`: bit 0 set for a negative
+    /// lookaround, bit 1 for a backward lookbehind (F6b: its body may end
+    /// anywhere).
     a: usize = 0,
 
     pub const Kind = enum(u8) { alt, star_greedy, star_lazy, look };
@@ -358,8 +365,8 @@ pub fn BacktrackerFor(comptime Unit: type) type {
                         // One more repetition, if the atom matches and moves.
                         self.core.positions.shrinkRetainingCapacity(top.pos_h);
                         const at = top.pos;
-                        if (at < self.core.input.len) {
-                            const inst = try format.decodeInstruction(self.core.bytecode, top.a);
+                        const inst = try format.decodeInstruction(self.core.bytecode, top.a);
+                        if (inst.opcode.isBackward() or at < self.core.input.len) {
                             const r = try self.core.matchSingleInstruction(inst, top.a, at);
                             if (r.matched and r.end_pos != at) {
                                 top.pos = r.end_pos;
@@ -375,7 +382,7 @@ pub fn BacktrackerFor(comptime Unit: type) type {
                         // already undone, above).
                         const c = top.*;
                         self.cutTo(self.stack.items.len - 1);
-                        if (c.a == 1) {
+                        if (c.a & 1 == 1) {
                             // Negative: the assertion holds.
                             pc.* = c.pc;
                             pos.* = c.pos;
@@ -431,6 +438,12 @@ pub fn BacktrackerFor(comptime Unit: type) type {
 
                 .BYTE, .CHAR_SET, .CHAR_SET_INV, .UNICODE_PROPERTY, .UNICODE_PROPERTY_INV, .UNICODE_SCRIPT, .UNICODE_SCRIPT_INV, .UNICODE_SCRIPT_EXTENSIONS, .UNICODE_SCRIPT_EXTENSIONS_INV => {
                     const r = try self.core.matchSingleInstruction(inst, pc, pos);
+                    if (!r.matched) return false;
+                    pos_ptr.* = r.end_pos;
+                },
+
+                .CHAR_B, .CHAR32_B, .CHAR_RANGE_B, .CHAR_RANGE_INV_B, .CHAR_CLASS_B, .CHAR_CLASS_INV_B, .CHAR_ANY_B, .CHAR_SET_B, .CHAR_SET_INV_B, .UNICODE_PROPERTY_B, .UNICODE_PROPERTY_INV_B, .UNICODE_SCRIPT_B, .UNICODE_SCRIPT_INV_B, .UNICODE_SCRIPT_EXTENSIONS_B, .UNICODE_SCRIPT_EXTENSIONS_INV_B, .BYTE_B, .BACK_REF_B, .BACK_REF_I_B => {
+                    const r = try self.core.matchSingleInstructionBack(inst, pc, pos);
                     if (!r.matched) return false;
                     pos_ptr.* = r.end_pos;
                 },
@@ -536,6 +549,16 @@ pub fn BacktrackerFor(comptime Unit: type) type {
                     self.look_top = @intCast(self.stack.items.len);
                 },
 
+                .LOOKBEHIND, .NEGATIVE_LOOKBEHIND => {
+                    // F6b: the body is made of backward atoms (`*_B`) and runs
+                    // right to left from here; it may end anywhere before.
+                    const end_pc = try self.core.findLookEnd(next, true);
+                    var c = self.choice(.look, end_pc + 1, pos);
+                    c.a = @as(usize, @intFromBool(inst.opcode == .NEGATIVE_LOOKBEHIND)) | 2;
+                    try self.push(c);
+                    self.look_top = @intCast(self.stack.items.len);
+                },
+
                 .LOOKBEHIND_FIXED, .NEGATIVE_LOOKBEHIND_FIXED => {
                     // B′: the body runs forward from `L` characters back.
                     // Fewer than `L` before `pos`: it can't match.
@@ -569,8 +592,8 @@ pub fn BacktrackerFor(comptime Unit: type) type {
                     const b = self.stack.items[idx];
                     // A lookbehind's body must end where it stands; one of
                     // fixed length always does (`compile` checks the length).
-                    if (inst.opcode == .LOOKBEHIND_END and pos != b.pos) return false;
-                    if (b.a == 1) {
+                    if (inst.opcode == .LOOKBEHIND_END and b.a & 2 == 0 and pos != b.pos) return false;
+                    if (b.a & 1 == 1) {
                         // Negative: its body matched, so the assertion
                         // fails, and none of the body's captures stay.
                         self.undoTo(b.trail_h);
@@ -665,9 +688,23 @@ pub fn BacktrackerFor(comptime Unit: type) type {
         /// last end.
         fn consumeAll(self: *Self, pc_atom: usize, pos: usize, mark: ?usize) MatchError!usize {
             const inst = try format.decodeInstruction(self.core.bytecode, pc_atom);
+            if (inst.opcode.isBackward()) return self.consumeAllBack(inst, pc_atom, pos, mark);
             var at = pos;
             while (at < self.core.input.len) {
                 const r = try self.core.matchSingleInstruction(inst, pc_atom, at);
+                if (!r.matched or r.end_pos == at) break;
+                at = r.end_pos;
+                if (mark != null) try self.core.positions.append(self.gpa(), at);
+            }
+            if (mark != null) try self.checkBytes();
+            return at;
+        }
+
+        /// `consumeAll` for a backward atom (F6b): right to left.
+        fn consumeAllBack(self: *Self, inst: format.Instruction, pc_atom: usize, pos: usize, mark: ?usize) MatchError!usize {
+            var at = pos;
+            while (at > 0) {
+                const r = try self.core.matchSingleInstructionBack(inst, pc_atom, at);
                 if (!r.matched or r.end_pos == at) break;
                 at = r.end_pos;
                 if (mark != null) try self.core.positions.append(self.gpa(), at);

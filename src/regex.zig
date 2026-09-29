@@ -161,11 +161,11 @@ pub const RegexError = parser_mod.ParseError || generator_mod.CodegenError || Al
     TierUnavailable,
     /// `unicode` and `v` together, a SyntaxError in ECMA-262.
     IncompatibleFlags,
-    /// A valid pattern this engine can't run yet: a lookbehind of variable
-    /// length or with a capture group inside (F6b step 1, B′; the rest of
-    /// lookbehind is F6b), `\q{...}`, a chained or bare-character class
-    /// set operand or a union with a nested class under `v`, a property of
-    /// strings, RegExp modifiers. Valid syntax that isn't implemented is
+    /// A valid pattern this engine can't run yet: a lookbehind matched
+    /// backward (variable length, captures or backreferences inside) under
+    /// `u`/`v` or with a lookaround inside, `\q{...}`, a chained or
+    /// bare-character class set operand or a union with a nested class
+    /// under `v`, a property of strings, RegExp modifiers. Valid syntax that isn't implemented is
     /// always this error, never a wrong result. C API:
     /// `ZREGEXP_ERROR_UNSUPPORTED`.
     UnsupportedFeature,
