@@ -99,9 +99,9 @@ test "D12: without u the search and advanceIndex step one code unit" {
 test "code_units: the parser's lookahead doesn't split an astral character under v" {
     // After `[` (and after a nested `]`) the parser fetches the next token
     // with `unicode_mode` off; `code_units` must stay off under `v`. The
-    // partial `v` grammar (full `v` is F5) only takes a nested class as an
-    // operand of `--`/`&&`, so `[[a]😀]` and `[[😀]a]` are
-    // InvalidClassSetOperand, as before F3d; these are the forms it takes.
+    // partial `v` grammar (full `v` is F5c) only takes a nested class as an
+    // operand of `--`/`&&`; `[[a]😀]` and `[[😀]a]` (a union with a nested
+    // class) are UnsupportedFeature since E0; these are the forms it takes.
     for ([_][]const u8{ "[\u{1F600}]", "[[\u{1F600}]--[a]]" }) |p| {
         try testing.expectEqual([2]usize{ 0, 4 }, (try search(p, v_opts, "\u{1F600}")).?);
         try testing.expect(!try hasUnit(p, v_opts, 0xD83D));
@@ -113,7 +113,7 @@ test "code_units: the parser's lookahead doesn't split an astral character under
     try testing.expect(!try hasUnit("[[\u{1F600}]&&[\u{1F600}a]]", v_opts, 0xD83D));
     try testing.expectEqual([2]usize{ 0, 4 }, (try search("[\u{1F600}]", u_opts, "\u{1F600}")).?);
     for ([_][]const u8{ "[[a]\u{1F600}]", "[[\u{1F600}]a]" }) |p| {
-        try testing.expectError(error.InvalidClassSetOperand, zregex.Regex.compileWithOptions(testing.allocator, p, v_opts));
+        try testing.expectError(error.UnsupportedFeature, zregex.Regex.compileWithOptions(testing.allocator, p, v_opts));
     }
     // Without `u`, `[[a]😀]` is the class `[[a]` then 😀 then `]`, and 😀
     // is split into its halves.

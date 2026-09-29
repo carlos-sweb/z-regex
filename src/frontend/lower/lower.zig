@@ -76,7 +76,7 @@ pub const Frontend = struct {
         errdefer gpa.destroy(self);
         self.gpa = gpa;
         self.lexer = Lexer.init(pattern);
-        self.lexer.unicode_mode = lex.unicode;
+        self.lexer.unicode_mode = lex.unicode or lex.v;
         self.lexer.v_mode = lex.v;
         self.lexer.code_units = !(lex.unicode or lex.v);
         self.lexer.possessive = lex.possessive;

@@ -942,3 +942,63 @@ test "F7b(6): the VM's set cache doesn't mix the letters of an i literal" {
         } else try testing.expect(!found);
     }
 }
+
+test "E0: valid syntax that isn't implemented is UnsupportedFeature, never a wrong result" {
+    // `/^[\q{abc|d}]$/v` used to read `\q` as the letter q and match "q",
+    // "|" and "a" but not "abc". Every row: V8 12.4 accepts the pattern.
+    const v: zregex.CompileOptions = .{ .v = true };
+    const cases = [_]struct { []const u8, zregex.CompileOptions }{
+        .{ "^[\\q{abc|d}]$", v },
+        .{ "[\\q{a}]", v },
+        .{ "[\\p{L}--\\d]", v }, // bug B: a shorthand operand
+        .{ "[\\p{L}--a]", v }, // bug B: a bare character operand
+        .{ "[[a][b]]", v }, // a union with nested classes
+        .{ "[a[b]]", v },
+        .{ "[[a]--[b]--[c]]", v }, // the same operator chained
+        .{ "[[a]&&[b]&&[c]]", v },
+        .{ "\\p{RGI_Emoji}", v }, // a property of strings
+        .{ "[\\p{Basic_Emoji}]", v },
+        .{ "(?i:a)", .{} }, // RegExp modifiers (ES2025)
+        .{ "(?-m:^a)", .{ .multiline = true } },
+        .{ "(?i-s:a.)", .{ .unicode = true } },
+    };
+    for (cases) |c| {
+        try testing.expectError(error.UnsupportedFeature, zregex.Regex.compileWithOptions(testing.allocator, c[0], c[1]));
+    }
+}
+
+test "E0: v applies u's early errors; invalid class set syntax stays a SyntaxError" {
+    // Every row: V8 12.4 throws a SyntaxError.
+    const v: zregex.CompileOptions = .{ .v = true };
+    const cases = [_]struct { []const u8, zregex.CompileOptions, anyerror }{
+        .{ "\\q", v, error.InvalidEscape },
+        .{ "[\\q]", v, error.InvalidEscape },
+        .{ "\\q{a}", v, error.InvalidEscape },
+        .{ "\\z", v, error.InvalidEscape },
+        .{ "[a--]", v, error.InvalidClassSetOperand },
+        .{ "[--a]", v, error.InvalidClassSetOperand },
+        .{ "[--\\d]", v, error.InvalidClassSetOperand },
+        // A lexer error right after a nested class frees it (the testing
+        // allocator catches a leak): found by the fuzz stress in E0.
+        .{ "[[a]\\z]", v, error.InvalidEscape },
+        .{ "[[a]--[b]\\z]", v, error.InvalidEscape },
+        .{ "[[a]--[b]&&[c]]", v, error.MixedClassSetOperators },
+        .{ "\\P{RGI_Emoji}", v, error.UnknownUnicodeProperty },
+        .{ "\\p{RGI_Emoji}", .{ .unicode = true }, error.UnknownUnicodeProperty },
+        .{ "(?x:a)", .{}, error.UnexpectedToken },
+        .{ "(?ii:a)", .{}, error.UnexpectedToken },
+        .{ "(?-:a)", .{}, error.UnexpectedToken },
+    };
+    for (cases) |c| {
+        try testing.expectError(c[2], zregex.Regex.compileWithOptions(testing.allocator, c[0], c[1]));
+    }
+    // What `v` does implement still compiles, and without `v` `\q` is the
+    // letter q (Annex B).
+    for ([_][]const u8{ "[\\p{L}--\\p{Lu}]", "[[a-z]&&[^aeiou]]", "[\\p{L}--[a]]" }) |p| {
+        var re = try zregex.Regex.compileWithOptions(testing.allocator, p, v);
+        re.deinit();
+    }
+    var q = try zregex.Regex.compile(testing.allocator, "^\\q$");
+    defer q.deinit();
+    try testing.expect(try q.test_("q"));
+}

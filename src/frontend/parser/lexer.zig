@@ -433,6 +433,11 @@ pub const Lexer = struct {
                             // Non-capturing group (?:
                             self.pos += 2; // consume '?:'
                             return Token.simple(.non_capturing_group_start, start_pos);
+                        } else if (self.isModifiersGroup(self.pos + 1)) {
+                            // `(?i:`, `(?-m:`, `(?i-s:`: RegExp modifiers
+                            // (ES2025), valid syntax that isn't implemented
+                            // (pending until further notice).
+                            return error.UnsupportedFeature;
                         }
                     }
                     // If not recognized, treat as error or regular group
@@ -620,6 +625,36 @@ pub const Lexer = struct {
     /// character; shorthand classes (`\d`, `\D`, `\w`, `\W`, `\s`, `\S`)
     /// are returned as their own tokens so the parser can splice their
     /// members into the enclosing class (see `parser.zig::parseCharClass`).
+    /// Whether `pattern[at..]` starts a RegExp modifiers group's flags:
+    /// `[ims]*(-[ims]*)?:` with at least one flag and none repeated. Other
+    /// shapes (`(?-:`, `(?ii:`, `(?x:`, `(?i)`) are left to the parser's
+    /// SyntaxError.
+    fn isModifiersGroup(self: *const Self, at: usize) bool {
+        var seen = [_]bool{false} ** 3;
+        var flags: usize = 0;
+        var dash = false;
+        var i = at;
+        while (i < self.pattern.len) : (i += 1) {
+            const c = self.pattern[i];
+            const idx: usize = switch (c) {
+                'i' => 0,
+                'm' => 1,
+                's' => 2,
+                '-' => {
+                    if (dash) return false;
+                    dash = true;
+                    continue;
+                },
+                ':' => return flags > 0,
+                else => return false,
+            };
+            if (seen[idx]) return false;
+            seen[idx] = true;
+            flags += 1;
+        }
+        return false;
+    }
+
     fn parseClassEscape(self: *Self, start_pos: usize) !Token {
         if (self.pos >= self.pattern.len) {
             return error.InvalidEscape;
@@ -651,6 +686,14 @@ pub const Lexer = struct {
             'x' => return try self.parseHexEscape(start_pos),
             'u' => return try self.parseUnicodeEscape(start_pos),
             'c' => return try self.parseControlEscape(start_pos, true),
+            // `\q{...}` (ClassStringDisjunction) is valid only under `v` and
+            // isn't implemented (F5c); `\q` otherwise follows the identity
+            // escape rules below.
+            'q' => {
+                if (self.v_mode and self.pos < self.pattern.len and self.pattern[self.pos] == '{') return error.UnsupportedFeature;
+                if (self.unicode_mode) return error.InvalidEscape;
+                return Token.escaped('q', start_pos);
+            },
             '0' => {
                 if (self.pos < self.pattern.len and isAsciiDigit(self.pattern[self.pos])) {
                     // Legacy Annex B octal (`\01`), never valid under `u`.
