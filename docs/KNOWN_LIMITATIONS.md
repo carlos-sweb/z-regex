@@ -1746,7 +1746,10 @@ get RepeatMatcher steps 4 and 2.b (F7a(4)), which the recursive matcher never ha
   none new. The 11 whose only difference was a capture outside the lookbehind (steps 4 and
   2.b) are fixed; the 7 left are 3 not caused by the lookbehind (`v` with `i` folding, F5c;
   a step limit; V8 inside a pair), 3 V8 matches inside a surrogate pair (below) and 1 `v`
-  with `i` (F5c). No fixed-length pattern is `UnsupportedFeature`; 4,298 of the other
+  with `i` (F5c). *(E1 P3: the 7 were measured with an intermediate build during B′; the B′
+  commit `4f524d8` itself gives 6, as do v0.5.0 and v0.5.1 (`lbdiff-v8`, checked in E1).
+  The one gone is the `iv` pattern whose difference was outside the lookbehind; not E0.)*
+  No fixed-length pattern is `UnsupportedFeature`; 4,298 of the other
   4,301 are, and the 3 that compile agree with V8. npm: the 29 fixed-length patterns agree
   with V8 in all 3,262 runs.
 - LookLinear on vs off over the 1,415 corpus patterns with a lookbehind that compile: 1,298
