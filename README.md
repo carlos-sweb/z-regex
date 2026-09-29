@@ -51,9 +51,8 @@ An ECMA-262 regular expression engine in Zig, independent of the JavaScript engi
 | `v`, `\q{…}`, case folding under `v` | T1 | F5c (runs on the backtracker) |
 | Backreferences | T2 | OK (backtracker) |
 | Lookahead | T2 | OK (backtracker) |
-| Lookbehind, fixed length, no captures | T2 | OK (backtracker, F6b step 1) |
-| Lookbehind, variable length, captures or backreferences, no lookarounds inside, no `u`/`v` | T2 | OK (backtracker, backward atoms, F6b(1)-(3)) |
-| Lookbehind, any other | T2 | `error.UnsupportedFeature` (full F6b) |
+| Lookbehind: fixed length without captures (any mode), or variable length, captures and backreferences inside (no `u`/`v`) | T2 | OK (backtracker; backward atoms since v0.6.0, F6b) |
+| Lookbehind with a lookaround inside a backward body, or matched backward under `u`/`v` | T2 | `error.UnsupportedFeature` (lookaround inside: 1.x) |
 
 "OK" means it works and passes the tests. It does **not** mean optimized. Which executor runs a
 pattern is decided at compile time from the pattern (`zregex.analyze`); the results are the
@@ -64,7 +63,7 @@ same whichever runs it.
 With Zig 0.16. Add the dependency (this writes the hash into `build.zig.zon`):
 
 ```sh
-zig fetch --save https://github.com/carlos-sweb/z-regex/archive/refs/tags/v0.5.1.tar.gz
+zig fetch --save https://github.com/carlos-sweb/z-regex/archive/refs/tags/v0.6.0.tar.gz
 ```
 
 In `build.zig`:
@@ -249,7 +248,7 @@ The cross-engine benchmark: `bench/compare/prepare.sh`, then `node bench/compare
   non-ASCII ranges is partial.
 - **T2 uses the current backtracker**, bounded by a step budget: a pathological pattern stops
   with `error.StepLimitExceeded` instead of an answer.
-- **Lookbehind (F6b step 1, F6b(1)-(3)):** of fixed length without captures or
+- **Lookbehind (F6b, v0.6.0):** of fixed length without captures or
   backreferences inside (29 of the 34 lookbehind patterns in the npm corpus), or outside
   `u`/`v` any other without a lookaround inside (captures saved and backreferences compared
   right to left); any other is `error.UnsupportedFeature` (C API
@@ -278,6 +277,9 @@ The full list, with measurements: [docs/KNOWN_LIMITATIONS.md](docs/KNOWN_LIMITAT
 - **v0.5.1 (E0):** honest errors: valid syntax that isn't implemented is
   `UnsupportedFeature`; `v` applies `u`'s early errors
   ([release notes](docs/RELEASE_NOTES_v0.5.1.md)).
+- **v0.6.0 (E1, F6b):** lookbehind matched backward outside `u`/`v`: variable length,
+  captures and backreferences inside; test262 2994/3017
+  ([release notes](docs/RELEASE_NOTES_v0.6.0.md)).
 - **To 1.0** ([docs/plans/ROADMAP_1.0.md](docs/plans/ROADMAP_1.0.md)): E0 (v0.5.1) → E1, full
   F6b (v0.6.0) → E3, F7c: API freeze and documentation (v1.0.0). RegExp modifiers: pending
   until further notice.
@@ -285,11 +287,10 @@ The full list, with measurements: [docs/KNOWN_LIMITATIONS.md](docs/KNOWN_LIMITAT
   F5b done (full case folding under `i`); F5c (full `v`) pending.
 - **F6a, T2 without lookbehind: done** (explicit-stack backtracker, capture trail,
   LookLinear; F6a(1)–(3)).
-- **F6b, lookbehind:** step 1 done (B′: fixed length without captures, on the
-  explicit-stack backtracker; the recursive matcher is retired). Step 2 (matching
-  backward) outside `u`/`v`: F6b(1) variable length, F6b(2) captures and F6b(3)
-  backreferences (right to left) done. Pending: `u`/`v`; a lookaround inside a backward
-  lookbehind is a 1.x decision.
+- **F6b, lookbehind: closed in v0.6.0.** B′ (fixed length without captures, forward) and
+  matching backward outside `u`/`v` (variable length, captures, backreferences). Not
+  covered, `UnsupportedFeature`: a lookaround inside a backward lookbehind (1.x) and any
+  backward lookbehind under `u`/`v`.
 
 No dates. Phases and exit criteria: [docs/REGEX_TIERS_PLAN.md](docs/REGEX_TIERS_PLAN.md).
 

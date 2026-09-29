@@ -5,7 +5,7 @@ zregex regex engine. Every claim below was checked by direct execution against t
 current source tree (compiling small probe programs against the `zregex` module and
 observing the actual result), not inferred from design docs or past status reports.
 
-## Version: 0.5.1 (E0: valid syntax that isn't implemented is `error.UnsupportedFeature`, never a wrong result, and `v` applies `u`'s early errors; see "E0: honest errors" below). 0.5.0 was F7a: bugs D and E, RepeatMatcher steps 4 and 2.b on the backtracker; F7b: compile cost, loop guard, LookLinear under `iu`, C API `max_steps`; F6b step 1 (B′): fixed-length lookbehind on the explicit-stack backtracker, the recursive matcher retired, any other lookbehind is `UnsupportedFeature`; every C API function records the error name; test262 2968/3017; see "Fixed in F7a", "F7b closed" and "F6b step 1 (B′)" below; release notes: `docs/RELEASE_NOTES_v0.5.0.md`). 0.4.0 was F5a: `u` and `\p{...}` on T0's VM; F6a: explicit-stack backtracker, capture trail, LookLinear; F5b: full case folding under `i`; test262 2978/3017; see "F5a", "F6a" and "F5b" below). 0.3.2 was 0.3.0 plus the SIMD pairwise literal search in the literal fast path (0.3.1) and `Regex.iterator` (0.3.2). 0.3.0 closed T0: F4a and F4b, test262 2856/3017; see "F4a" and "F4b" below. v0.2.0 was F1 (test262 2846/3017, see "F1 closed" below). The rest of this
+## Version: 0.6.0 (E1, F6b: lookbehind matched backward outside `u`/`v`, with variable length, captures and backreferences inside, architecture B; a lookaround inside a backward body and any backward body under `u`/`v` are `UnsupportedFeature`; test262 2994/3017, `lookBehind/` 32/34; see "F6b (0.6.0)" below; release notes: `docs/RELEASE_NOTES_v0.6.0.md`). 0.5.1 was E0 (valid syntax that isn't implemented is `error.UnsupportedFeature`, never a wrong result, and `v` applies `u`'s early errors; see "E0: honest errors" below). 0.5.0 was F7a: bugs D and E, RepeatMatcher steps 4 and 2.b on the backtracker; F7b: compile cost, loop guard, LookLinear under `iu`, C API `max_steps`; F6b step 1 (B′): fixed-length lookbehind on the explicit-stack backtracker, the recursive matcher retired, any other lookbehind is `UnsupportedFeature`; every C API function records the error name; test262 2968/3017; see "Fixed in F7a", "F7b closed" and "F6b step 1 (B′)" below; release notes: `docs/RELEASE_NOTES_v0.5.0.md`). 0.4.0 was F5a: `u` and `\p{...}` on T0's VM; F6a: explicit-stack backtracker, capture trail, LookLinear; F5b: full case folding under `i`; test262 2978/3017; see "F5a", "F6a" and "F5b" below). 0.3.2 was 0.3.0 plus the SIMD pairwise literal search in the literal fast path (0.3.1) and `Regex.iterator` (0.3.2). 0.3.0 closed T0: F4a and F4b, test262 2856/3017; see "F4a" and "F4b" below. v0.2.0 was F1 (test262 2846/3017, see "F1 closed" below). The rest of this
 header describes the earlier state: 402/402 unit/integration tests passing, 168/168 (100%) on a test262-derived
 conformance sample (Phases 0, 1, 2 (now including duplicate named groups across
 mutually exclusive alternation branches, e.g. `(?<x>a)|(?<x>b)`, matching JS exactly),
@@ -39,9 +39,9 @@ older internal notes had previously (incorrectly) listed as broken:
 - **Lookahead** `(?=...)`, `(?!...)` and **lookbehind** `(?<=...)`, `(?<!...)` — all four
   forms are zero-width and behave correctly (verified with `find`, not `test_`, since
   these assertions don't consume input — see the `test_` vs `find` note below). Since
-  F6b step 1 a lookbehind has to be of fixed length without captures, or (F6b(1)-(3))
-  outside `u`/`v` without a lookaround inside; any other is `error.UnsupportedFeature`
-  (see "F6b step 1 (B′)", "F6b(1)", "F6b(2)" and "F6b(3)").
+  0.6.0 (F6b) a lookbehind runs if it is of fixed length without captures, or, outside
+  `u`/`v`, has no lookaround inside a body matched backward; any other is
+  `error.UnsupportedFeature` (see "F6b (0.6.0)").
 - **`\W`, `\S` negation** — correctly inverted (an older internal note claimed these were
   "parsed but not correctly inverted"; that is no longer true).
 - **Counted quantifiers** `{n}`, `{n,}`, `{n,m}` and their lazy forms `{n,m}?`.
@@ -1760,100 +1760,70 @@ get RepeatMatcher steps 4 and 2.b (F7a(4)), which the recursive matcher never ha
 - Binary (`scripts/measure_binary.sh`): ReleaseFast 1,119,168 -> 1,096,112 B (-23,056),
   ReleaseSmall 711,928 -> 696,504 B (-15,424).
 
-### F6b(1): variable-length lookbehind without captures (architecture B)
+### F6b (0.6.0): lookbehind, matched backward
 
-**What runs.** Outside `u`/`v`, a lookbehind that isn't B′'s and has no capture group,
-backreference or lookaround inside (`hir.lookbehindsSupported`) runs its body backward on
-the explicit-stack backtracker. Architecture B of E1's spike (P3): the code generator emits
-the body in reverse (sequences and literals) and turns each of its atoms into its backward
-form, the same opcode with the high bit set (`CHAR_B` = `CHAR | 0x80`, …, `BYTE_B`; same
-operands). A backward atom tests the character before the position
-(`matchSingleInstructionBack`, `Subject.decodeBefore`) and moves to its start; the star's
-fast paths (`consumeAll`, `star_lazy`) consume right to left. The new `LOOKBEHIND` /
-`NEGATIVE_LOOKBEHIND` open the same barrier as a lookahead, and the body may end anywhere
-before. No state holds the direction, so the forward path doesn't test it per character
-(E1 P3: callgrind within ±1 % on the 16 cases, where direction as executor state wasn't).
-LookLinear doesn't delegate these bodies (backward delegation is for 1.x). Still
-`error.UnsupportedFeature` after F6b(1): a capture group inside (lifted by F6b(2), below), a
-backreference inside (F6b(3)), a lookaround inside a variable body, and a variable body
-under `u`/`v`.
+**What it covers.** Every lookbehind outside `u`/`v` except one with a lookaround inside a
+body matched backward:
 
-**Measured.**
-- test262: 2968 -> **2972** in UTF-16 and WTF-8 (`lookBehind/{misc, variable-length}.js`,
-  sloppy and strict); `lookBehind/` 6/34 -> 10/34. The 24 left, and `named-groups/
-  lookbehind.js`, all have a capture group or a backreference inside the lookbehind.
-- Against V8 (`lbdiff-v8`, 5,580 patterns): the 1,279 of fixed length unchanged (the same 6
-  with a difference); 1,466 of the other 4,301 now agree with V8, none new or changed. The
-  2,832 left are all `UnsupportedFeature`: 724 under `u`/`v`, 1,561 with a capture group
-  inside, 307 with a backreference, 240 with a lookaround inside.
-- Oracle without V8 (`lbdiff`): 4,919 (body, flags) pairs compared (1,496 before), 346,530
-  runs, 0 discrepancies.
-- `differential-v8` identical to `diff-F7a.json`; pfdiff, t1diff and lldiff unchanged.
-- Binary (`scripts/measure_binary.sh`): ReleaseFast 1,098,160 -> 1,109,728 B (+11,568),
-  ReleaseSmall 697,864 -> 702,664 B (+4,800).
+| Lookbehind | How it runs | Since |
+|---|---|---|
+| Fixed length, no capture group inside | Forward from `L` characters back (`LOOKBEHIND_FIXED L`); LookLinear may delegate it | B′ (0.5.0), any mode |
+| Variable length, no capture group or backreference inside | Backward: body in reverse, backward atoms | F6b(1), commit a |
+| With capture groups inside (fixed length or not) | Backward; a group saves its end first | F6b(2), commit b |
+| With backreferences inside | Backward; the group's text compared right to left | F6b(3), commit c |
 
-### F6b(2): lookbehind captures, right to left
+**What it doesn't cover (`error.UnsupportedFeature`, never a wrong result).**
+- **A lookaround nested inside a lookbehind matched backward** (B6): `(?<=a(?=b)c+)`,
+  `nested-lookaround.js`. A 1.x decision. A lookaround inside a fixed lookbehind (B′,
+  forward) runs, and so does a backward lookbehind inside a fixed one (`(?<=a(?<=b+))`: the
+  outer runs forward, the inner backward, with different barriers; covered by the
+  differential).
+- **Any lookbehind matched backward under `u`/`v`** (variable length, captures or
+  backreferences inside): `(?<=a+)b/u`, `named-groups/lookbehind.js`. Under `u`/`v` only
+  B′'s form runs.
 
-**What runs.** Outside `u`/`v`, a lookbehind with capture groups inside and no
-backreference or lookaround inside runs backward too, whether its length is fixed or not
-(B′'s forward path keeps only the capture-free fixed ones). In a backward body the code
-generator emits a group as `SAVE_END`, the body in reverse, `SAVE_START`: the group's end
-is reached first, as in the spec's backward matching, so `(?<=(\d+)(\d+))$` on `"1053"`
-gives `"1"` and `"053"` (the second group, matched first, takes all it can). The trail
-undoes a negative lookbehind's captures as before. Still `error.UnsupportedFeature` after
-F6b(2): a backreference inside (lifted by F6b(3), below), a lookaround inside a backward
-body, and any backward body under `u`/`v`.
+**How it works (architecture B, chosen by E1's spike P3).** The code generator emits a
+backward body in reverse (sequences, literals; a group as `SAVE_END`, body, `SAVE_START`)
+and turns each of its atoms into its backward form, the same opcode with the high bit set
+(`CHAR_B` = `CHAR | 0x80` … `BYTE_B`, and `BACK_REF_B` / `BACK_REF_I_B`; same operands). A
+backward atom tests the character before the position (`matchSingleInstructionBack`,
+`Subject.decodeBefore`) and moves to its start; the star's fast paths (`consumeAll`,
+`star_lazy`) consume right to left; `checkBackRefBack` compares a group's text from its end
+to its start against the text before the position, decoding each side on its own (under
+`i`, equal characters of different lengths in WTF-8 compare: U+2C65 is three bytes, U+023A
+two). `LOOKBEHIND` / `NEGATIVE_LOOKBEHIND` open the same barrier as a lookahead and the body
+may end anywhere before; the trail undoes a negative one's captures. No executor state
+holds the direction, so the forward path doesn't test it per character: P3's callgrind was
+within ±1 % on 16 cases for B, where direction as executor state (A) reached +1.84 %.
+LookLinear doesn't delegate backward bodies (backward delegation is for 1.x). Captures come
+out as the spec's backward matching gives them: `(?<=(\d+)(\d+))$` on `"1053"` gives
+`"1"` and `"053"`; a group to the right of a backreference is matched first, and one that
+hasn't participated yet matches empty (`(?<=(\w)\1)x` on `"aax"` gives `[2,3]`, V8 too).
 
-**Measured.**
-- test262: 2972 -> **2984** in UTF-16 and WTF-8 (`lookBehind/{alternations, captures,
-  captures-negative, do-not-backtrack, greedy-loop, sticky}.js`, sloppy and strict);
-  `lookBehind/` 10/34 -> 22/34. The 14 left: 10 with a backreference inside
-  (`back-references`, `back-references-to-captures`, `mutual-recursive`, `sliced-strings`,
-  `start-of-line`), 2 with a lookaround inside (`nested-lookaround`) and 2 under `u`
-  (`named-groups/lookbehind.js`).
-- Against V8 (`lbdiff-v8`): the 1,279 of fixed length unchanged (the same 6); of the 1,561
-  patterns F6b(1) left out for a capture inside, 692 now agree with V8 and 869 are still
-  `UnsupportedFeature` for another reason (533 a backreference inside, 336 a lookaround
-  inside); none new or changed. The 2,140 left are all `UnsupportedFeature`: 724 under
-  `u`/`v`, 840 with a backreference inside, 576 with a lookaround inside.
-- Oracle without V8 (`lbdiff`): 13,142 pairs compared (4,919 after F6b(1)), 856,356 runs,
-  0 discrepancies.
-- `differential-v8` identical to `diff-F7a.json`; pfdiff, t1diff and lldiff unchanged.
-- Binary: ReleaseFast 1,109,728 -> 1,109,712 B (-16), ReleaseSmall 702,664 -> 702,632 B
-  (-32).
+**Measured (UTF-16 and WTF-8 alike).**
 
-### F6b(3): lookbehind backreferences, right to left
+| | Before F6b (0.5.1) | F6b(1) | F6b(2) | F6b(3) = 0.6.0 |
+|---|---|---|---|---|
+| test262, entries that pass | 2968/3017 | 2972 | 2984 | **2994/3017** |
+| test262 `lookBehind/` | 6/34 | 10/34 | 22/34 | **32/34** |
+| `lbdiff-v8` "other" patterns agreeing with V8 (of 4,301) | 3 | 1,469 | 2,161 | **2,733** |
+| `lbdiff` oracle pairs compared (of 28,910) | 1,496 | 4,919 | 13,142 | 13,142 |
+| Binary ReleaseFast / ReleaseSmall (B) | 1,098,160 / 697,864 | 1,109,728 / 702,664 | 1,109,712 / 702,632 | 1,111,536 / 704,328 |
 
-**What runs.** Outside `u`/`v`, a lookbehind with a backreference inside runs backward (a
-backreference is never of fixed length, so B′ never takes one). In a backward body the code
-generator emits it as `BACK_REF_B` / `BACK_REF_I_B` (`BACK_REF | 0x80`), and
-`checkBackRefBack` compares the group's text from its end to its start against the text
-before the position, ending at the start of what matched: the spec's BackreferenceMatcher
-with direction backward. Each side is decoded with `decodeBefore` on its own, so under `i`
-equal characters of different lengths in WTF-8 compare (U+2C65 is three bytes, U+023A
-two). A group to the right of the backreference is matched first; one that hasn't
-participated yet matches empty (`(?<=(\w)\1)x` on `"aax"` gives `[2,3]`, V8 too).
-
-**Not implemented (a 1.x decision, B6): a lookaround nested inside a lookbehind matched
-backward is `error.UnsupportedFeature`.** `(?<=a(?=b)c+)` and `nested-lookaround.js` are the
-cases. A lookaround inside a fixed lookbehind (B′, forward) and a backward lookbehind inside
-a fixed one (`(?<=a(?<=b+))`, different barriers) run. Also still unsupported: any backward
-body under `u`/`v`.
-
-**Measured.**
-- test262: 2984 -> **2994** in UTF-16 and WTF-8 (`lookBehind/{back-references,
-  back-references-to-captures, mutual-recursive, sliced-strings, start-of-line}.js`, sloppy
-  and strict); `lookBehind/` 22/34 -> 32/34. The 2 left are `nested-lookaround` (1.x);
-  `named-groups/lookbehind.js` (2, under `u`) is the other lookbehind entry not passing.
-- Against V8 (`lbdiff-v8`): the 1,279 of fixed length unchanged (the same 6); of the 840
-  patterns F6b(2) left out for a backreference inside, 572 now agree with V8 and 268 are
-  still `UnsupportedFeature` for a lookaround inside; none new or changed. The 1,568 left
-  are all `UnsupportedFeature`: 724 under `u`/`v`, 844 with a lookaround inside.
-- Oracle without V8 (`lbdiff`): unchanged, 13,142 pairs, 0 discrepancies (its domain
-  excludes backreferences; lbdiff-v8 and test262 cover them).
-- `differential-v8` identical to `diff-F7a.json`; pfdiff, t1diff and lldiff unchanged.
-- Binary: ReleaseFast 1,109,712 -> 1,111,536 B (+1,824), ReleaseSmall 702,632 -> 704,328 B
-  (+1,696).
+- test262: the 2 `lookBehind/` entries left are `nested-lookaround` (1.x); the other
+  lookbehind entry not passing is `named-groups/lookbehind.js` (2, under `u`). The 23 that
+  run and don't pass: those 4, 4 host (JS lexer) and 15 not extractable.
+- `lbdiff-v8` (5,580 patterns of the F2c corpus, every `lastIndex`, UTF-16): the 1,279 of
+  fixed length never changed (the same 6 with a difference, none caused by the direction);
+  of the 4,301 others, the 1,568 not agreeing are all `UnsupportedFeature`: 724 under
+  `u`/`v`, 844 with a lookaround inside a backward body. No pattern ever gave a different
+  result.
+- `lbdiff` (the oracle without V8: `(?<=B)` holds at `pos` if and only if `^(?:B)$` matches
+  some slice ending there): 0 discrepancies at every step (856,356 runs at the end). Its
+  domain excludes anchors, `\b`, backreferences and lookarounds; the 15,532 pairs it still
+  leaves out as `UnsupportedFeature` are all `u`/`v` ones.
+- `differential-v8` identical to `diff-F7a.json`; pfdiff, t1diff and lldiff unchanged at
+  every step. Details of the steps: `docs/plans/E1.md`.
 
 ### Known divergence: V8 matches inside a surrogate pair under `u`/`v`
 
