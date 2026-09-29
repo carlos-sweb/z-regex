@@ -1,0 +1,82 @@
+#!/usr/bin/env bash
+# The gate every phase and commit closes with (F7c-1: brought from the
+# scratch tools into the repo). Runs from any directory; writes its logs and
+# outputs to OUTDIR (default zig-out/gate) and ends with a verdict:
+# GATE-PASS, or GATE-FAIL and the reasons (exit 1).
+#
+#   scripts/gate.sh [OUTDIR]
+#
+# Needs Zig 0.16, Node (scripts/test262: `npm ci`, and the test262 checkout
+# of scripts/test262/fetch.sh in .test262/), python3 and GNU coreutils.
+# Zig's cache is emptied after each group of steps: it grows by gigabytes
+# over a gate.
+set -u
+cd "$(dirname "$0")/.."
+mkdir -p "${1:-zig-out/gate}"
+G=$(cd "${1:-zig-out/gate}" && pwd)
+R=tests/differential/reference
+C=tests/corpus
+exec > >(tee "$G/gate.log") 2>&1
+
+clean_cache() { rm -rf .zig-cache; echo "cache cleaned ($1)"; }
+
+echo "== debug"; timeout 900 zig build test >"$G/debug.log" 2>&1; echo "debug=$?"
+echo "== safe"; timeout 900 zig build test -Doptimize=ReleaseSafe >"$G/safe.log" 2>&1; echo "safe=$?"
+echo "== layers"; timeout 300 zig build check-layers 2>&1 | tail -1
+echo "== fuzz"; timeout 1200 zig build test-fuzz-stress >"$G/fuzz.log" 2>&1; echo "fuzz=$?"
+echo "== fuzz (ReleaseSafe)"; timeout 1500 zig build test-fuzz-stress -Doptimize=ReleaseSafe >"$G/fuzz-rs.log" 2>&1; echo "fuzzrs=$?"
+clean_cache tests
+
+echo "== t262"; timeout 1500 zig build test262 >"$G/t262.log" 2>&1; echo "t262=$?"; grep -E "engine suite|baseline check|->" "$G/t262.log" | head -12
+echo "== t262w"; timeout 1500 zig build test262-wtf8 >"$G/t262w.log" 2>&1; echo "t262w=$?"; grep -E "engine suite|baseline check|->" "$G/t262w.log" | head -12
+clean_cache test262
+
+echo "== dv8"; timeout 1200 zig build differential-v8 -- --seed 3868 --count 4000 >"$G/dv8.log" 2>&1; echo "dv8=$?"; cp zig-out/differential/results.json "$G/dv8.json"
+python3 - "$R/diff-F7a.json" "$G/dv8.json" <<'PY'
+import json,collections,sys
+def load(p):
+    d=json.load(open(p)); c=collections.Counter(); v={}
+    for x in d['divergences']:
+        k=(x['flags'],x['source'],x['subject']); c[k]+=1; v[k]=(x['kind'],json.dumps(x.get('got')),json.dumps(x.get('expected')))
+    return d['counts'],c,v
+ca,a,va=load(sys.argv[1]); cb,b,vb=load(sys.argv[2])
+print('ref',ca); print('now',cb)
+gone=[k for k in a if k not in b]; new=[k for k in b if k not in a]; ch=[k for k in a if k in b and (va[k]!=vb[k] or a[k]!=b[k])]
+print('dv8 gone',len(gone),'new',len(new),'changed',len(ch))
+for k in (new+ch)[:20]: print('  NEW/CH',k,vb[k])
+PY
+echo "== lbv8"; timeout 2400 zig build lbdiff-v8 >"$G/lbv8.log" 2>&1; echo "lbv8=$?"; grep -E "^\{|lbdiff-v8 against" "$G/lbv8.log"
+echo "== lbdiff"; timeout 1800 zig build lbdiff >"$G/lbdiff.log" 2>&1; echo "lbdiff=$?"; grep -E "^\| total" "$G/lbdiff.log"; tail -1 "$G/lbdiff.log"
+echo "== ivdiff"; timeout 1200 zig build ivdiff >"$G/ivdiff.log" 2>&1; echo "ivdiff=$?"; grep -E "^\{\"patterns|ivdiff against" "$G/ivdiff.log"
+clean_cache differentials
+
+echo "== pfdiff"
+timeout 900 zig build pfdiff -- "$C/f2c.txt" "$C/f2c-2.txt" >"$G/pf.out" 2>&1; echo "pf=$?"
+timeout 900 zig build pfdiff -- --slots "$G/slot.tsv" "$C/f2c.txt" "$C/f2c-2.txt" >"$G/pfs.out" 2>&1; echo "pfs=$?"
+grep -E "^tagged" "$G/pf.out" | tail -1; grep -E "^tagged" "$G/pfs.out" | tail -1
+cmp -s "$G/slot.tsv" "$R/pfdiff-slots.tsv" && echo SLOTS-IDENTICAL || echo SLOTS-DIFFER
+grep -q "BT DIFF" "$G/pf.out" && echo BTDIFF-FOUND || echo BTDIFF-NONE
+clean_cache pfdiff
+
+echo "== t1diff"; timeout 1500 zig build t1diff -- "$C/f2c.txt" "$C/f2c-2.txt" "$C/npm.tsv" 2>"$G/t1.err" >"$G/t1.tsv"; echo "t1=$?"; grep -E "^files" "$G/t1.err" | tail -1
+if [ -s "$G/t1.tsv" ]; then echo T1-DIFFER; node scripts/gate/t1diff-arbiter.mjs "$G/t1.tsv"; else echo T1-NONE; fi
+clean_cache t1diff
+
+echo "== lldiff"; timeout 1500 zig build lldiff -- "$C/f2c.txt" "$C/f2c-2.txt" "$C/npm.tsv" >"$G/lldiff.log" 2>&1; echo "lldiff=$?"; grep -E "DIFFERENCES" "$G/lldiff.log" | tail -1
+clean_cache lldiff
+
+echo "== binary (informational)"; timeout 1500 scripts/measure_binary.sh 2>&1 | tail -2
+clean_cache binary
+
+echo "== verdict"
+L="$G/gate.log"
+fail=0
+grep -qE "^(debug|safe|fuzz|fuzzrs|t262|t262w|dv8|lbv8|lbdiff|ivdiff|pf|pfs|t1|lldiff)=[1-9]" "$L" && { echo "FAIL: a step exited non-zero"; fail=1; }
+grep -qE "check-layers: .* 0 violation" "$L" || { echo "FAIL: layers"; fail=1; }
+grep -q "baseline check: ok" "$G/t262.log" && grep -q "baseline check: ok" "$G/t262w.log" || { echo "FAIL: test262 baseline"; fail=1; }
+grep -qE "dv8 gone [0-9]+ new 0 changed 0" "$L" || { echo "FAIL: differential-v8 new or changed"; fail=1; }
+grep -qE "SLOTS-DIFFER|BTDIFF-FOUND|T1-DIFFER" "$L" && { echo "FAIL: an internal differential differs"; fail=1; }
+grep -qE "vs backtracker [1-9]|vs plain VM [1-9]|DISCREPANCIES [1-9]|DIFFERENCES [1-9]|diffs wtf8 [1-9]|utf16 [1-9]|TwoPassMismatch [1-9]" "$L" && { echo "FAIL: non-zero differences"; fail=1; }
+[ $fail = 0 ] && echo GATE-PASS || echo GATE-FAIL
+echo "== done"
+exit $fail

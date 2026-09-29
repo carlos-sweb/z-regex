@@ -201,7 +201,7 @@ Medido con la `.so` de `c5aa744` contra V8 (Node 22):
 | Sub-fase | Contenido | Días | ¿Bloquea v0.7.0? |
 |---|---|---|---|
 | **F7c-0** ✅ | `i`+`v` resuelto con (b″) (sección 0) | 1 | **Sí** (el freeze) |
-| **F7c-1** | Herramientas al repo: `pfdiff`/`tagck`, `t1diff`, `lldiff`, corpus, referencias, `scripts/gate.sh` con limpieza de caché y `measure_binary.sh` | 1–1.5 | Sí: es el gate de las fases siguientes y del período de producción |
+| **F7c-1** ✅ | Herramientas al repo: `tools/{pfdiff,t1diff,lldiff,cgprobe}.zig`, `scripts/gate.sh`, `scripts/gate/` (árbitros V8), `scripts/test262/ivdiff.mjs`, `tests/corpus/{f2c,f2c-2}.txt` y `npm.tsv`, referencias `pfdiff-slots.tsv` e `ivdiff-f7c0.json`. `tagck` y la copia `old` del repo no se traen (fuera del gate y sin uso) | 1–1.5 | Sí: es el gate de las fases siguientes y del período de producción |
 | **F7c-2** | Código muerto: `Optimizer`, `OptLevel`, `opt_level`, `placeholder`, `LOOP`, `CHAR2` (valores reservados), sus tests | 0.5–1 | Sí (API) |
 | **F7c-3** | `zregex.internal`: mover 44 símbolos, exportar `RegexError`, adaptar 12 archivos y las herramientas; resolver los «sin decidir» de la sección 4 | 1.5–2 | Sí |
 | **F7c-4** | Contrato de API: la sección API stability, la regla de errores, `max_steps`, `ExecLimits` en la C API y el estado de la C API | 1 | Sí |
