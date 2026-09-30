@@ -454,8 +454,11 @@ test "prefilters: which one each pattern gets" {
     if (zregex.internal.force_backtracker) return error.SkipZigTest;
     try testing.expectEqual(.literal, try prefilterKind("hello"));
     try testing.expectEqual(.class_run, try prefilterKind("[a-z]+"));
-    try testing.expectEqual(.first, try prefilterKind("\\d{3}-\\d{4}"));
-    try testing.expectEqual(.first, try prefilterKind("[\\w.+-]+@[\\w-]+\\.[\\w.]+"));
+    try testing.expectEqual(.shift_and, try prefilterKind("\\d{3}-\\d{4}"));
+    try testing.expectEqual(.shift_and, try prefilterKind("(\\d{3})-(\\d{4})"));
+    try testing.expectEqual(.inner, try prefilterKind("[\\w.+-]+@[\\w-]+\\.[\\w.]+"));
+    // A single first byte keeps `first`, even with a required inner ` `.
+    try testing.expectEqual(.first, try prefilterKind("Mr\\.? [A-Z][a-z]+"));
     try testing.expectEqual(.none, try prefilterKind("a?"));
     const off = try zregex.Regex.compileWithOptions(testing.allocator, "hello", .{ .t0_prefilters = false });
     defer off.deinit();
@@ -485,11 +488,11 @@ test "fast paths never touch the VM scratch" {
     defer scratch.deinit();
     var buf: [2]?usize = undefined;
     var out: zregex.MatchSlots = .{ .slots = &buf };
-    for ([_][]const u8{ "hello", "[a-z]+", "\\d*" }) |p| {
+    for ([_][]const u8{ "hello", "[a-z]+", "\\d*", "\\d{3}-\\d{4}" }) |p| {
         var re = try zregex.Regex.compile(testing.allocator, p);
         defer re.deinit();
         const kind = std.meta.activeTag(re.t0.?.prefilter.kind);
-        try testing.expect(kind == .literal or kind == .class_run);
+        try testing.expect(kind == .literal or kind == .class_run or kind == .shift_and);
         _ = try re.execAt(.{ .wtf8 = "say hello 123" }, 0, &scratch, &out, .{});
         const s16 = [_]u16{ 'h', 'e', 'l', 'l', 'o' };
         _ = try re.execAt(.{ .utf16 = &s16 }, 0, &scratch, &out, .{});

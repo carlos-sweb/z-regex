@@ -13,6 +13,7 @@ pub const compile_mod = @import("compile.zig");
 pub const pikevm = @import("pikevm.zig");
 pub const pikevm_tagged = @import("pikevm_tagged.zig");
 pub const prefilter = @import("prefilter.zig");
+pub const shiftand = @import("shiftand.zig");
 
 pub const Program = program.Program;
 pub const Ineligible = compile_mod.Ineligible;
@@ -32,4 +33,5 @@ test {
     _ = pikevm;
     _ = pikevm_tagged;
     _ = prefilter;
+    _ = shiftand;
 }

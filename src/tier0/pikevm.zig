@@ -209,18 +209,72 @@ pub fn exec(prog: *const Program, comptime Unit: type, input: []const Unit, mode
     const found = if (use_pf) switch (pf.kind) {
         .literal => |l| literalSearch(Unit, input, if (Unit == u8) l.utf8 else l.utf16, index, sticky),
         .class_run => |*c| classRun(Unit, input, c, index, sticky),
-        .first, .none => null,
+        .shift_and => |*sa| sa.find(Unit, input, index, sticky),
+        .first, .inner, .none => null,
     } else null;
     const result = found orelse blk: {
-        if (use_pf and (pf.kind == .literal or pf.kind == .class_run)) break :blk null;
+        if (use_pf and (pf.kind == .literal or pf.kind == .class_run or pf.kind == .shift_and)) break :blk null;
         try scratch.ensure(prog.insts.len);
-        break :blk vm.search(index, sticky or anchored, if (use_pf and pf.kind == .first) &pf.kind.first else null, scratch);
+        // One instance of `search` per skip: a pattern without one doesn't
+        // test for it at each position.
+        const at_index = sticky or anchored;
+        if (use_pf) switch (pf.kind) {
+            .first => |*f| break :blk vm.search(index, at_index, FirstSkip{ .f = f }, scratch),
+            .inner => |*n| break :blk vm.search(index, at_index, InnerSkip{ .n = n }, scratch),
+            else => {},
+        };
+        break :blk vm.search(index, at_index, NoSkip{}, scratch);
     };
     const m = result orelse return false;
     slots[0] = m[0];
     slots[1] = m[1];
     return true;
 }
+
+/// `Vm.search`'s skip while no thread is alive: none.
+const NoSkip = struct {};
+
+/// `First`: to the next unit a match can start with.
+const FirstSkip = struct {
+    f: *const prefilter.First,
+
+    fn next(self: *FirstSkip, comptime Unit: type, input: []const Unit, pos: usize) ?usize {
+        return Vm(Unit).skip(input, self.f, pos);
+    }
+};
+
+/// `Inner` (B): to the run before the next required inner unit whose run is
+/// long enough for the prefix (see `prefilter.Inner` for why no match starts
+/// before it). The unit found and its run's start are kept while the unit
+/// is still at `pos` or after, so each is found and backed up over once.
+const InnerSkip = struct {
+    n: *const prefilter.Inner,
+    lit: ?usize = null,
+    start: usize = 0,
+
+    fn next(self: *InnerSkip, comptime Unit: type, input: []const Unit, pos: usize) ?usize {
+        var from = pos;
+        if (self.lit) |p| if (p >= pos) {
+            const s = @max(self.start, pos);
+            if (p - s >= self.n.min_prefix) return s;
+            from = p + 1;
+        };
+        while (true) {
+            const p = std.mem.indexOfScalarPos(Unit, input, from, self.n.unit) orelse {
+                self.lit = null;
+                return null;
+            };
+            var s = p;
+            while (s > pos and self.n.inBack(Unit, input[s - 1])) s -= 1;
+            if (p - s >= self.n.min_prefix) {
+                self.lit = p;
+                self.start = s;
+                return s;
+            }
+            from = p + 1;
+        }
+    }
+};
 
 /// The literal fast path: the first occurrence at `index` or after (only
 /// at `index` when sticky).
@@ -298,7 +352,9 @@ pub fn Vm(comptime Unit: type) type {
             return self.subject().decodeBefore(self.mode, pos);
         }
 
-        fn search(self: Self, index: usize, sticky: bool, first: ?*const prefilter.First, scratch: *VmScratch) ?[2]usize {
+        fn search(self: Self, index: usize, sticky: bool, skipper: anytype, scratch: *VmScratch) ?[2]usize {
+            const skips = @TypeOf(skipper) != NoSkip;
+            var sk = skipper;
             var clist = &scratch.lists[0];
             var nlist = &scratch.lists[1];
             clist.clear();
@@ -306,9 +362,9 @@ pub fn Vm(comptime Unit: type) type {
             var pos = index;
             while (true) {
                 // Nothing alive and no match yet: skip to the next position
-                // a match can start at (`First`: it always is a position).
-                if (first != null and found == null and clist.len == 0 and !sticky) {
-                    pos = skip(self.input, first.?, pos) orelse break;
+                // a match can start at (always a position: `First`, `Inner`).
+                if (skips and found == null and clist.len == 0 and !sticky) {
+                    pos = sk.next(Unit, self.input, pos) orelse break;
                 }
                 if (found == null and (!sticky or pos == index)) self.addThread(clist, scratch.stack, 0, pos, pos);
                 if (clist.len == 0 and (found != null or sticky)) break;
@@ -531,6 +587,30 @@ test "greedy and lazy repeats" {
     try expectMatch(null, try run(&seq, "aaa", 0, false));
 }
 
+test "J: x+ and x{n,} on one loop copy give the same bounds" {
+    const a = lit("a");
+    const b = lit("b");
+    const c = lit("c");
+    const ab: hir.Node = .{ .seq = &.{ &a, &b } };
+    const plus = rep(&a, 1, null, false);
+    try expectMatch(.{ 1, 4 }, try run(&plus, "baaab", 0, false));
+    try expectMatch(null, try run(&plus, "bbb", 0, false));
+    // (?:ab)+c: a seed at every position lands on the loop's pc.
+    const ab_plus = rep(&ab, 1, null, false);
+    const abc: hir.Node = .{ .seq = &.{ &ab_plus, &c } };
+    try expectMatch(.{ 1, 6 }, try run(&abc, "aababc", 0, false));
+    try expectMatch(null, try run(&abc, "ababab", 0, false));
+    // a{2,}: two mandatory copies, then the loop.
+    const two = rep(&a, 2, null, false);
+    try expectMatch(.{ 2, 5 }, try run(&two, "abaaa", 0, false));
+    try expectMatch(null, try run(&two, "ababa", 0, false));
+    // a+? stops at one, and grows only when what follows needs it.
+    const lazy = rep(&a, 1, null, true);
+    try expectMatch(.{ 0, 1 }, try run(&lazy, "aaa", 0, false));
+    const lazy_b: hir.Node = .{ .seq = &.{ &lazy, &b } };
+    try expectMatch(.{ 0, 3 }, try run(&lazy_b, "aab", 0, false));
+}
+
 test "a higher-priority thread that matches later replaces the match" {
     // /(?:a|ab)(?:c|bcd)/ on "abcd": "a" then "bcd" (the first alternative
     // wins, and its thread matches after "ab"+"c" would have).
@@ -693,4 +773,84 @@ test "existsAnchoredMatch: forward bodies of lookarounds" {
     try testing.expectError(error.InvalidIndex, existsAnchoredMatch(&p, .{ .wtf8 = "\u{E9}" }, .code_unit, 1, .forward, &scratch, &budget));
     var small: Budget = .init(3);
     try testing.expectError(error.StepLimitExceeded, existsAnchoredMatch(&p, .{ .wtf8 = "abcdefgh" }, .code_unit, 0, .forward, &scratch, &small));
+}
+
+/// Every index of `input` (WTF-8, and UTF-16 when it is ASCII) against the
+/// same program without prefilters: bounds and `InvalidIndex` alike.
+fn expectSameAsPlain(root: *const hir.Node, input: []const u8) !void {
+    const compileWith = @import("compile.zig").compileWith;
+    const p = try compile(testing.allocator, root);
+    defer p.deinit(testing.allocator);
+    const plain = try compileWith(testing.allocator, root, .{ .prefilters = false });
+    defer plain.deinit(testing.allocator);
+    var scratch: VmScratch = .init(testing.allocator);
+    defer scratch.deinit();
+    var ascii = true;
+    for (input) |b| ascii = ascii and b < 0x80;
+    var buf16: [256]u16 = undefined;
+    for (input, 0..) |b, i| buf16[i] = b;
+    const input16 = buf16[0..input.len];
+    for (0..input.len + 2) |i| for ([_]bool{ false, true }) |sticky| {
+        var a: [2]?usize = undefined;
+        var b: [2]?usize = undefined;
+        const got = exec(&p, u8, input, .code_unit, i, sticky, &scratch, &a);
+        const want = exec(&plain, u8, input, .code_unit, i, sticky, &scratch, &b);
+        if (want) |w| {
+            try testing.expectEqual(w, try got);
+            if (w) try testing.expectEqual(b[0..2].*, a[0..2].*);
+        } else |err| try testing.expectError(err, got);
+        if (!ascii) continue;
+        const got16 = try exec(&p, u16, input16, .code_unit, i, sticky, &scratch, &a);
+        try testing.expectEqual(try exec(&plain, u16, input16, .code_unit, i, sticky, &scratch, &b), got16);
+        if (got16) try testing.expectEqual(b[0..2].*, a[0..2].*);
+    };
+}
+
+test "B: the inner-literal skip finds what the plain VM finds" {
+    const w = setNode(.{ .ranges = &.{ .{ .lo = '+', .hi = '+' }, .{ .lo = '-', .hi = '.' }, .{ .lo = '0', .hi = '9' }, .{ .lo = 'A', .hi = 'Z' }, .{ .lo = '_', .hi = '_' }, .{ .lo = 'a', .hi = 'z' } } });
+    const d = setNode(.{ .ranges = &.{ .{ .lo = '-', .hi = '-' }, .{ .lo = '0', .hi = '9' }, .{ .lo = 'A', .hi = 'Z' }, .{ .lo = '_', .hi = '_' }, .{ .lo = 'a', .hi = 'z' } } });
+    const at = lit("@");
+    const dot = lit(".");
+    const user = rep(&w, 1, null, false);
+    const host = rep(&d, 1, null, false);
+    // `[\w.+-]+@[\w-]+\.[\w.]+`, roughly: the bench's e-mail.
+    const email: hir.Node = .{ .seq = &.{ &user, &at, &host, &dot, &user } };
+    const p = try compile(testing.allocator, &email);
+    defer p.deinit(testing.allocator);
+    try testing.expect(p.prefilter.kind == .inner);
+    try testing.expectEqual(@as(u8, '@'), p.prefilter.kind.inner.unit);
+    // With and without a match, several `@`, runs cut by non-members,
+    // an `@` with no run before it, non-ASCII in and around the run.
+    for ([_][]const u8{
+        "mail joe@site.com and ann.b+c@x-y.org.",
+        "no at sign here at all",
+        "@@@ a@ @b a@b @b.c",
+        "x y@z. q@@r.s t@u.v",
+        "é@a.b caf\xC3\xA9 x@y.z \xC3\xA9x@y.z",
+        "",
+    }) |s| try expectSameAsPlain(&email, s);
+    try expectMatch(.{ 5, 17 }, try run(&email, "mail joe@site.com", 0, false));
+    try expectMatch(null, try run(&email, "@@@ a@ @b", 0, false));
+}
+
+test "B: minimum prefix, nullable prefix, alternation in the prefix" {
+    const l = setNode(.{ .ranges = &lower });
+    const two = rep(&l, 2, 2, false);
+    const dg = setNode(.{ .ranges = &digit });
+    const digits = rep(&dg, 0, null, false);
+    const at = lit("@");
+    const x = lit("x");
+    // `[a-z]{2}\d*@x`: at least two units before `@`.
+    const min2: hir.Node = .{ .seq = &.{ &two, &digits, &at, &x } };
+    for ([_][]const u8{ "a@x ab@x", "b@x@x c1@x cd12@x", "@x a@@x ab@@x", "zz@y zz@x" }) |s| try expectSameAsPlain(&min2, s);
+    // `[a-z]*@x`: a nullable prefix, so `@x` alone matches.
+    const star = rep(&l, 0, null, false);
+    const nullable: hir.Node = .{ .seq = &.{ &star, &at, &x } };
+    for ([_][]const u8{ "@x", "..@x..ab@x", "@y@x" }) |s| try expectSameAsPlain(&nullable, s);
+    // `(ab|c)@x`: an alternation before the literal.
+    const ab = lit("ab");
+    const c = lit("c");
+    const alt: hir.Node = .{ .alt = &.{ &ab, &c } };
+    const alt_first: hir.Node = .{ .seq = &.{ &alt, &at, &x } };
+    for ([_][]const u8{ "b@x ab@x c@x", "aab@x", "abc@x" }) |s| try expectSameAsPlain(&alt_first, s);
 }
