@@ -349,6 +349,49 @@ test "B′: a lookbehind of fixed length runs on the explicit-stack backtracker 
     try expectLookbehind("(?<=x)(a*)*", "", "xaa", &.{ 1, 3, 1, 3 });
 }
 
+// F7c-4: the API contract (docs/API.md). These lists are the contract: a
+// new stable symbol or error, or one gone, fails here until docs/API.md and
+// the list change together (the freeze: no new error in a public set).
+fn expectNames(comptime names: []const []const u8, comptime actual: anytype) !void {
+    @setEvalBranchQuota(100_000);
+    try testing.expectEqual(names.len, actual.len);
+    inline for (actual) |a| {
+        const found = inline for (names) |n| {
+            if (comptime std.mem.eql(u8, n, a.name)) break true;
+        } else false;
+        if (!found) {
+            std.debug.print("not in the contract: {s}\n", .{a.name});
+            return error.TestUnexpectedResult;
+        }
+    }
+}
+
+test "F7c-4: the stable root is exactly the 19 declarations of docs/API.md" {
+    try expectNames(&.{
+        "version", "Regex",      "CompileOptions", "RegexError", "MatchResult", "CaptureIndices", "Subject",
+        "Scratch", "MatchSlots", "MatchIterator",  "ExecLimits", "ExecError",   "test_",          "find",
+        "findAll", "replace",    "replaceAll",     "unicode",    "internal",
+    }, @typeInfo(zregex).@"struct".decls);
+}
+
+test "F7c-4: RegexError and ExecError are the error sets of docs/API.md" {
+    try expectNames(&.{
+        "OutOfMemory",             "BufferTooSmall",    "TierUnavailable",        "InvalidGroupName",
+        "UnsupportedFeature",      "UnmatchedBracket",  "InvalidRepeat",          "UnterminatedRepeat",
+        "InvalidEscape",           "UnexpectedToken",   "UnexpectedEOF",          "UnmatchedParen",
+        "InvalidCharRange",        "InvalidQuantifier", "EmptyGroup",             "EmptyAlternation",
+        "DuplicateGroupName",      "UnknownGroupName",  "UnknownUnicodeProperty", "InvalidClassSetOperand",
+        "MixedClassSetOperators",  "NestingTooDeep",    "TooManyCaptures",        "InvalidPattern",
+        "UnsupportedNode",         "TooManyGroups",     "UnknownOpcode",          "PatternTooLarge",
+        "UnexpectedEndOfBytecode", "UnresolvedLabels",  "RecursionLimitExceeded", "StepLimitExceeded",
+        "BacktrackStackExhausted", "InvalidCharSet",    "IncompatibleFlags",
+    }, @typeInfo(zregex.RegexError).error_set.?);
+    try expectNames(&.{
+        "OutOfMemory",             "UnknownOpcode",  "UnexpectedEndOfBytecode", "StepLimitExceeded",
+        "BacktrackStackExhausted", "InvalidCharSet", "InvalidIndex",            "SlotsTooSmall",
+    }, @typeInfo(zregex.ExecError).error_set.?);
+}
+
 // F7c-3: the root of the module is the stable API; the engine's pieces are
 // in `zregex.internal`, without stability guarantee.
 test "F7c-3: internal symbols live in zregex.internal, not at the root" {

@@ -1,6 +1,11 @@
 //! zregex - ECMAScript Regular Expression Engine in Zig
 //!
-//! A modern, safe, and efficient regex engine inspired by QuickJS's libregexp.
+//! ECMA-262 regular expressions for Zig and C, with no JS engine behind them.
+//!
+//! **API contract** (docs/API.md): the root of this module and the C API are
+//! stable; `internal` is not. Valid syntax that isn't implemented is
+//! `error.UnsupportedFeature`, never a wrong result, and a later release only
+//! removes such cases: it never adds an error to `RegexError` or `ExecError`.
 //!
 //! Example usage:
 //! ```zig
@@ -31,40 +36,61 @@
 const std = @import("std");
 
 // =============================================================================
-// Stable API (F7c-3). Everything a consumer uses; `internal` below is not.
-// Rule of the freeze: valid syntax that isn't implemented is
-// error.UnsupportedFeature, and a later release only removes such cases,
-// never adds new errors (README, "API stability").
+// Stable API: the 19 declarations below, and the C API (docs/API.md).
+// `internal` is not stable. The freeze: valid syntax that isn't implemented
+// is error.UnsupportedFeature, and a later release only removes such cases,
+// never adds an error to RegexError or ExecError (docs/API.md, section 3).
+// A test fixes this list, RegexError and ExecError (tests/regression_tests.zig).
 // =============================================================================
 
+/// The package version.
 pub const version = "0.6.0";
 
-/// Compile a pattern once and match it many times.
+/// A compiled pattern: compile once, match many times (`compile`,
+/// `compileWithOptions`, `find`, `findAll`, `execAt`, `iterator`,
+/// `replace`, ...). Owns its memory until `deinit`.
 pub const Regex = @import("regex.zig").Regex;
+/// The flags of a pattern (`i`, `m`, `s`, `y`, `u`, `v`, and the possessive
+/// extension). The diagnostic fields are outside the stable API.
 pub const CompileOptions = @import("compile.zig").CompileOptions;
-/// What `Regex.compile` and the one-shot functions can fail with.
+/// What `Regex.compile`, the byte-offset methods and the one-shot functions
+/// fail with. Fixed set: 35 errors, each with a C code (docs/API.md).
 pub const RegexError = @import("regex.zig").RegexError;
+/// A match of the byte-offset facade (`find`, `findAll`...): `start`, `end`
+/// and the captures. Free it with `deinit`.
 pub const MatchResult = @import("tier2").matcher.MatchResult;
 /// Start and end of a capture (`MatchResult.getCaptureIndices`).
 pub const CaptureIndices = @import("tier2").matcher.CaptureIndices;
-/// The input a regex runs over: WTF-8 or UTF-16, indices in its own units (F3).
+/// The input of `execAt` and `iterator`: WTF-8 or UTF-16, indices in its own
+/// units.
 pub const Subject = @import("subject").Subject;
+/// Reusable working memory for `execAt` and `iterator` (one per thread).
 pub const Scratch = @import("regex.zig").Scratch;
+/// Where `execAt` writes a match's slots: two per group, group 0 first.
 pub const MatchSlots = @import("regex.zig").MatchSlots;
+/// Every match of a subject in order, without allocating (`Regex.iterator`).
 pub const MatchIterator = @import("regex.zig").MatchIterator;
+/// Execution budgets: `max_steps` per start position, backtrack stack and
+/// memo sizes. Exceeding one is an error, never a wrong result.
 pub const ExecLimits = @import("regex.zig").ExecLimits;
+/// What `execAt` and `MatchIterator.next` fail with. Fixed set: 8 errors.
 pub const ExecError = @import("regex.zig").ExecError;
 
-// One-shot convenience functions (compile, run, free).
+/// One-shot: compile `pattern`, test whether it matches all of `input`, free.
 pub const test_ = @import("regex.zig").test_;
+/// One-shot: compile `pattern`, return the first match in `input`, free.
 pub const find = @import("regex.zig").find;
+/// One-shot: compile `pattern`, return every match in `input`, free.
 pub const findAll = @import("regex.zig").findAll;
+/// One-shot: compile `pattern`, replace the first match (`$1`, `$<name>`,
+/// `$&`...), free. The caller frees the result.
 pub const replace = @import("regex.zig").replace;
+/// One-shot: like `replace`, for every match.
 pub const replaceAll = @import("regex.zig").replaceAll;
 
-// Unicode General_Category lookup, re-exported for reuse outside the regex
-// engine (e.g. ID_Start/ID_Continue identifier classification in a lexer) --
-// avoids duplicating the ~21k lines of UCD-derived tables in tables.zig.
+/// Unicode General_Category lookup, re-exported for reuse outside the regex
+/// engine (e.g. ID_Start/ID_Continue in a lexer) without duplicating the
+/// UCD-derived tables.
 pub const unicode = struct {
     pub const UnicodeProperty = @import("unicode").properties.UnicodeProperty;
     pub const isInCategory = @import("unicode").properties.isInCategory;

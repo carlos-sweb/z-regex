@@ -7,10 +7,10 @@ const zr = @import("zregex");
 const gpa = std.heap.smp_allocator;
 
 const subjects = [_][]const u8{
-    "",                         "a",                 "ab",                  "aAb",              "abc abc",                "Zk\u{212A}s\u{17F}",
-    "\u{E9}\u{C9}\u{DF}",       "0123 45",           "\u{1F600}x\u{1F600}", "a\nb\r\nc\u{2028}d", "_\xff\xc3",            "ss\u{3C3}\u{3A3}\u{3C2}",
-    "\u{C0}\u{E0}\u{D6}\u{F6}", "--]",               "aaaaab",              "abab ab",          "\u{E9}\u{A9}x\u{1F600}y", "\xED\xA0\x80a\xED\xB0\x80",
-    "\xED\xA0\xBD\xED\xB8\x80", "\x80\xC3a\xE2\x82", "\xC3\xA9\xE9\xA9",    "a\u{1D306}b\u{E9}", "\u{3B1}\u{3B2}\u{391}x 9", "ab\nab xyz09",
+    "",                           "a",                     "ab",                  "aAb",                "abc abc",                  "Zk\u{212A}s\u{17F}",
+    "\u{E9}\u{C9}\u{DF}",         "0123 45",               "\u{1F600}x\u{1F600}", "a\nb\r\nc\u{2028}d", "_\xff\xc3",                "ss\u{3C3}\u{3A3}\u{3C2}",
+    "\u{C0}\u{E0}\u{D6}\u{F6}",   "--]",                   "aaaaab",              "abab ab",            "\u{E9}\u{A9}x\u{1F600}y",  "\xED\xA0\x80a\xED\xB0\x80",
+    "\xED\xA0\xBD\xED\xB8\x80",   "\x80\xC3a\xE2\x82",     "\xC3\xA9\xE9\xA9",    "a\u{1D306}b\u{E9}",  "\u{3B1}\u{3B2}\u{391}x 9", "ab\nab xyz09",
     "\u{4E00}\u{3042}\u{30A2}-_", "A\u{1F600}b\u{1F601}C", "\u{FEFF}\u{A0} \t",
 };
 

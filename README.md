@@ -18,8 +18,10 @@ An ECMA-262 regular expression engine in Zig, independent of the JavaScript engi
   `Symbol.replace` stay in the host.
 - Engine-agnostic: no dependency on a JS engine's values, objects or garbage collector.
 - A convenience facade for plain Zig use: `find`, `findAll`, `test_`, `replace`,
-  `replaceAll`, and `Regex.iterator` (every match without allocating). A C ABI is exported (`src/c_api.zig`, `zig build shared`) for the project's
-  own FFI tooling; there are no maintained C headers.
+  `replaceAll`, and `Regex.iterator` (every match without allocating).
+- A C ABI (`src/c_api.zig`, `zig build shared`): 40 `zregex_*` symbols, part of the stable
+  API ([docs/API.md](docs/API.md)). There is no C header yet; the declarations are in
+  `src/c_api.zig`.
 
 ## Status
 
@@ -185,28 +187,17 @@ These examples are compiled and run against the library (`zig build`, Zig 0.16).
 
 ## API stability
 
-The root of the `zregex` module is the stable API (F7c-3):
-- `Regex` and its methods, `CompileOptions`, `RegexError` (what compiling fails with);
-- `MatchResult`, `CaptureIndices`, `Subject`, `Scratch`, `MatchSlots`, `MatchIterator`,
-  `ExecLimits`, `ExecError`;
-- the one-shot functions `test_`, `find`, `findAll`, `replace`, `replaceAll`;
-- `unicode.isInCategory` (and `unicode.UnicodeProperty`);
-- `version`;
-- the C API (`src/c_api.zig`, `zig build shared`): its 40 `zregex_*` symbols and error codes.
+The root of the `zregex` module and the C API are the stable API; the contract is
+[docs/API.md](docs/API.md): the 19 stable declarations, the errors and their C codes, what
+is a breaking change and how a symbol is deprecated.
 
-**Not covered:**
-- **`zregex.internal`:** the engine's pieces (lexer, parser, HIR, code generator, tiers,
-  analysis) for this repository's tests, tools and bench. No stability guarantee: it can
-  change in any release.
-- **The diagnostic fields of `CompileOptions`** (`force_tier`, `tier_diagnostic`,
-  `t0_prefilters`, `t2_look_linear`): the same.
-
-**The error rule (the freeze):**
-- valid syntax that zregex doesn't implement is `error.UnsupportedFeature` (C API:
-  `ZREGEXP_ERROR_UNSUPPORTED`, code 9), never a wrong result;
-- a later release only removes such cases (a pattern that was `UnsupportedFeature` starts
-  compiling), never adds new errors;
-- the error names and their C codes are part of the contract.
+- **Not covered:** `zregex.internal` (the engine's pieces, for this repository's tests,
+  tools and bench) and the diagnostic fields of `CompileOptions` (`force_tier`,
+  `tier_diagnostic`, `t0_prefilters`, `t2_look_linear`). They can change in any release.
+- **The error rule (the freeze):** valid syntax that zregex doesn't implement is
+  `error.UnsupportedFeature` (C: `ZREGEXP_ERROR_UNSUPPORTED`, 9), never a wrong result. A
+  later release only removes such cases; it never adds an error to `RegexError` or
+  `ExecError`.
 
 ## Performance
 
