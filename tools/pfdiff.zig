@@ -94,9 +94,9 @@ fn skipOffset(len: usize, i: usize) bool {
     return i % ((len + 63) / 64) != 0;
 }
 
-fn tagRun(comptime Unit: type, tp: *const new.tier0.Program, in: []const Unit, i: usize, sticky: bool, two: bool, vs: *new.tier0.VmScratch) Slots {
+fn tagRun(comptime Unit: type, tp: *const new.internal.tier0.Program, in: []const Unit, i: usize, sticky: bool, two: bool, vs: *new.internal.tier0.VmScratch) Slots {
     var o: Slots = .{ .n = tp.nslots };
-    const r = if (two) new.tier0.execCaptures(tp, Unit, in, .code_unit, i, sticky, vs, &o.v) else new.tier0.execTagged(tp, Unit, in, .code_unit, i, sticky, null, vs, &o.v);
+    const r = if (two) new.internal.tier0.execCaptures(tp, Unit, in, .code_unit, i, sticky, vs, &o.v) else new.internal.tier0.execTagged(tp, Unit, in, .code_unit, i, sticky, null, vs, &o.v);
     if (r) |f| o.found = f else |e| o.err = e;
     return o;
 }
@@ -125,7 +125,7 @@ fn writeUnits(w: *std.Io.Writer, units: []const u16) !void {
 }
 
 fn slotsMain(io: std.Io, args: anytype, out_path: []const u8) !void {
-    var vs = new.tier0.VmScratch.init(gpa);
+    var vs = new.internal.tier0.VmScratch.init(gpa);
     var out_file = try std.Io.Dir.cwd().createFile(io, out_path, .{});
     defer out_file.close(io);
     var wbuf: [1 << 16]u8 = undefined;
@@ -144,19 +144,19 @@ fn slotsMain(io: std.Io, args: anytype, out_path: []const u8) !void {
             if (hex.len / 2 > buf.len) continue;
             const pat = try std.fmt.hexToBytes(&buf, hex);
             if (has(fl, 'p')) continue;
-            const f = new.analysis.Flags.parse(fl) catch continue;
-            const an = try new.analyze(gpa, pat, f);
+            const f = new.internal.analysis.Flags.parse(fl) catch continue;
+            const an = try new.internal.analyze(gpa, pat, f);
             if (an.min_tier != .regular) continue;
-            const fe = try new.lower.Frontend.init(gpa, pat, .{ .unicode = f.u, .v = f.v }, .{ .ignore_case = f.i, .multiline = f.m, .dot_all = f.s });
+            const fe = try new.internal.lower.Frontend.init(gpa, pat, .{ .unicode = f.u, .v = f.v }, .{ .ignore_case = f.i, .multiline = f.m, .dot_all = f.s });
             defer fe.deinit();
-            if (new.tier0.compile_mod.checkTagged(fe.root) != null) continue;
-            const tp = try new.tier0.compileWith(gpa, fe.root, .{ .tagged = true });
+            if (new.internal.tier0.compile_mod.checkTagged(fe.root) != null) continue;
+            const tp = try new.internal.tier0.compileWith(gpa, fe.root, .{ .tagged = true });
             defer tp.deinit(gpa);
             if (tp.nslots > 64) continue;
             sstats.patterns += 1;
             var bt = try new.Regex.compileWithOptions(gpa, pat, .{ .case_insensitive = f.i, .multiline = f.m, .dot_all = f.s, .force_tier = .expert });
             defer bt.deinit();
-            const pat16 = try new.subject.utf16FromWtf8(gpa, pat);
+            const pat16 = try new.internal.subject.utf16FromWtf8(gpa, pat);
             defer gpa.free(pat16);
             var extra: [3][]const u8 = .{ pat, "", "" };
             const doubled = try std.mem.concat(gpa, u8, &.{ "x", pat, pat, "y" });
@@ -167,7 +167,7 @@ fn slotsMain(io: std.Io, args: anytype, out_path: []const u8) !void {
             const before = sstats.bt8 + sstats.bt16 + sstats.mismatch + sstats.one_pass;
             for (subjects ++ [_][]const u8{ "", "", "" }, 0..) |s0, k| {
                 const s = if (k < subjects.len) s0 else extra[k - subjects.len];
-                const s16 = try new.subject.utf16FromWtf8(gpa, s);
+                const s16 = try new.internal.subject.utf16FromWtf8(gpa, s);
                 defer gpa.free(s16);
                 for ([_]bool{ false, true }) |sticky| {
                     bt.sticky = sticky;
@@ -230,7 +230,7 @@ fn slotsMain(io: std.Io, args: anytype, out_path: []const u8) !void {
 /// differential-v8 JSON, the two passes from 0 on the UTF-16 subject
 /// against V8's expected slots.
 fn v8Main(io: std.Io, path: []const u8) !void {
-    var vs = new.tier0.VmScratch.init(gpa);
+    var vs = new.internal.tier0.VmScratch.init(gpa);
     const data = try std.Io.Dir.cwd().readFileAlloc(io, path, gpa, .limited(64 << 20));
     var buf: [65536]u8 = undefined;
     var total: usize = 0;
@@ -248,21 +248,21 @@ fn v8Main(io: std.Io, path: []const u8) !void {
         const subj_col = cols.next().?;
         const exp_col = cols.next().?;
         const kind = cols.next().?;
-        const f = new.analysis.Flags.parse(fl) catch continue;
-        const an = new.analyze(gpa, pat, f) catch continue;
+        const f = new.internal.analysis.Flags.parse(fl) catch continue;
+        const an = new.internal.analyze(gpa, pat, f) catch continue;
         std.debug.print("TIER {s} {s}\n", .{ if (an.min_tier) |t| @tagName(t) else "none", kind });
         if (an.min_tier != .regular) {
             if (an.min_tier == null) unclassified += 1;
             continue;
         }
         any_t0 += 1;
-        const fe = new.lower.Frontend.init(gpa, pat, .{ .unicode = f.u, .v = f.v }, .{ .ignore_case = f.i, .multiline = f.m, .dot_all = f.s }) catch continue;
+        const fe = new.internal.lower.Frontend.init(gpa, pat, .{ .unicode = f.u, .v = f.v }, .{ .ignore_case = f.i, .multiline = f.m, .dot_all = f.s }) catch continue;
         defer fe.deinit();
-        if (new.tier0.compile_mod.checkTagged(fe.root)) |w| {
+        if (new.internal.tier0.compile_mod.checkTagged(fe.root)) |w| {
             std.debug.print("NOTTAGGED {s} /{s}/{s}\n", .{ @tagName(w), pat, fl });
             continue;
         }
-        const tp = try new.tier0.compileWith(gpa, fe.root, .{ .tagged = true });
+        const tp = try new.internal.tier0.compileWith(gpa, fe.root, .{ .tagged = true });
         defer tp.deinit(gpa);
         t0 += 1;
         var s16: std.ArrayListUnmanaged(u16) = .empty;
@@ -277,7 +277,7 @@ fn v8Main(io: std.Io, path: []const u8) !void {
         try writeSlots(&got.writer, &a);
         const ok = std.mem.eql(u8, got.written(), exp_col);
         if (ok) same += 1;
-        const why = new.tier0.check(fe.root);
+        const why = new.internal.tier0.check(fe.root);
         std.debug.print("{s} {s} f4a={s} /{s}/{s} vm={s} v8={s}\n", .{ if (ok) "SAME" else "DIFF", kind, if (why) |w| @tagName(w) else "eligible", pat, fl, got.written(), exp_col });
     }
     std.debug.print("divergences {d}; T0 {d} (unclassified {d}); T0 tagged-eligible {d}; two passes = V8: {d}\n", .{ total, any_t0, unclassified, t0, same });
@@ -313,9 +313,9 @@ pub fn main(init: std.process.Init) !void {
             routed += 1;
             {
                 // Tagged when tier0.check rejects it (what route() does).
-                const fe = try new.lower.Frontend.init(gpa, pat, .{ .unicode = o.unicode, .v = o.v, .possessive = o.possessive }, .{ .ignore_case = o.case_insensitive, .multiline = o.multiline, .dot_all = o.dot_all });
+                const fe = try new.internal.lower.Frontend.init(gpa, pat, .{ .unicode = o.unicode, .v = o.v, .possessive = o.possessive }, .{ .ignore_case = o.case_insensitive, .multiline = o.multiline, .dot_all = o.dot_all });
                 defer fe.deinit();
-                if (new.tier0.check(fe.root) != null) routed_tagged += 1;
+                if (new.internal.tier0.check(fe.root) != null) routed_tagged += 1;
             }
             kinds[@intFromEnum(std.meta.activeTag(t0.prefilter.kind))] += 1;
             var ob = o;
@@ -333,7 +333,7 @@ pub fn main(init: std.process.Init) !void {
             extra[2] = if (pat.len > 1) pat[1..] else "";
             for (subjects ++ [_][]const u8{ "", "", "" }, 0..) |s0, k| {
                 const s = if (k < subjects.len) s0 else extra[k - subjects.len];
-                const s16 = try new.subject.utf16FromWtf8(gpa, s);
+                const s16 = try new.internal.subject.utf16FromWtf8(gpa, s);
                 defer gpa.free(s16);
                 compare(&re, &bt, &plain, .{ .wtf8 = s }, pat, fl);
                 compare(&re, &bt, &plain, .{ .utf16 = s16 }, pat, fl);

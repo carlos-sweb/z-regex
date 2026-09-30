@@ -875,7 +875,7 @@ test "zregex_last_error_name reports the precise compile error" {
 }
 
 test "zregex_compile / zregex_compile_n carry u and v to CompileResult.mode (F3c)" {
-    const Mode = regex.subject.Mode;
+    const Mode = regex.internal.subject.Mode;
     const Case = struct { unicode: bool, v: bool, mode: Mode };
     const cases = [_]Case{
         .{ .unicode = false, .v = false, .mode = .code_unit },

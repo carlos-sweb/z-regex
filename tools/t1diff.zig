@@ -56,8 +56,8 @@ pub fn main(init: std.process.Init) !void {
             if (has(fl, 'p')) continue;
             const pat = try gpa.alloc(u8, hex.len / 2);
             _ = std.fmt.hexToBytes(pat, hex) catch continue;
-            const flags = zr.analysis.Flags.parse(fl) catch continue;
-            const a = try zr.analyze(gpa, pat, flags);
+            const flags = zr.internal.analysis.Flags.parse(fl) catch continue;
+            const a = try zr.internal.analyze(gpa, pat, flags);
             if (a.min_tier != .unicode) continue;
             st.t1 += 1;
             const o: zr.CompileOptions = .{ .case_insensitive = flags.i, .multiline = flags.m, .dot_all = flags.s, .unicode = flags.u, .v = flags.v };
@@ -73,7 +73,7 @@ pub fn main(init: std.process.Init) !void {
             if (n > 64) continue;
             var differs = false;
             for (subjects) |s| {
-                const s16 = try zr.subject.utf16FromWtf8(gpa, s);
+                const s16 = try zr.internal.subject.utf16FromWtf8(gpa, s);
                 defer gpa.free(s16);
                 for ([_]zr.Subject{ .{ .wtf8 = s }, .{ .utf16 = s16 } }) |subj| {
                     for ([_]bool{ false, true }) |sticky| {

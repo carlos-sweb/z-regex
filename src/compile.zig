@@ -81,7 +81,11 @@ pub const CompileOptions = struct {
     /// always on.
     possessive: bool = false,
 
-    /// Tests and diagnostics only (plan §4.2): which executor runs the
+    // Diagnostic fields: tests and bench only, outside the stable API (F7c-3):
+    // `force_tier`, `tier_diagnostic`, `t0_prefilters`, `t2_look_linear`
+    // may change or go away in any release.
+
+    /// Diagnostic, tests and bench only (plan §4.2): which executor runs the
     /// pattern. Null: the dispatcher decides (T0's VM when the pattern is
     /// eligible, the backtracker otherwise). `.regular`: T0's VM, or
     /// `error.TierUnavailable` when the pattern can't run on it. `.expert`:
@@ -90,15 +94,16 @@ pub const CompileOptions = struct {
     /// `error.TierUnavailable` otherwise.
     force_tier: ?Tier = null,
 
-    /// Where `compile` writes why it failed with `error.TierUnavailable`.
+    /// Diagnostic, tests and bench only: where `compile` writes why it
+    /// failed with `error.TierUnavailable` (`zregex.internal.TierUnavailable`).
     tier_diagnostic: ?*TierUnavailable = null,
 
-    /// Only for tests and the bench: T0's prefilters and fast paths
+    /// Diagnostic, tests and bench only: T0's prefilters and fast paths
     /// (`tier0/prefilter.zig`). Off, the VM runs plain, to measure it and to
     /// compare the two.
     t0_prefilters: bool = true,
 
-    /// Only for tests and the bench: LookLinear (F6a), the backtracker
+    /// Diagnostic, tests and bench only: LookLinear (F6a), the backtracker
     /// handing lookaheads without captures to T0's VM. Off, it evaluates
     /// them itself, to measure it and to compare the two.
     t2_look_linear: bool = true,

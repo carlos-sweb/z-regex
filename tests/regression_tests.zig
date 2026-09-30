@@ -294,7 +294,7 @@ test "regression: a positive lookahead's captures are undone when backtracking p
 /// and off: all four must agree with `want` (V8's, `null`: no match).
 fn expectLookbehind(pattern: []const u8, flags: []const u8, input: []const u8, want: ?[]const i64) !void {
     const a = testing.allocator;
-    const s16 = try zregex.subject.utf16FromWtf8(a, input);
+    const s16 = try zregex.internal.subject.utf16FromWtf8(a, input);
     defer a.free(s16);
     for ([_]bool{ true, false }) |linear| {
         var re = try zregex.Regex.compileWithOptions(a, pattern, .{
@@ -312,7 +312,7 @@ fn expectLookbehind(pattern: []const u8, flags: []const u8, input: []const u8, w
         for ([_]zregex.Subject{ .{ .utf16 = s16 }, .{ .wtf8 = input } }) |subj| {
             const found = try re.execAt(subj, 0, &scratch, &out, .{});
             const ok = if (want) |w| found and w.len == slots.len and for (w, slots) |x, g| {
-                const u: i64 = if (g) |v| @intCast(if (subj == .wtf8) try zregex.subject.wtf8ToUtf16Index(input, v) else v) else -1;
+                const u: i64 = if (g) |v| @intCast(if (subj == .wtf8) try zregex.internal.subject.wtf8ToUtf16Index(input, v) else v) else -1;
                 if (u != x) break false;
             } else true else !found;
             if (!ok) {
@@ -349,11 +349,57 @@ test "B′: a lookbehind of fixed length runs on the explicit-stack backtracker 
     try expectLookbehind("(?<=x)(a*)*", "", "xaa", &.{ 1, 3, 1, 3 });
 }
 
+// F7c-3: the root of the module is the stable API; the engine's pieces are
+// in `zregex.internal`, without stability guarantee.
+test "F7c-3: internal symbols live in zregex.internal, not at the root" {
+    const moved = [_][]const u8{
+        "DynBuf",      "BitSet256",         "DynBitSet",      "Pool",          "Pooled",         "debug",
+        "Budget",      "Opcode",            "OpcodeCategory", "Instruction",   "BytecodeWriter", "BytecodeReader",
+        "disassemble", "Token",             "TokenType",      "Lexer",         "Node",           "NodeType",
+        "Parser",      "ParseError",        "lower",          "CodeGenerator", "CodegenError",   "MAX_PROGRAM_BYTES",
+        "compile",     "compileSimple",     "CompileResult",  "compileTiers",  "Compiled",       "TierUnavailable",
+        "NamedGroup",  "force_backtracker", "CharSet",        "hir",           "subject",        "tier2",
+        "tier0",       "Capture",           "Matcher",        "analysis",      "analyze",        "two_pass_fallbacks",
+    };
+    inline for (moved) |name| {
+        try testing.expect(!@hasDecl(zregex, name));
+        try testing.expect(@hasDecl(zregex.internal, name));
+    }
+    inline for (.{ "placeholder", "zig_version_required", "Optimizer", "OptLevel" }) |name| {
+        try testing.expect(!@hasDecl(zregex, name) and !@hasDecl(zregex.internal, name));
+    }
+    inline for (.{ "version", "Regex", "CompileOptions", "RegexError", "MatchResult", "CaptureIndices", "Subject", "Scratch", "MatchSlots", "MatchIterator", "ExecLimits", "ExecError", "test_", "find", "findAll", "replace", "replaceAll", "unicode" }) |name| {
+        try testing.expect(@hasDecl(zregex, name));
+    }
+}
+
+fn compileOrError(pattern: []const u8) zregex.RegexError!void {
+    const re = try zregex.Regex.compile(testing.allocator, pattern);
+    re.deinit();
+}
+
+test "F7c-3: RegexError names compile's errors" {
+    try compileOrError("a+");
+    try testing.expectError(error.UnsupportedFeature, compileOrError("(?i:a)"));
+    const e: zregex.RegexError = error.UnsupportedFeature;
+    try testing.expect(e == error.UnsupportedFeature);
+}
+
+test "F7c-3: replace and replaceAll one-shot functions (V8's results)" {
+    const a = testing.allocator;
+    const one = try zregex.replace(a, "(\\d+)-(\\d+)", "10-20 and 30-40", "$2-$1");
+    defer a.free(one);
+    try testing.expectEqualStrings("20-10 and 30-40", one);
+    const all = try zregex.replaceAll(a, "(\\d+)-(\\d+)", "10-20 and 30-40", "$2-$1");
+    defer a.free(all);
+    try testing.expectEqualStrings("20-10 and 40-30", all);
+}
+
 // F7c-2: CHAR2 (0x02) and LOOP (0x16) were never emitted; their values are
 // reserved (`RESERVED_02`, `RESERVED_16`). No pattern's bytecode holds them.
 test "F7c-2: the reserved opcodes 0x02 and 0x16 are never emitted" {
     const a = testing.allocator;
-    const Opcode = zregex.tier2.opcodes.Opcode;
+    const Opcode = zregex.internal.tier2.opcodes.Opcode;
     const cases = [_]struct { p: []const u8, o: zregex.CompileOptions = .{} }{
         .{ .p = "abc" },                                    .{ .p = "a|b|cd" },
         .{ .p = "a*b+c?d{2,5}e{3}f{2,}?" },                 .{ .p = "(a)(?<n>b)\\1\\k<n>" },
@@ -365,11 +411,11 @@ test "F7c-2: the reserved opcodes 0x02 and 0x16 are never emitted" {
         .{ .p = "a*+", .o = .{ .possessive = true } },
     };
     for (cases) |c| {
-        const r = try zregex.compile(a, c.p, c.o);
+        const r = try zregex.internal.compile(a, c.p, c.o);
         defer r.deinit();
         var pc: usize = 0;
         while (pc < r.bytecode.len) {
-            const inst = try zregex.tier2.format.decodeInstruction(r.bytecode, pc);
+            const inst = try zregex.internal.tier2.format.decodeInstruction(r.bytecode, pc);
             try testing.expect(inst.opcode != Opcode.RESERVED_02 and inst.opcode != Opcode.RESERVED_16);
             pc += inst.size;
         }
@@ -465,15 +511,15 @@ test "regression: nested counted repeats past the program cap are PatternTooLarg
 }
 
 test "PatternTooLarge is exactly MAX_PROGRAM_BYTES (16 MiB) of bytecode" {
-    const max = zregex.MAX_PROGRAM_BYTES;
+    const max = zregex.internal.MAX_PROGRAM_BYTES;
     try testing.expectEqual(@as(usize, 16 << 20), max);
     // `a{65536}` is 327680 bytes of copies (5 per `a`) plus MATCH: 51 copies
     // fit the cap, 52 don't.
-    const at_cap = try zregex.compile(testing.allocator, "(?:a{65536}){51}", .{});
+    const at_cap = try zregex.internal.compile(testing.allocator, "(?:a{65536}){51}", .{});
     defer at_cap.deinit();
     try testing.expect(at_cap.bytecode.len <= max);
     try testing.expect(at_cap.bytecode.len > max - 327680);
-    try testing.expectError(error.PatternTooLarge, zregex.compile(testing.allocator, "(?:a{65536}){52}", .{}));
+    try testing.expectError(error.PatternTooLarge, zregex.internal.compile(testing.allocator, "(?:a{65536}){52}", .{}));
 }
 
 // F3c: a lone surrogate written in WTF-8 inside the pattern (bytes ED A0 80),
@@ -611,7 +657,7 @@ fn v8Test(pattern: []const u8, flags: []const u8, input: []const u8) !bool {
     const slots = try a.alloc(?usize, re.slotCount());
     defer a.free(slots);
     var out: zregex.MatchSlots = .{ .slots = slots };
-    const s16 = try zregex.subject.utf16FromWtf8(a, input);
+    const s16 = try zregex.internal.subject.utf16FromWtf8(a, input);
     defer a.free(s16);
     const found16 = try re.execAt(.{ .utf16 = s16 }, 0, &scratch, &out, .{});
     // The same answer over WTF-8.
@@ -686,15 +732,15 @@ test "F7a: an index inside a surrogate pair with u starts at the pair (bug D, V8
         const slots = try a.alloc(?usize, re.slotCount());
         defer a.free(slots);
         var out: zregex.MatchSlots = .{ .slots = slots };
-        const s16 = try zregex.subject.utf16FromWtf8(a, c[2]);
+        const s16 = try zregex.internal.subject.utf16FromWtf8(a, c[2]);
         defer a.free(s16);
         const found16 = try re.execAt(.{ .utf16 = s16 }, c[3], &scratch, &out, .{});
         const got16: ?[2]usize = if (found16) .{ slots[0].?, slots[1].? } else null;
         // WTF-8: the same lastIndex as a byte position (`b+2` between the
         // halves), the same answer mapped back to UTF-16 units.
-        const idx8 = try zregex.subject.utf16ToWtf8Index(c[2], c[3]);
+        const idx8 = try zregex.internal.subject.utf16ToWtf8Index(c[2], c[3]);
         const found8 = try re.execAt(.{ .wtf8 = c[2] }, idx8, &scratch, &out, .{});
-        const got8: ?[2]usize = if (found8) .{ try zregex.subject.wtf8ToUtf16Index(c[2], slots[0].?), try zregex.subject.wtf8ToUtf16Index(c[2], slots[1].?) } else null;
+        const got8: ?[2]usize = if (found8) .{ try zregex.internal.subject.wtf8ToUtf16Index(c[2], slots[0].?), try zregex.internal.subject.wtf8ToUtf16Index(c[2], slots[1].?) } else null;
         if (!std.meta.eql(got16, c[4]) or !std.meta.eql(got8, c[4])) {
             std.debug.print("/{s}/{s} lastIndex {d}: UTF-16 {any}, WTF-8 {any}, V8 {any}\n", .{ c[0], c[1], c[3], got16, got8, c[4] });
             return error.TestUnexpectedResult;
@@ -908,7 +954,7 @@ fn spanOf(pattern: []const u8, input: []const u8, unicode: bool) !?[2]usize {
     const slots = try a.alloc(?usize, re.slotCount());
     defer a.free(slots);
     var out: zregex.MatchSlots = .{ .slots = slots };
-    const s16 = try zregex.subject.utf16FromWtf8(a, input);
+    const s16 = try zregex.internal.subject.utf16FromWtf8(a, input);
     defer a.free(s16);
     if (!try re.execAt(.{ .utf16 = s16 }, 0, &scratch, &out, .{})) return null;
     return .{ slots[0].?, slots[1].? };

@@ -40,7 +40,7 @@ pub fn options(flags: []const u8) zregex.CompileOptions {
 
 /// Wyhash of the whole program: the bytecode, then each CharSet in table
 /// order (its range count, then its ranges).
-pub fn hashProgram(compiled: zregex.CompileResult) u64 {
+pub fn hashProgram(compiled: zregex.internal.CompileResult) u64 {
     var h = std.hash.Wyhash.init(0);
     h.update(compiled.bytecode);
     for (compiled.charsets) |cs| {
@@ -53,7 +53,7 @@ pub fn hashProgram(compiled: zregex.CompileResult) u64 {
 /// The outcome column for `pattern` under `flags`: the program hash as 16
 /// hex digits, or `error:<Name>`. Written into `buf`.
 pub fn outcome(allocator: std.mem.Allocator, flags: []const u8, pattern: []const u8, buf: []u8) ![]const u8 {
-    const compiled = zregex.compile(allocator, pattern, options(flags)) catch |err| {
+    const compiled = zregex.internal.compile(allocator, pattern, options(flags)) catch |err| {
         if (err == error.OutOfMemory) return err;
         return std.fmt.bufPrint(buf, "error:{s}", .{@errorName(err)});
     };
@@ -63,12 +63,12 @@ pub fn outcome(allocator: std.mem.Allocator, flags: []const u8, pattern: []const
 
 /// The disassembly and CharSet table of `pattern`, for a failure report.
 pub fn dump(allocator: std.mem.Allocator, flags: []const u8, pattern: []const u8, w: *std.Io.Writer) !void {
-    const compiled = zregex.compile(allocator, pattern, options(flags)) catch |err| {
+    const compiled = zregex.internal.compile(allocator, pattern, options(flags)) catch |err| {
         try w.print("  compile error: {s}\n", .{@errorName(err)});
         return;
     };
     defer compiled.deinit();
-    try zregex.disassemble(compiled.bytecode, w);
+    try zregex.internal.disassemble(compiled.bytecode, w);
     for (compiled.charsets, 0..) |cs, i| {
         try w.print("  charset {d}: {d} ranges", .{ i, cs.ranges.len });
         for (cs.ranges[0..@min(cs.ranges.len, 8)]) |r| try w.print(" {X}-{X}", .{ r.lo, r.hi });

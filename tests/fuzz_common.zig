@@ -51,19 +51,19 @@ pub var stats: Stats = .{};
 /// ones (a parse error, or a known deviation such as D10) are compiled but
 /// not run: a known deviation has no tier (its feature set is complete since
 /// F2d, but the semantics it would run under deviates until F5).
-fn executable(a: zregex.analysis.Analysis) bool {
+fn executable(a: zregex.internal.analysis.Analysis) bool {
     const t = a.min_tier orelse return false;
     return t != .expert;
 }
 
 pub fn checkPattern(gpa: std.mem.Allocator, pattern: []const u8) !void {
     for ([_]Mode{ .none, .u, .v }) |mode| {
-        const flags: zregex.analysis.Flags = switch (mode) {
+        const flags: zregex.internal.analysis.Flags = switch (mode) {
             .none => .{},
             .u => .{ .u = true },
             .v => .{ .v = true },
         };
-        const analysis = try zregex.analyze(gpa, pattern, flags);
+        const analysis = try zregex.internal.analyze(gpa, pattern, flags);
         const execute = executable(analysis);
 
         const options: zregex.CompileOptions = switch (mode) {
@@ -149,10 +149,10 @@ fn sampled(pattern: []const u8) bool {
 /// `analyze()` puts in T0 and `tier0.check` or (F4b) `checkTagged`
 /// accepts, with F4a's program (no `save`/`clear`/`fail`) when `check`
 /// does, and `force_tier` agrees with that routing.
-fn checkRouting(gpa: std.mem.Allocator, re: zregex.Regex, pattern: []const u8, options: zregex.CompileOptions, analysis: zregex.analysis.Analysis, mode: Mode) !void {
+fn checkRouting(gpa: std.mem.Allocator, re: zregex.Regex, pattern: []const u8, options: zregex.CompileOptions, analysis: zregex.internal.analysis.Analysis, mode: Mode) !void {
     stats.audited += 1;
     // The forced-backtracker run (F4a(5)) routes nothing to the VM.
-    if (zregex.force_backtracker) return;
+    if (zregex.internal.force_backtracker) return;
     var plain = false;
     // T0, or T1 with only `u`, `\p` (F5a) and `i`'s Unicode folding (F5b),
     // when the VM takes the HIR.
@@ -164,10 +164,10 @@ fn checkRouting(gpa: std.mem.Allocator, re: zregex.Regex, pattern: []const u8, o
     const eligible = blk: {
         if (analysis.min_tier != .regular and !t1_vm) break :blk false;
         // The HIR the pattern compiled from: its flags decide the folded sets.
-        const fe = try zregex.lower.Frontend.init(gpa, pattern, .{ .unicode = options.unicode, .v = options.v }, .{ .ignore_case = options.case_insensitive, .multiline = options.multiline, .dot_all = options.dot_all });
+        const fe = try zregex.internal.lower.Frontend.init(gpa, pattern, .{ .unicode = options.unicode, .v = options.v }, .{ .ignore_case = options.case_insensitive, .multiline = options.multiline, .dot_all = options.dot_all });
         defer fe.deinit();
-        plain = zregex.tier0.check(fe.root) == null;
-        break :blk plain or zregex.tier0.compile_mod.checkTagged(fe.root) == null;
+        plain = zregex.internal.tier0.check(fe.root) == null;
+        break :blk plain or zregex.internal.tier0.compile_mod.checkTagged(fe.root) == null;
     };
     if (eligible != (re.t0 != null)) return reportDisagreement(pattern, mode, "analyze()+tier0.check/checkTagged and the dispatcher route differently");
     if (re.t0) |p| {
@@ -180,7 +180,7 @@ fn checkRouting(gpa: std.mem.Allocator, re: zregex.Regex, pattern: []const u8, o
     var o = options;
     // `.unicode` takes whatever the dispatcher routes to the VM; `.regular`
     // only the T0 part of it.
-    for ([_]zregex.analysis.Tier{ .regular, .unicode }) |tier| {
+    for ([_]zregex.internal.analysis.Tier{ .regular, .unicode }) |tier| {
         o.force_tier = tier;
         const want = re.t0 != null and (tier == .unicode or analysis.min_tier == .regular);
         if (zregex.Regex.compileWithOptions(gpa, pattern, o)) |forced| {
@@ -222,7 +222,7 @@ fn findMatchesExecAt(gpa: std.mem.Allocator, re: zregex.Regex, subject: []const 
 /// backtracker neither resets it per iteration (D4) nor rejects an empty
 /// iteration (D3), and V8 sides with the VM (F4b(2)'s arbiter), so the
 /// engines are compared on the match bounds only.
-fn groupInRepeat(node: *const zregex.tier0.hir.Node, in_repeat: bool) bool {
+fn groupInRepeat(node: *const zregex.internal.tier0.hir.Node, in_repeat: bool) bool {
     return switch (node.*) {
         .empty, .literal, .char_set, .backref, .assert => false,
         .seq, .alt => |items| for (items) |item| {
@@ -243,7 +243,7 @@ fn compareEngines(gpa: std.mem.Allocator, re: zregex.Regex, pattern: []const u8,
     defer bt.deinit();
     const n = bt.slotCount();
     const bounds_only = blk: {
-        const fe = try zregex.lower.Frontend.init(gpa, pattern, .{ .unicode = options.unicode, .v = options.v }, .{});
+        const fe = try zregex.internal.lower.Frontend.init(gpa, pattern, .{ .unicode = options.unicode, .v = options.v }, .{});
         defer fe.deinit();
         break :blk groupInRepeat(fe.root, false);
     };
@@ -257,7 +257,7 @@ fn compareEngines(gpa: std.mem.Allocator, re: zregex.Regex, pattern: []const u8,
     defer scratch.deinit();
     for (subjects) |s8| {
         if (audit) try findMatchesExecAt(gpa, bt, s8, pattern);
-        const s16 = try zregex.subject.utf16FromWtf8(gpa, s8);
+        const s16 = try zregex.internal.subject.utf16FromWtf8(gpa, s8);
         defer gpa.free(s16);
         for ([_]zregex.Subject{ .{ .wtf8 = s8 }, .{ .utf16 = s16 } }) |subj| {
             for ([_]bool{ false, true }) |sticky| {
@@ -293,7 +293,7 @@ fn isParseError(err: anyerror) bool {
     // parser and also after it (a lookbehind of variable length), where
     // analyze classifies the pattern.
     if (err == error.UnsupportedFeature) return false;
-    inline for (@typeInfo(zregex.ParseError).error_set.?) |e| {
+    inline for (@typeInfo(zregex.internal.ParseError).error_set.?) |e| {
         if (err == @field(anyerror, e.name)) return true;
     }
     return false;

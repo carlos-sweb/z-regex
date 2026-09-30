@@ -83,7 +83,7 @@ pub fn main(init: std.process.Init) !void {
             defer gpa.free(b);
             var reported = false;
             for (subjects) |subj| {
-                const s16 = try z.subject.utf16FromWtf8(gpa, subj);
+                const s16 = try z.internal.subject.utf16FromWtf8(gpa, subj);
                 defer gpa.free(s16);
                 for ([_]z.Subject{ .{ .wtf8 = subj }, .{ .utf16 = s16 } }) |s| {
                     var i: usize = 0;
@@ -112,7 +112,7 @@ pub fn main(init: std.process.Init) !void {
 fn hasLookbehind(code: []const u8) bool {
     var pc: usize = 0;
     while (pc < code.len) {
-        const inst = z.tier2.format.decodeInstruction(code, pc) catch return false;
+        const inst = z.internal.tier2.format.decodeInstruction(code, pc) catch return false;
         if (inst.opcode == .LOOKBEHIND_FIXED or inst.opcode == .NEGATIVE_LOOKBEHIND_FIXED) return true;
         pc += inst.size;
     }

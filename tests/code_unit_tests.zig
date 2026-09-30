@@ -22,11 +22,11 @@ fn search(pattern: []const u8, opts: zregex.CompileOptions, s: []const u8) !?[2]
 }
 
 fn hasUnit(pattern: []const u8, opts: zregex.CompileOptions, unit: u32) !bool {
-    const c = try zregex.compile(testing.allocator, pattern, opts);
+    const c = try zregex.internal.compile(testing.allocator, pattern, opts);
     defer c.deinit();
     var pc: usize = 0;
     while (pc < c.bytecode.len) {
-        const inst = try zregex.tier2.format.decodeInstruction(c.bytecode, pc);
+        const inst = try zregex.internal.tier2.format.decodeInstruction(c.bytecode, pc);
         if (inst.opcode == .CHAR32 and inst.operands[0] == unit) return true;
         pc += inst.size;
     }

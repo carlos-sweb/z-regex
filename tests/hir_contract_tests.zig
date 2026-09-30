@@ -31,17 +31,17 @@ fn check(pattern: []const u8, flags: []const u8) !void {
     const u = has(flags, 'u') or has(flags, 'v');
     // The lexer modes `lower.Frontend` sets: `v` alone doesn't turn on
     // `unicode_mode` (yet, F5), and `u` with `v` is a SyntaxError.
-    var lexer = zregex.Lexer.init(pattern);
+    var lexer = zregex.internal.Lexer.init(pattern);
     lexer.unicode_mode = has(flags, 'u');
     lexer.v_mode = has(flags, 'v');
     lexer.code_units = !u;
-    var parser = try zregex.Parser.init(a, &lexer);
+    var parser = try zregex.internal.Parser.init(a, &lexer);
     defer parser.deinit();
     const ast = try parser.parse();
     defer ast.deinit();
     var arena = std.heap.ArenaAllocator.init(a);
     defer arena.deinit();
-    const root = zregex.lower.lower(arena.allocator(), ast, .{ .ignore_case = has(flags, 'i'), .dot_all = has(flags, 's') }, &.{}, .{ .unicode = has(flags, 'u'), .v = has(flags, 'v') }) catch |err| {
+    const root = zregex.internal.lower.lower(arena.allocator(), ast, .{ .ignore_case = has(flags, 'i'), .dot_all = has(flags, 's') }, &.{}, .{ .unicode = has(flags, 'u'), .v = has(flags, 'v') }) catch |err| {
         // Under `iv` a property, a negated class with foldable members or a
         // set operation on an operand that isn't fold-closed is unsupported
         // (F7c-0): no set to check, and `compile` says the same.

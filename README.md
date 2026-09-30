@@ -56,7 +56,7 @@ An ECMA-262 regular expression engine in Zig, independent of the JavaScript engi
 | Lookbehind with a lookaround inside a backward body, or matched backward under `u`/`v` | T2 | `error.UnsupportedFeature` (lookaround inside: 1.x) |
 
 "OK" means it works and passes the tests. It does **not** mean optimized. Which executor runs a
-pattern is decided at compile time from the pattern (`zregex.analyze`); the results are the
+pattern is decided at compile time from the pattern (`zregex.internal.analyze`); the results are the
 same whichever runs it.
 
 ## Quick start
@@ -183,6 +183,31 @@ const found = try re.execAt(.{ .wtf8 = "say\nHELLO" }, 0, &scratch, &out, limits
 
 These examples are compiled and run against the library (`zig build`, Zig 0.16).
 
+## API stability
+
+The root of the `zregex` module is the stable API (F7c-3):
+- `Regex` and its methods, `CompileOptions`, `RegexError` (what compiling fails with);
+- `MatchResult`, `CaptureIndices`, `Subject`, `Scratch`, `MatchSlots`, `MatchIterator`,
+  `ExecLimits`, `ExecError`;
+- the one-shot functions `test_`, `find`, `findAll`, `replace`, `replaceAll`;
+- `unicode.isInCategory` (and `unicode.UnicodeProperty`);
+- `version`;
+- the C API (`src/c_api.zig`, `zig build shared`): its 40 `zregex_*` symbols and error codes.
+
+**Not covered:**
+- **`zregex.internal`:** the engine's pieces (lexer, parser, HIR, code generator, tiers,
+  analysis) for this repository's tests, tools and bench. No stability guarantee: it can
+  change in any release.
+- **The diagnostic fields of `CompileOptions`** (`force_tier`, `tier_diagnostic`,
+  `t0_prefilters`, `t2_look_linear`): the same.
+
+**The error rule (the freeze):**
+- valid syntax that zregex doesn't implement is `error.UnsupportedFeature` (C API:
+  `ZREGEXP_ERROR_UNSUPPORTED`, code 9), never a wrong result;
+- a later release only removes such cases (a pattern that was `UnsupportedFeature` starts
+  compiling), never adds new errors;
+- the error names and their C codes are part of the contract.
+
 ## Performance
 
 T0 runs in O(n·m), without ReDoS. See [docs/BENCHMARKS.md](docs/BENCHMARKS.md) for numbers
@@ -215,7 +240,7 @@ against V8, Rust regex, PCRE2 and zig-regex.
 ## Architecture
 
 - **Three tiers:** T0 (linear VMs), T1 (Unicode, F5), T2 (backtracker). A pattern's tier comes
-  from `zregex.analyze`.
+  from `zregex.internal.analyze`.
 - **One parser, one HIR, several executors:** every executor runs the same HIR, so a pattern
   means the same thing wherever it runs.
 - **Layers as build modules:** the table in `build.zig` says which module may import which

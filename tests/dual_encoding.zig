@@ -5,7 +5,7 @@
 
 const std = @import("std");
 const zregex = @import("zregex");
-const subject = zregex.subject;
+const subject = zregex.internal.subject;
 
 /// Whether `s` is well-formed WTF-8 (no ill-formed byte), so its UTF-16
 /// form means the same string. Ill-formed bytes only exist in WTF-8.
