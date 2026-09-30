@@ -424,6 +424,7 @@ fn engineName(re: zregex.Regex) []const u8 {
         .class_run => if (tagged) "tagged VM, class_run" else "VM, class_run",
         .shift_and => if (tagged) "tagged VM, shift_and" else "VM, shift_and",
         .first => if (tagged) "tagged VM, first" else "VM, first",
+        .inner => if (tagged) "tagged VM, inner" else "VM, inner",
     };
 }
 

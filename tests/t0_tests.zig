@@ -456,7 +456,9 @@ test "prefilters: which one each pattern gets" {
     try testing.expectEqual(.class_run, try prefilterKind("[a-z]+"));
     try testing.expectEqual(.shift_and, try prefilterKind("\\d{3}-\\d{4}"));
     try testing.expectEqual(.shift_and, try prefilterKind("(\\d{3})-(\\d{4})"));
-    try testing.expectEqual(.first, try prefilterKind("[\\w.+-]+@[\\w-]+\\.[\\w.]+"));
+    try testing.expectEqual(.inner, try prefilterKind("[\\w.+-]+@[\\w-]+\\.[\\w.]+"));
+    // A single first byte keeps `first`, even with a required inner ` `.
+    try testing.expectEqual(.first, try prefilterKind("Mr\\.? [A-Z][a-z]+"));
     try testing.expectEqual(.none, try prefilterKind("a?"));
     const off = try zregex.Regex.compileWithOptions(testing.allocator, "hello", .{ .t0_prefilters = false });
     defer off.deinit();

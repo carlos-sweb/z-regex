@@ -287,3 +287,33 @@ Instrucciones por byte con callgrind (256 KiB):
   - el resto de los casos, entre 0,94× y 1,05×, salvo los dispersos, que mejoran (1,14× y 1,26×). El 0,86× del prototipo en `book_*` venía de B, no de C.
 - **Binario:** ReleaseFast 1.114.432 B (+1.552), ReleaseSmall 706.040 B (+1.248), 40 símbolos.
 - **Herramientas:** `tools/pfdiff.zig` dimensionaba su contador por tipo de prefiltro con un 4 fijo (panic con la variante nueva), y `bench/bench.zig` tenía un `switch` exhaustivo. Las dos se adaptan en el mismo commit.
+
+## 10. Resultado de B (implementado)
+- **Código:**
+  - `prefilter.Inner`, `innerOf`, `innerAt` y `minPrefix` en `src/tier0/prefilter.zig`, registrados en `analyze` después de C;
+  - el salto `InnerSkip` en `src/tier0/pikevm.zig`.
+- **`Vm.search` recibe el salto como tipo en compilación:** hay una instancia sin salto, otra con `first` y otra con `inner`. Así un patrón sin B no paga la comprobación en cada posición, que era el +2,9 % del prototipo.
+- **Selección del literal:** el candidato menos común según un rango grueso por clases de byte (`commonness`: controles < puntuación rara < dígitos, mayúsculas y puntuación común < minúsculas < espacio). No es una tabla medida. En empate gana el primero en el programa, y se prueban a lo sumo 32 candidatos.
+- **Regla de `first`:** sin B cuando `first` es un solo byte.
+- **Prefijo mínimo:** una búsqueda 0-1 sobre el programa; el salto descarta un literal cuyo tramo es más corto.
+- **Programas por la ruta nueva:** 408, 1.906 y 290 (f2c, f2c-2 y npm), de ellos 135, 642 y 215 con grupos. El precheck daba 409, 1.909 y 291; la diferencia es el tope de 32 candidatos.
+- **Diferencial propio** (base `da7d12e` frente a C+B): 28.563 programas y 34,2 M de `execAt`, 0 diferencias.
+- **Bench frente a C** (10 rondas intercaladas, la mejor por caso): e-mail 58,6 → 286,5 MB/s (**4,89×**).
+- **Casos de no regresión** (callgrind, instrucciones sin el arranque):
+
+  | Caso | Instrucciones | Tiempo real |
+  |---|---|---|
+  | `book_word` | −3,6 % | 1,13× |
+  | `book_title` | −1,3 % | 0,97× |
+  | `[a-z]+` | 0,0 % | 0,94× |
+
+- **Adversariales** (instrucciones por byte, base → B):
+
+  | Entrada | Base | B |
+  |---|---|---|
+  | `a@a@…` | 265,0 | 269,5 |
+  | `aaaaaaa@b…` | 307,8 | 312,7 |
+  | solo `@` | 7,0 | 69,0 (peor caso, lineal) |
+  | sin `@` | 217,0 | 0,2 |
+
+- **Binario:** ReleaseFast 1.130.080 B (+15.648 frente a C) y ReleaseSmall 715.560 B (+9.520), con 40 símbolos. Casi todo son las tres instancias de `search` por tipo de unidad.

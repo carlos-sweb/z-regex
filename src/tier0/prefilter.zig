@@ -28,6 +28,10 @@
 //!   (`shiftand.zig`, docs/plans/T0-CB.md C).
 //! - `first`: the units a match can start with, to skip positions where
 //!   none can (only while no thread is alive). See `First`.
+//! - `inner`: a required ASCII character that nothing before it in a match
+//!   can be: find it, back up over the run before it, and run the VM from
+//!   there (only while no thread is alive). See `Inner` (docs/plans/T0-CB.md
+//!   B).
 
 const std = @import("std");
 const Allocator = std.mem.Allocator;
@@ -49,6 +53,7 @@ pub const Prefilter = struct {
         class_run: ClassRun,
         shift_and: shiftand.ShiftAnd,
         first: First,
+        inner: Inner,
     };
 
     pub fn deinit(self: Prefilter, gpa: Allocator) void {
@@ -108,8 +113,19 @@ pub fn analyze(gpa: Allocator, root: *const hir.Node, prog: *const Program) Allo
         pf.kind = .{ .class_run = c };
     } else if (try shiftand.of(gpa, prog)) |sa| {
         pf.kind = .{ .shift_and = sa };
-    } else if (firstOf(prog)) |f| {
-        pf.kind = .{ .first = f };
+    } else {
+        const first = firstOf(prog);
+        // A single first byte is already a memchr at every start; B would
+        // search for a more common byte (`(Mr|Mrs|Miss)\.? ([A-Z]...` would
+        // take the space: 4x slower in the precheck).
+        const single = if (first) |f| f.single8 != null else false;
+        if (!pf.anchored and !single) {
+            if (try innerOf(gpa, prog)) |n| {
+                pf.kind = .{ .inner = n };
+                return pf;
+            }
+        }
+        if (first) |f| pf.kind = .{ .first = f };
     }
     return pf;
 }
@@ -215,6 +231,202 @@ fn firstOfWith(prog: *const Program, comptime scan: usize) ?First {
 }
 
 const Bits = std.StaticBitSet(256);
+
+/// A required inner character (B): `unit`, ASCII, is on every path from pc
+/// 0 to `match`, and no `char`/`set` reachable from pc 0 without passing it
+/// accepts `unit`. So in any match, the units before its first `unit` are
+/// all members of the prefix class `back`, and `unit` is not one.
+///
+/// **The skip** (`pikevm`, while no thread is alive): the first `unit` at
+/// `p >= pos`, then back over `back` members down to `s >= pos`. No match
+/// starts in `[pos, s)`: a match from `t` in there would have its first
+/// `unit` at `p' >= p`; `p' > p` puts `p` (not in `back`) inside its prefix,
+/// and `p' = p` puts `t` in the run, so `t >= s`. The VM then runs from `s`
+/// as always, so it finds the leftmost-first match from `pos`.
+///
+/// **Minimum prefix.** Every match consumes at least `min_prefix` units
+/// before its first `unit`: a run `[s, p)` shorter than that has no match
+/// through `p`, and the skip goes on to the next `unit`.
+///
+/// **Linear.** Each back-up stops at the `unit` before (not in `back`), so
+/// the back-ups are disjoint; the found `p` and `s` are kept while `p >= pos`.
+///
+/// `back` is conservative like `First`: in WTF-8 a member from U+0080 up
+/// marks every byte from 0x80 up, so the back-up stops right after an ASCII
+/// byte or at `pos`, both positions.
+pub const Inner = struct {
+    unit: u8,
+    min_prefix: u32,
+    back8: [256]bool,
+    back16: [256]bool,
+    high: bool,
+
+    pub inline fn inBack(self: *const Inner, comptime Unit: type, u: Unit) bool {
+        return if (Unit == u8) self.back8[u] else if (u < 256) self.back16[u] else self.high;
+    }
+};
+
+/// Candidates tried (in pc order) before giving up: each costs a walk of the
+/// program.
+const max_inner_candidates = 32;
+
+/// A coarse guess at how common a byte is in text, lower is rarer: control
+/// characters, then uncommon punctuation, then digits, capitals and common
+/// punctuation, then lower-case letters, then the space. Not measured on a
+/// corpus: it only has to put `@`, `#` or `=` before `e` or ` `.
+fn commonness(c: u8) u8 {
+    return switch (c) {
+        ' ' => 4,
+        'a'...'z' => 3,
+        '0'...'9', 'A'...'Z', '\t', '\n', '\r', '.', ',', '-', '\'', '"', '/', ':', '(', ')', '_' => 2,
+        '!', '#'...'&', '*', '+', ';'...'@', '['...'^', '`', '{'...'~' => 1,
+        else => 0,
+    };
+}
+
+/// The rarest required inner character of `prog` (earliest pc on ties).
+fn innerOf(gpa: Allocator, prog: *const Program) Allocator.Error!?Inner {
+    if (prog.insts.len > max_scan) return null;
+    var best: ?Inner = null;
+    var best_pc: u32 = 0;
+    var tried: usize = 0;
+    for (prog.insts, 0..) |inst, pc| {
+        if (inst != .char or inst.char >= 0x80) continue;
+        if (best) |b| if (commonness(@intCast(inst.char)) >= commonness(b.unit)) continue;
+        if (tried == max_inner_candidates) break;
+        tried += 1;
+        if (innerAt(prog, @intCast(pc))) |n| {
+            best = n;
+            best_pc = @intCast(pc);
+        }
+    }
+    var n = best orelse return null;
+    n.min_prefix = try minPrefix(gpa, prog, best_pc);
+    return n;
+}
+
+/// `Inner` for the `char` at `l`, or null when `l` isn't required, a unit
+/// before it can be its character, or nothing is consumed before it.
+/// `min_prefix` is left 0 (`minPrefix` fills it).
+fn innerAt(prog: *const Program, l: u32) ?Inner {
+    const c = prog.insts[l].char;
+    var utf8 = Bits.initEmpty();
+    var utf16 = Bits.initEmpty();
+    var high = false;
+    var consumes = false;
+    var seen = std.StaticBitSet(max_scan).initEmpty();
+    var stack: [2 * max_scan + 1]u32 = undefined;
+    stack[0] = 0;
+    var sp: usize = 1;
+    while (sp != 0) {
+        sp -= 1;
+        const pc = stack[sp];
+        if (pc == l or seen.isSet(pc)) continue;
+        seen.set(pc);
+        switch (prog.insts[pc]) {
+            // A path to `match` that avoids `l`: not required.
+            .match => return null,
+            .jmp => |t| {
+                stack[sp] = t;
+                sp += 1;
+            },
+            .split => |s| {
+                stack[sp] = s.x;
+                stack[sp + 1] = s.y;
+                sp += 2;
+            },
+            .assert, .save, .clear => {
+                stack[sp] = pc + 1;
+                sp += 1;
+            },
+            .fail => {},
+            .char => |x| {
+                if (x == c) return null;
+                mark(&utf8, &utf16, &high, x, x);
+                consumes = true;
+                stack[sp] = pc + 1;
+                sp += 1;
+            },
+            .set => |i| {
+                if (prog.sets[i].contains(c)) return null;
+                for (prog.sets[i].set.ranges) |r| mark(&utf8, &utf16, &high, r.lo, r.hi);
+                consumes = true;
+                stack[sp] = pc + 1;
+                sp += 1;
+            },
+        }
+    }
+    if (!consumes) return null;
+    var n: Inner = .{ .unit = @intCast(c), .min_prefix = 0, .back8 = undefined, .back16 = undefined, .high = high };
+    expand(utf8, &n.back8);
+    expand(utf16, &n.back16);
+    return n;
+}
+
+/// The fewest units any path from pc 0 consumes before reaching `l`: a 0-1
+/// breadth-first search (a `char`/`set` edge costs 1, the rest 0).
+fn minPrefix(gpa: Allocator, prog: *const Program, l: u32) Allocator.Error!u32 {
+    const n = prog.insts.len;
+    const none = std.math.maxInt(u32);
+    const dist = try gpa.alloc(u32, n);
+    defer gpa.free(dist);
+    @memset(dist, none);
+    const done = try gpa.alloc(bool, n);
+    defer gpa.free(done);
+    @memset(done, false);
+    // A deque: 0-cost edges push at the front, 1-cost at the back. A pc's
+    // first pop is final and only then are its (at most two) edges relaxed,
+    // so there are at most 2n + 1 pushes: 2n + 1 slots on each side.
+    const dq = try gpa.alloc(u32, 4 * n + 2);
+    defer gpa.free(dq);
+    var head: usize = 2 * n + 1;
+    var tail: usize = head;
+    dist[0] = 0;
+    dq[tail] = 0;
+    tail += 1;
+    while (head != tail) {
+        const pc = dq[head];
+        head += 1;
+        if (done[pc]) continue;
+        done[pc] = true;
+        if (pc == l) return dist[pc];
+        const d = dist[pc];
+        var to: [2]u32 = undefined;
+        var k: usize = 0;
+        var w: u32 = 0;
+        switch (prog.insts[pc]) {
+            .jmp => |t| {
+                to[0] = t;
+                k = 1;
+            },
+            .split => |s| {
+                to = .{ s.x, s.y };
+                k = 2;
+            },
+            .assert, .save, .clear => {
+                to[0] = pc + 1;
+                k = 1;
+            },
+            .char, .set => {
+                to[0] = pc + 1;
+                k = 1;
+                w = 1;
+            },
+            .fail, .match => {},
+        }
+        for (to[0..k]) |t| if (d + w < dist[t]) {
+            dist[t] = d + w;
+            if (w == 0) {
+                head -= 1;
+                dq[head] = t;
+            } else {
+                dq[tail] = t;
+                tail += 1;
+            }
+        };
+    }
+    return dist[l];
+}
 
 /// `bits` as a lookup table, eight entries at a time (a bit per `isSet`
 /// was most of the prefilter's compile cost; F7b(6)). Each byte of the
@@ -379,16 +591,123 @@ test "first: nullable patterns and non-ASCII members" {
     // A nullable pattern can match anywhere: no table.
     const opt: hir.Node = .{ .repeat = .{ .min = 0, .max = 1, .policy = .greedy, .syntax_form = .question, .body = &a } };
     try testing.expectEqual(.none, try kindOf(&scope(.{}, &opt)));
-    // `\bé`: asserts pass through; é marks every byte >= 0x80, and 0xE9
-    // for UTF-16.
+    // `\bé[xy]`: asserts pass through; é marks every byte >= 0x80, and
+    // 0xE9 for UTF-16. (`\béx` would take B, on the `x`.)
     const wb: hir.Node = .{ .assert = .word_boundary };
-    const e: hir.Node = .{ .literal = .{ .units = &.{ .{ .value = 0xE9 }, .{ .value = 'x' } } } };
-    const seq: hir.Node = .{ .seq = &.{ &wb, &e } };
+    const e: hir.Node = .{ .literal = .{ .units = &.{.{ .value = 0xE9 }} } };
+    const xy = setNode(.{ .ranges = &.{.{ .lo = 'x', .hi = 'y' }} });
+    const seq: hir.Node = .{ .seq = &.{ &wb, &e, &xy } };
     const q = try compile(testing.allocator, &scope(.{}, &seq));
     defer q.deinit(testing.allocator);
     const g = q.prefilter.kind.first;
     try testing.expect(g.utf8[0x80] and g.utf8[0xFF] and !g.utf8['x']);
     try testing.expectEqual(@as(?u8, 0xE9), g.single16);
+}
+
+fn innerOfRoot(root: *const hir.Node) !?Inner {
+    const p = try compile(testing.allocator, root);
+    defer p.deinit(testing.allocator);
+    return if (p.prefilter.kind == .inner) p.prefilter.kind.inner else null;
+}
+
+const lower_set: CharSet = .{ .ranges = &.{.{ .lo = 'a', .hi = 'z' }} };
+
+fn plusOf(b: *const hir.Node) hir.Node {
+    return .{ .repeat = .{ .min = 1, .max = null, .policy = .greedy, .syntax_form = .plus, .body = b } };
+}
+
+test "inner: a required character nothing before it can be" {
+    const l = setNode(lower_set);
+    const word = plusOf(&l);
+    const at = lit("@");
+    const seq: hir.Node = .{ .seq = &.{ &word, &at, &word } };
+    const n = (try innerOfRoot(&scope(.{}, &seq))).?;
+    try testing.expectEqual(@as(u8, '@'), n.unit);
+    try testing.expectEqual(@as(u32, 1), n.min_prefix);
+    try testing.expect(n.back8['a'] and n.back8['z'] and !n.back8['@'] and !n.back8[0x80]);
+    try testing.expect(n.back16['q'] and !n.back16['@'] and !n.high);
+    // `\béx`: the `x`, after a prefix of é (every byte from 0x80 up).
+    const wb: hir.Node = .{ .assert = .word_boundary };
+    const ex: hir.Node = .{ .literal = .{ .units = &.{ .{ .value = 0xE9 }, .{ .value = 'x' } } } };
+    const bex: hir.Node = .{ .seq = &.{ &wb, &ex } };
+    const m = (try innerOfRoot(&scope(.{}, &bex))).?;
+    try testing.expectEqual(@as(u8, 'x'), m.unit);
+    try testing.expect(m.back8[0xC3] and m.back8[0xFF] and !m.back8['x'] and m.back16[0xE9]);
+}
+
+test "inner: not when avoidable, in the prefix, anchored, or after a single first byte" {
+    const l = setNode(lower_set);
+    const word = plusOf(&l);
+    const at = lit("@");
+    const hash = lit("#");
+    // `[a-z]+(?:@|#)`: neither is on every path.
+    const either: hir.Node = .{ .alt = &.{ &at, &hash } };
+    const avoid: hir.Node = .{ .seq = &.{ &word, &either } };
+    try testing.expectEqual(.first, try kindOf(&scope(.{}, &avoid)));
+    // `[a-z@]+@`: the prefix can be `@`; the `x` of `[a-z@]+@x` too.
+    const la = setNode(.{ .ranges = &.{ .{ .lo = '@', .hi = '@' }, .{ .lo = 'a', .hi = 'z' } } });
+    const word_at = plusOf(&la);
+    const x = lit("x");
+    const in_prefix: hir.Node = .{ .seq = &.{ &word_at, &at, &x } };
+    try testing.expectEqual(.first, try kindOf(&scope(.{}, &in_prefix)));
+    // `^[a-z]+@`: anchored, only position 0 is tried anyway.
+    const caret: hir.Node = .{ .assert = .caret };
+    const anchored: hir.Node = .{ .seq = &.{ &caret, &word, &at } };
+    try testing.expectEqual(.first, try kindOf(&scope(.{}, &anchored)));
+    // `a[a-z]*@`: `first` is the single byte `a`, a memchr already.
+    const a = lit("a");
+    const star: hir.Node = .{ .repeat = .{ .min = 0, .max = null, .policy = .greedy, .syntax_form = .star, .body = &l } };
+    const single: hir.Node = .{ .seq = &.{ &a, &star, &at } };
+    try testing.expectEqual(.first, try kindOf(&scope(.{}, &single)));
+    // `@[a-z]+`: nothing before it, so `first` (the single byte `@`).
+    const lead: hir.Node = .{ .seq = &.{ &at, &word } };
+    try testing.expectEqual(.first, try kindOf(&scope(.{}, &lead)));
+}
+
+test "inner: the rarest candidate, and the minimum prefix" {
+    const l = setNode(lower_set);
+    const word = plusOf(&l);
+    // `[a-z]+ =[a-z]`: both ` ` and `=` qualify; `=` is rarer.
+    const sp_eq = lit(" =");
+    const seq: hir.Node = .{ .seq = &.{ &word, &sp_eq, &l } };
+    const n = (try innerOfRoot(&scope(.{}, &seq))).?;
+    try testing.expectEqual(@as(u8, '='), n.unit);
+    try testing.expectEqual(@as(u32, 2), n.min_prefix);
+    try testing.expect(n.back8[' '] and n.back8['k']);
+    // `[a-z]{3}\d*@`: three units at least; `\d*` adds none.
+    const three: hir.Node = .{ .repeat = .{ .min = 3, .max = 3, .policy = .greedy, .syntax_form = .counted, .body = &l } };
+    const d = setNode(.{ .ranges = &.{.{ .lo = '0', .hi = '9' }} });
+    const ds: hir.Node = .{ .repeat = .{ .min = 0, .max = null, .policy = .greedy, .syntax_form = .star, .body = &d } };
+    const at = lit("@");
+    const min3: hir.Node = .{ .seq = &.{ &three, &ds, &at, &l } };
+    try testing.expectEqual(@as(u32, 3), (try innerOfRoot(&scope(.{}, &min3))).?.min_prefix);
+    // `(?:ab|c)@`: the shorter branch decides.
+    const ab = lit("ab");
+    const c = lit("c");
+    const alt: hir.Node = .{ .alt = &.{ &ab, &c } };
+    const alt_at: hir.Node = .{ .seq = &.{ &alt, &at, &l } };
+    try testing.expectEqual(@as(u32, 1), (try innerOfRoot(&scope(.{}, &alt_at))).?.min_prefix);
+    // `[a-z]*@`: a nullable prefix, 0.
+    const star: hir.Node = .{ .repeat = .{ .min = 0, .max = null, .policy = .greedy, .syntax_form = .star, .body = &l } };
+    const nul: hir.Node = .{ .seq = &.{ &star, &at, &l } };
+    try testing.expectEqual(@as(u32, 0), (try innerOfRoot(&scope(.{}, &nul))).?.min_prefix);
+}
+
+test "inner: compile doesn't leak on allocation failure" {
+    const l = setNode(lower_set);
+    const word = plusOf(&l);
+    const at = lit("@");
+    const seq: hir.Node = .{ .seq = &.{ &word, &at, &word } };
+    try testing.checkAllAllocationFailures(testing.allocator, struct {
+        fn f(gpa: Allocator, root: *const hir.Node) !void {
+            const p = compile(gpa, root) catch |err| switch (err) {
+                error.Ineligible => unreachable,
+                else => |e| return e,
+            };
+            try testing.expect(p.prefilter.kind == .inner);
+            p.deinit(gpa);
+        }
+    }.f, .{&seq});
 }
 
 test "anchored: ^ without m, not with m or in one alternative" {
