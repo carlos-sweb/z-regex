@@ -418,6 +418,7 @@ fn engineName(re: zregex.Regex) []const u8 {
     const tagged = p.nslots > 2 or for (p.insts) |inst| {
         if (inst == .fail) break true;
     } else false;
+    if (p.dfa != null) return if (tagged) "DFA, tagged VM" else "DFA";
     return switch (p.prefilter.kind) {
         .none => if (tagged) "tagged VM" else "VM",
         .literal => if (tagged) "tagged VM, literal" else "VM, literal",

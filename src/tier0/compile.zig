@@ -27,6 +27,7 @@ const Program = program.Program;
 const Inst = program.Inst;
 const Set = program.Set;
 const prefilter = @import("prefilter.zig");
+const dfa = @import("dfa.zig");
 
 /// Why a pattern stays on the backtracker in F4a.
 pub const Ineligible = enum {
@@ -187,7 +188,13 @@ pub fn compileAccepted(gpa: Allocator, root: *const hir.Node, options: Options) 
     if (root.* == .modifier_scope) prog.word_ci = root.modifier_scope.flags.ignore_case;
     errdefer prog.deinit(gpa);
     try buildClosures(gpa, &prog);
-    if (options.prefilters) prog.prefilter = try prefilter.analyze(gpa, root, &prog);
+    if (options.prefilters) {
+        prog.prefilter = try prefilter.analyze(gpa, root, &prog);
+        if (prefilter.wantsDfa(&prog.prefilter) and dfa.eligible(&prog)) {
+            prog.dfa = try dfa.build(gpa, &prog);
+            prog.dfa_skip = prefilter.dfaSkip(&prog.prefilter);
+        }
+    }
     return prog;
 }
 
@@ -662,6 +669,34 @@ test "C: which programs take the Shift-And fast path" {
     const caret: hir.Node = .{ .assert = .caret };
     const anchored: hir.Node = .{ .seq = &.{ &caret, &three } };
     try testing.expectEqual(.first, try kindOf(&anchored, false));
+}
+
+test "A phase 1: which programs get a DFA" {
+    const hasDfa = struct {
+        fn f(root: *const hir.Node, options: Options) !bool {
+            const p = try compileWith(testing.allocator, root, options);
+            defer p.deinit(testing.allocator);
+            return p.dfa != null;
+        }
+    }.f;
+    const lower: hir.Node = .{ .char_set = .{ .set = .{ .ranges = &.{.{ .lo = 'a', .hi = 'z' }} }, .inverted = false, .encoding_hint = .set } };
+    const plus: hir.Node = .{ .repeat = .{ .min = 1, .max = null, .policy = .greedy, .syntax_form = .plus, .body = &lower } };
+    const at = lit("@");
+    const email: hir.Node = .{ .seq = &.{ &plus, &at, &plus } };
+    try testing.expect(try hasDfa(&email, .{}));
+    // With groups too: the DFA gives the bounds.
+    const g: hir.Node = .{ .capture = .{ .index = 1, .name = null, .body = &plus } };
+    const grouped: hir.Node = .{ .seq = &.{ &g, &at, &plus } };
+    try testing.expect(try hasDfa(&grouped, .{ .tagged = true }));
+    // Not without prefilters (u/v, or the diagnostic switch), not on a fast
+    // path, not with an assert.
+    try testing.expect(!try hasDfa(&email, .{ .prefilters = false }));
+    try testing.expect(!try hasDfa(&plus, .{}));
+    const ab = lit("ab");
+    try testing.expect(!try hasDfa(&ab, .{}));
+    const wb: hir.Node = .{ .assert = .word_boundary };
+    const bounded: hir.Node = .{ .seq = &.{ &wb, &plus, &at } };
+    try testing.expect(!try hasDfa(&bounded, .{}));
 }
 
 test "C: compile with a Shift-And table doesn't leak on allocation failure" {

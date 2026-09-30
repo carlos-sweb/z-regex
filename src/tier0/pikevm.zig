@@ -34,6 +34,7 @@ const Budget = @import("utils").budget.Budget;
 const program = @import("program.zig");
 const Program = program.Program;
 const prefilter = @import("prefilter.zig");
+const dfa_mod = @import("dfa.zig");
 /// The tagged VM's undo frames (its code is in pikevm_tagged.zig; its
 /// buffers live in `VmScratch`, shared with this VM).
 const Frame = @import("pikevm_tagged.zig").Frame;
@@ -214,6 +215,8 @@ pub fn exec(prog: *const Program, comptime Unit: type, input: []const Unit, mode
     } else null;
     const result = found orelse blk: {
         if (use_pf and (pf.kind == .literal or pf.kind == .class_run or pf.kind == .shift_and)) break :blk null;
+        // The DFA (T0-A phase 1): like the fast paths, no `scratch`.
+        if (use_pf) if (prog.dfa) |d| break :blk dfaSearch(prog, d, Unit, input, index, sticky);
         try scratch.ensure(prog.insts.len);
         // One instance of `search` per skip: a pattern without one doesn't
         // test for it at each position.
@@ -231,6 +234,18 @@ pub fn exec(prog: *const Program, comptime Unit: type, input: []const Unit, mode
     return true;
 }
 
+/// The DFA's search with the program's skip. Out of line: inlined into
+/// `exec`, its three instances slowed the other fast paths' calls by up to
+/// 25% (same instructions; code layout).
+noinline fn dfaSearch(prog: *const Program, d: *const dfa_mod.Dfa, comptime Unit: type, input: []const Unit, index: usize, sticky: bool) ?[2]usize {
+    const pf = &prog.prefilter;
+    return switch (prog.dfa_skip) {
+        .inner => d.find(Unit, input, index, sticky, InnerSkip{ .n = &pf.kind.inner }),
+        .first => d.find(Unit, input, index, sticky, FirstSkip{ .f = &pf.kind.first }),
+        .none => d.find(Unit, input, index, sticky, {}),
+    };
+}
+
 /// `Vm.search`'s skip while no thread is alive: none.
 const NoSkip = struct {};
 
@@ -238,7 +253,7 @@ const NoSkip = struct {};
 const FirstSkip = struct {
     f: *const prefilter.First,
 
-    fn next(self: *FirstSkip, comptime Unit: type, input: []const Unit, pos: usize) ?usize {
+    pub fn next(self: *FirstSkip, comptime Unit: type, input: []const Unit, pos: usize) ?usize {
         return Vm(Unit).skip(input, self.f, pos);
     }
 };
@@ -252,7 +267,7 @@ const InnerSkip = struct {
     lit: ?usize = null,
     start: usize = 0,
 
-    fn next(self: *InnerSkip, comptime Unit: type, input: []const Unit, pos: usize) ?usize {
+    pub fn next(self: *InnerSkip, comptime Unit: type, input: []const Unit, pos: usize) ?usize {
         var from = pos;
         if (self.lit) |p| if (p >= pos) {
             const s = @max(self.start, pos);
@@ -709,7 +724,8 @@ test "UTF-16 subjects" {
 test "a warm scratch allocates nothing" {
     const a = lit("ab");
     const star = rep(&a, 0, null, false);
-    const p = try compile(testing.allocator, &star);
+    // Without prefilters, so no DFA: the VM runs.
+    const p = try @import("compile.zig").compileWith(testing.allocator, &star, .{ .prefilters = false });
     defer p.deinit(testing.allocator);
     var failing: std.testing.FailingAllocator = .init(testing.allocator, .{});
     var scratch: VmScratch = .init(failing.allocator());
