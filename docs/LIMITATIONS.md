@@ -1,8 +1,7 @@
 # Limitations - zregex
 
-What zregex does and doesn't do **today**: the state of `main` after F7c (0.6.0 plus the
-F7c phases, to be released as 0.7.0). Each entry was checked against the code, its tests
-or V8 (Node 22). How each item got here, phase by phase, is in [HISTORY.md](HISTORY.md);
+What zregex does and doesn't do **today**, as of 0.7.0 (the end of F7c, the API freeze).
+Each entry was checked against the code, its tests or V8 (Node 22). How each item got here, phase by phase, is in [HISTORY.md](HISTORY.md);
 what a release promises is in [API.md](API.md).
 
 ## Status

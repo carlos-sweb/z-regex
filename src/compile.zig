@@ -44,35 +44,25 @@ pub const CompileOptions = struct {
     /// affect bytecode generation — read by `Regex.find`/`findAll`.
     sticky: bool = false,
 
-    /// Unicode mode (JS `u` flag): this engine is already unconditionally
-    /// code-point-aware (see Phase 1 in the compatibility plan) and already
-    /// supports `\p{...}`/`\P{...}` unconditionally, so this flag's only
-    /// current effect is stricter escape-sequence syntax validation, read by
-    /// the lexer (`Lexer.unicode_mode`, set from this field by `lower.Frontend`):
-    /// a backslash followed by a character that isn't a recognized escape or
-    /// syntax character (e.g. `\q`) is `error.InvalidEscape` instead of
-    /// falling back to a literal character (Annex-B-style leniency, this
-    /// engine's default everywhere else). See `docs/KNOWN_LIMITATIONS.md`
-    /// for what real `u`-mode strictness this does *not* yet cover (e.g.
-    /// malformed `\x`/`\u`/`\c`/`\k`/`\p` still fall back leniently even
-    /// under this flag).
+    /// Unicode mode (JS `u` flag): a character is a code point (a surrogate
+    /// pair is one), and the syntax is ECMA-262's strict one, without Annex B:
+    /// an unknown escape (`\q`), a malformed `\x`, `\u`, `\c`, `\k` or `\p`, a
+    /// `\N` past the last group, a lone `]` or `{`, a quantified lookahead
+    /// and a class escape as a range endpoint are SyntaxErrors (since F1a/F1b).
+    /// Read by the lexer (`Lexer.unicode_mode`, set by `lower.Frontend`).
+    /// What `u` doesn't implement: `docs/LIMITATIONS.md`.
     unicode: bool = false,
 
-    /// Unicode Sets mode (JS `v` flag), partial: inside a character class,
-    /// enables exactly one (non-chained, e.g. `A--B`, not `A--B--C`;
-    /// non-nested beyond one bracket level) class-set operation, `--`
-    /// (difference: matches `A` but not `B`) or `&&` (intersection: matches
-    /// both), where each operand is either an ordinary class body
-    /// (`\p{L}`, `a-z\d`, ...) or a nested `[...]` class (which may itself
-    /// be `[^...]`-negated). Read by the lexer (`Lexer.v_mode`, set by `lower.Frontend` from
-    /// this field) to recognize `--`/`&&`/`[` as their own
-    /// tokens inside a class instead of literal characters -- outside a
-    /// class, or with this flag off, they're unaffected. Does **not**
-    /// (yet) turn on full `u`-mode strictness the way real `v` implies, nor
-    /// `\q{...}` multi-string literals or operator chaining/deep nesting --
-    /// see `docs/KNOWN_LIMITATIONS.md` for the authoritative list of what
-    /// this flag does and doesn't cover. Together with `unicode` it is
-    /// `error.IncompatibleFlags`, a SyntaxError in ECMA-262.
+    /// Unicode Sets mode (JS `v` flag): `u`'s strict syntax (since E0) plus
+    /// class set operations, one per class: `[A--B]` (difference) or `[A&&B]`
+    /// (intersection), each operand one character, shorthand, `\p{...}` or
+    /// nested class. Mixing `--` and `&&`, or a list or range as an operand,
+    /// is a SyntaxError (F7c-4b); a chain of one operator, a bare right
+    /// operand, a union with a nested class, `\q{...}` and properties of
+    /// strings are `error.UnsupportedFeature`. Read by the lexer
+    /// (`Lexer.v_mode`), where `--`, `&&` and `[` inside a class become their
+    /// own tokens. Together with `unicode` it is `error.IncompatibleFlags`, a
+    /// SyntaxError in ECMA-262. The full list: `docs/LIMITATIONS.md`.
     v: bool = false,
 
     /// Opt-in extension, not ECMA-262 (D8, F1b): read `*+`, `++` and `?+` as

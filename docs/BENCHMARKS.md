@@ -1,7 +1,7 @@
 # Benchmarks: z-regex against V8, Rust regex, PCRE2 and zig-regex
 
-What this measures: z-regex at the end of F7c (HEAD `e242987`: 0.6.0 plus the F7c phases,
-released as 0.7.0) against the engines people would use instead, **tier by tier**
+What this measures: z-regex 0.7.0 (the end of F7c; measured on commit `e242987`, whose
+code is 0.7.0's) against the engines people would use instead, **tier by tier**
 (docs/REGEX_TIERS_PLAN.md): a T0 case is compared only with engines that run it as a regular
 expression, a T2 case (backreferences, lookaround) only with backtracking engines that
 support it. Tiers are never mixed in one table. z-regex 0.3.2, the version of the previous
@@ -13,7 +13,7 @@ publication, runs in the same rounds as a base (see "Against 0.3.2").
 |---|---|
 | Machine | Intel(R) Xeon(R) Processor @ 2.80GHz, 4 cores (no SMT), KVM guest, 15Gi RAM, Linux 6.18.44-fc-v50 |
 | Environment | **shared container**: a case moves by ±20% from one process to the next; read the band, not only the best round |
-| z-regex | HEAD `e242987` (reports `0.6.0`; released as 0.7.0), and 0.3.2 as the base. Zig 0.16.0, ReleaseFast, **`-Dcpu=x86_64_v3`** (AVX2, no AVX-512), the CPU model of `scripts/measure_binary.sh` |
+| z-regex | 0.7.0 (commit `e242987`: the same code, before the version bump), and 0.3.2 as the base. Zig 0.16.0, ReleaseFast, **`-Dcpu=x86_64_v3`** (AVX2, no AVX-512), the CPU model of `scripts/measure_binary.sh` |
 | V8 | 12.4.254.21-node.39 (Node v22.22.2) |
 | Rust regex | 1.13.1 (rustc 1.94.1 (e408947bf 2026-03-25)), release, LTO |
 | PCRE2 | 10.42, 8-bit library, JIT and interpreter |
@@ -366,7 +366,7 @@ because the required character `c` is absent (its start-up shortcut, as for `(a+
 
 ### Against 0.3.2
 
-z-regex HEAD and z-regex 0.3.2 in the same 10 rounds (the same harness: `bench/compare/` is
+z-regex 0.7.0 and z-regex 0.3.2 in the same 10 rounds (the same harness: `bench/compare/` is
 unchanged since 0.3.2), both built with `-Dcpu=x86_64_v3`.
 
 #### Best round; ratio > 1: better now
@@ -506,11 +506,17 @@ rounds. Even: within ±10%.
 **Even (±10%):** `\p{L}+` and `\p{General_Category=Lu}` against V8; `[A-Z][a-z]+` on the
 book against Rust; `[a-z]+` findAll against Rust (0.95×).
 
+**The e-mail case.** Email validation is z-regex's worst T0 case against Rust regex: 19× slower (2.2× slower than V8). The Pike VM pays per-position overhead that a JIT or a lazy DFA avoids. No fix is planned for 0.7.0; a lazy DFA over T0's Thompson program is the candidate for 1.x. Against V8 the worst T0 case is `(\d{3})-(\d{4})` on dense
+digits, 5.8× behind (the tagged VM's two passes on top of the same per-position cost); the
+worst case of the whole benchmark is T2's lookbehind `(?<=\$)\d+`, 13× behind V8 and 58×
+behind PCRE2 JIT.
+
 **Where it's behind, and why**
 - **Classes and groups on T0** (`\d{3}-\d{4}`, e-mail, captures): 1.9–5.8× behind V8. V8
   compiles the regexp to machine code; z-regex interprets a Pike VM that steps every live
   thread at every input position, with no DFA. Rust regex's lazy DFA (and on the e-mail its
   literal prefilter on `@`) is 2.5–19× ahead. Groups pay the tagged VM's two passes.
+  Email validation is z-regex's worst T0 case against Rust regex: 19× slower (2.2× slower than V8). The Pike VM pays per-position overhead that a JIT or a lazy DFA avoids. No fix is planned for 0.7.0; a lazy DFA over T0's Thompson program is the candidate for 1.x.
 - **Literals against Rust:** 1.45× behind (`hello`, `Darcy`). Rust's `memchr` picks the
   rarest bytes of each needle and the vector width at run time; z-regex searches the first
   and last bytes in pairs of vectors of a width fixed at build time (AVX2 here).
