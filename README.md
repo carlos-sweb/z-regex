@@ -67,7 +67,7 @@ same whichever runs it.
 With Zig 0.16. Add the dependency (this writes the hash into `build.zig.zon`):
 
 ```sh
-zig fetch --save https://github.com/carlos-sweb/z-regex/archive/refs/tags/v0.7.0.tar.gz
+zig fetch --save https://github.com/carlos-sweb/z-regex/archive/refs/tags/v0.7.1.tar.gz
 ```
 
 In `build.zig`:
@@ -305,9 +305,13 @@ measurements: [docs/HISTORY.md](docs/HISTORY.md). How the engine works:
   ([docs/API.md](docs/API.md)), `zregex.internal`, honest errors for `v` with `i` and for
   invalid `v` set operations, C error codes, documentation and benchmarks re-measured
   ([release notes](docs/RELEASE_NOTES_v0.7.0.md)).
+- **v0.7.1: T0 throughput (J+C+B).** `x+` without a duplicated body, a Shift-And path for
+  fixed ASCII sequences and a skip to the run before a required inner literal; API and
+  results unchanged ([release notes](docs/RELEASE_NOTES_v0.7.1.md)).
 - **To 1.0** ([docs/plans/ROADMAP_1.0.md](docs/plans/ROADMAP_1.0.md)): E0 (v0.5.1) → E1, full
-  F6b (v0.6.0) → F7c: API freeze and documentation (v0.7.0, done) → 1–3 months of
-  production use → v1.0.0 with the same API. RegExp modifiers: pending until further notice.
+  F6b (v0.6.0) → F7c: API freeze and documentation (v0.7.0, done) → T0 throughput
+  (v0.7.1, done) → a DFA for T0 ([docs/plans/T0-A.md](docs/plans/T0-A.md)) and the full
+  benchmark (v0.8.0) → 1–3 months of production use → v1.0.0 with the same API. RegExp modifiers: pending until further notice.
 - **F5, T1 (Unicode):** F5a done (`u` and `\p{…}` on the VM, every UCD property name);
   F5b done (full case folding under `i`); F5c (full `v`) pending.
 - **F6a, T2 without lookbehind: done** (explicit-stack backtracker, capture trail,

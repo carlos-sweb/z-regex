@@ -1,6 +1,6 @@
 # Limitations - zregex
 
-What zregex does and doesn't do **today**, as of 0.7.0 (the end of F7c, the API freeze).
+What zregex does and doesn't do **today**, as of 0.7.1 (the API freeze of 0.7.0, plus T0 throughput).
 Each entry was checked against the code, its tests or V8 (Node 22). How each item got here, phase by phase, is in [HISTORY.md](HISTORY.md);
 what a release promises is in [API.md](API.md).
 
