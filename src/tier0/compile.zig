@@ -623,6 +623,63 @@ test "compile doesn't leak on allocation failure" {
     }.f, .{&scope});
 }
 
+test "C: which programs take the Shift-And fast path" {
+    const kindOf = struct {
+        fn f(root: *const hir.Node, tagged: bool) !std.meta.Tag(prefilter.Prefilter.Kind) {
+            const p = try compileWith(testing.allocator, root, .{ .tagged = tagged });
+            defer p.deinit(testing.allocator);
+            return std.meta.activeTag(p.prefilter.kind);
+        }
+    }.f;
+    const digit: hir.Node = .{ .char_set = .{ .set = .{ .ranges = &.{.{ .lo = '0', .hi = '9' }} }, .inverted = false, .encoding_hint = .set } };
+    const dash = lit("-");
+    const three: hir.Node = .{ .repeat = .{ .min = 3, .max = 3, .policy = .greedy, .syntax_form = .counted, .body = &digit } };
+    const phone: hir.Node = .{ .seq = &.{ &three, &dash, &digit } };
+    try testing.expectEqual(.shift_and, try kindOf(&phone, false));
+    // With a group: the same line plus save/clear.
+    const g: hir.Node = .{ .capture = .{ .index = 1, .name = null, .body = &three } };
+    const grouped: hir.Node = .{ .seq = &.{ &g, &dash, &digit } };
+    try testing.expectEqual(.shift_and, try kindOf(&grouped, true));
+    // `i` on letters: sets of two ASCII members, still a straight line.
+    const ab = lit("ab");
+    const ci: hir.Node = .{ .modifier_scope = .{ .flags = .{ .ignore_case = true }, .body = &ab } };
+    try testing.expectEqual(.shift_and, try kindOf(&ci, false));
+    // A literal and C+ keep their own paths.
+    try testing.expectEqual(.literal, try kindOf(&ab, false));
+    const plus: hir.Node = .{ .repeat = .{ .min = 1, .max = null, .policy = .greedy, .syntax_form = .plus, .body = &digit } };
+    try testing.expectEqual(.class_run, try kindOf(&plus, false));
+    // Not a straight line, an assert, or a non-ASCII member: `first`.
+    const opt: hir.Node = .{ .repeat = .{ .min = 0, .max = 1, .policy = .greedy, .syntax_form = .question, .body = &dash } };
+    const var_len: hir.Node = .{ .seq = &.{ &digit, &opt, &digit } };
+    try testing.expectEqual(.first, try kindOf(&var_len, false));
+    const wb: hir.Node = .{ .assert = .word_boundary };
+    const bounded: hir.Node = .{ .seq = &.{ &wb, &three } };
+    try testing.expectEqual(.first, try kindOf(&bounded, false));
+    const dot: hir.Node = .{ .char_set = .{ .set = .{ .ranges = &.{ .{ .lo = 0, .hi = 9 }, .{ .lo = 11, .hi = 0x10FFFF } } }, .inverted = false, .encoding_hint = .set } };
+    const with_dot: hir.Node = .{ .seq = &.{ &digit, &dot } };
+    try testing.expectEqual(.first, try kindOf(&with_dot, false));
+    // `^` without `m` leads: anchored, and an assert, so not C.
+    const caret: hir.Node = .{ .assert = .caret };
+    const anchored: hir.Node = .{ .seq = &.{ &caret, &three } };
+    try testing.expectEqual(.first, try kindOf(&anchored, false));
+}
+
+test "C: compile with a Shift-And table doesn't leak on allocation failure" {
+    const digit: hir.Node = .{ .char_set = .{ .set = .{ .ranges = &.{.{ .lo = '0', .hi = '9' }} }, .inverted = false, .encoding_hint = .set } };
+    const dash = lit("-");
+    const phone: hir.Node = .{ .seq = &.{ &digit, &digit, &dash, &digit } };
+    try testing.checkAllAllocationFailures(testing.allocator, struct {
+        fn f(gpa: Allocator, root: *const hir.Node) !void {
+            const p = compile(gpa, root) catch |err| switch (err) {
+                error.Ineligible => unreachable,
+                else => |e| return e,
+            };
+            try testing.expect(p.prefilter.kind == .shift_and);
+            p.deinit(gpa);
+        }
+    }.f, .{&phone});
+}
+
 fn expectTagged(root: *const hir.Node, expected: []const u8) !void {
     const p = try compileWith(testing.allocator, root, .{ .tagged = true, .prefilters = false });
     defer p.deinit(testing.allocator);

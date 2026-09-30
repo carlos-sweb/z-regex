@@ -6,7 +6,7 @@
 //! (without `u`/`v`, which is all of T0 in F4a); in code-point mode the
 //! search runs the plain VM.
 //!
-//! **Invariant: the fast paths (`literal`, `class_run`) and the `first`
+//! **Invariant: the fast paths (`literal`, `class_run`, `shift_and`) and the `first`
 //! skip never touch `VmScratch`.** A pattern served by a fast path never
 //! grows the VM's buffers, so a host that only runs such patterns pays for
 //! no thread lists (`exec` sizes the scratch only on the VM path).
@@ -23,6 +23,9 @@
 //!   class: the first member, then the longest run. A non-ASCII character
 //!   or an ill-formed byte is never a member, and a run stops right after
 //!   an ASCII unit, so every boundary is a position.
+//! - `shift_and`: the program is a straight line of 1 to 64 ASCII
+//!   chars/sets (groups allowed): Shift-And, one `u64` of state
+//!   (`shiftand.zig`, docs/plans/T0-CB.md C).
 //! - `first`: the units a match can start with, to skip positions where
 //!   none can (only while no thread is alive). See `First`.
 
@@ -33,6 +36,7 @@ const hir = ir.hir;
 const program = @import("program.zig");
 const Program = program.Program;
 const Inst = program.Inst;
+const shiftand = @import("shiftand.zig");
 
 pub const Prefilter = struct {
     /// Every match starts at text position 0.
@@ -43,6 +47,7 @@ pub const Prefilter = struct {
         none,
         literal: Literal,
         class_run: ClassRun,
+        shift_and: shiftand.ShiftAnd,
         first: First,
     };
 
@@ -52,6 +57,7 @@ pub const Prefilter = struct {
                 gpa.free(l.utf8);
                 gpa.free(l.utf16);
             },
+            .shift_and => |sa| sa.deinit(gpa),
             else => {},
         }
     }
@@ -100,6 +106,8 @@ pub fn analyze(gpa: Allocator, root: *const hir.Node, prog: *const Program) Allo
         pf.kind = .{ .literal = l };
     } else if (classRunOf(root)) |c| {
         pf.kind = .{ .class_run = c };
+    } else if (try shiftand.of(gpa, prog)) |sa| {
+        pf.kind = .{ .shift_and = sa };
     } else if (firstOf(prog)) |f| {
         pf.kind = .{ .first = f };
     }
@@ -318,8 +326,9 @@ fn setNode(set: CharSet) hir.Node {
 test "literal: when it applies and when it doesn't" {
     const abc = lit("abc");
     try testing.expectEqual(.literal, try kindOf(&scope(.{}, &abc)));
-    // `i` on a letter: not a byte search (but the VM still skips).
-    try testing.expectEqual(.first, try kindOf(&scope(.{ .ignore_case = true }, &abc)));
+    // `i` on a letter: not a byte search; a straight line of ASCII sets,
+    // so Shift-And (C).
+    try testing.expectEqual(.shift_and, try kindOf(&scope(.{ .ignore_case = true }, &abc)));
     // `i` without letters is still a literal.
     const digits = lit("12-");
     try testing.expectEqual(.literal, try kindOf(&scope(.{ .ignore_case = true }, &digits)));

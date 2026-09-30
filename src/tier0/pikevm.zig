@@ -209,10 +209,11 @@ pub fn exec(prog: *const Program, comptime Unit: type, input: []const Unit, mode
     const found = if (use_pf) switch (pf.kind) {
         .literal => |l| literalSearch(Unit, input, if (Unit == u8) l.utf8 else l.utf16, index, sticky),
         .class_run => |*c| classRun(Unit, input, c, index, sticky),
+        .shift_and => |*sa| sa.find(Unit, input, index, sticky),
         .first, .none => null,
     } else null;
     const result = found orelse blk: {
-        if (use_pf and (pf.kind == .literal or pf.kind == .class_run)) break :blk null;
+        if (use_pf and (pf.kind == .literal or pf.kind == .class_run or pf.kind == .shift_and)) break :blk null;
         try scratch.ensure(prog.insts.len);
         break :blk vm.search(index, sticky or anchored, if (use_pf and pf.kind == .first) &pf.kind.first else null, scratch);
     };
