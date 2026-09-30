@@ -1668,7 +1668,20 @@ optimize, not a cost. F7b(2) first handed over the writer's own buffer, shrunk i
 callgrind saw no change (-0.5% to +0.5%), but the cross-engine bench did (`\p{L}+` compile
 ~1.7 us slower in a process that has run other cases; A/B on the same head: 3.9-5.0 vs
 2.3-2.7 us), so the copy came back at the F7b close. `CompileOptions.opt_level`, `Optimizer`
-and `OptLevel` have no effect and stay exported until the 1.0 API review (F7c).
+and `OptLevel` had no effect since; **F7c-2 removed them** (`optimizer.zig` and its 3 tests,
+the exports, the field and the 2 tests that set it). A caller that still sets `.opt_level`
+gets a compile error: the field is gone, there is nothing to ignore at run time.
+
+### Reserved opcodes (F7c-2)
+
+`CHAR2` (0x02, "one of two characters") and `LOOP` (0x16, a counted loop) were never
+emitted and no executor handled them. F7c-2 removed them from the code generator, the
+executors and the encoder/decoder, and kept their values as `RESERVED_02` and `RESERVED_16`
+so the bytecode format doesn't move and the values are never reused; decoding one is
+`error.UnknownOpcode`. A regression test walks the bytecode of a set of patterns (every
+flag, lookarounds, backreferences, counted repeats) and finds neither. `pending_trail` in
+the lexer is **not** dead code: in `code_units` mode (every pattern without `u`/`v`) an escape
+above U+FFFF returns its lead surrogate and leaves the trail there (F3d). It stays.
 
 ### Binary size: one procedure since F7b (the ~26 KB anomaly explained)
 

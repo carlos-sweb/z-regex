@@ -794,7 +794,7 @@ pub const CodeGenerator = struct {
             while (at < code.len) {
                 const inst = format.decodeInstruction(code, at) catch return error.InvalidPattern;
                 const cat = inst.opcode.category();
-                if ((cat == .character_match and inst.opcode != .CHAR2) or cat == .backreference) code[at] |= 0x80;
+                if (cat == .character_match or cat == .backreference) code[at] |= 0x80;
                 at += inst.size;
             }
         }

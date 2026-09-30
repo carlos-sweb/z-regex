@@ -610,17 +610,6 @@ test "Regex: compile and test" {
     try std.testing.expect(!try re.test_("world"));
 }
 
-test "Regex: compile with options" {
-    const options = CompileOptions{
-        .opt_level = .basic,
-    };
-
-    var re = try Regex.compileWithOptions(std.testing.allocator, "test", options);
-    defer re.deinit();
-
-    try std.testing.expect(try re.matchFull("test"));
-}
-
 test "Regex: find" {
     var re = try Regex.compile(std.testing.allocator, "world");
     defer re.deinit();

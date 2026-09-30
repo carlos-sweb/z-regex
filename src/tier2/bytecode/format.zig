@@ -113,7 +113,7 @@ pub fn decodeInstruction(bytecode: []const u8, offset: usize) !Instruction {
         },
 
         // 2 * u32
-        .CHAR2, .CHAR_RANGE, .CHAR_RANGE_INV, .CHAR_RANGE_B, .CHAR_RANGE_INV_B => {
+        .CHAR_RANGE, .CHAR_RANGE_INV, .CHAR_RANGE_B, .CHAR_RANGE_INV_B => {
             inst.operands[0] = readU32(bytecode[offset + 1 ..]);
             inst.operands[1] = readU32(bytecode[offset + 5 ..]);
             inst.operand_count = 2;
@@ -129,14 +129,6 @@ pub fn decodeInstruction(bytecode: []const u8, offset: usize) !Instruction {
         .SPLIT, .SPLIT_GREEDY, .SPLIT_LAZY, .SPLIT_POSSESSIVE => {
             inst.operands[0] = readU32(bytecode[offset + 1 ..]);
             inst.operands[1] = readU32(bytecode[offset + 5 ..]);
-            inst.operand_count = 2;
-        },
-
-        // u8 + u32 + i32
-        .LOOP => {
-            inst.operands[0] = bytecode[offset + 1]; // counter index
-            inst.operands[1] = readU32(bytecode[offset + 2 ..]); // max count
-            // Note: offset is stored separately in actual implementation
             inst.operand_count = 2;
         },
 
@@ -191,7 +183,7 @@ pub fn encodeInstruction(inst: Instruction, buffer: []u8) !usize {
         },
 
         // 2 * u32
-        .CHAR2, .CHAR_RANGE, .CHAR_RANGE_INV, .CHAR_RANGE_B, .CHAR_RANGE_INV_B => {
+        .CHAR_RANGE, .CHAR_RANGE_INV, .CHAR_RANGE_B, .CHAR_RANGE_INV_B => {
             writeU32(buffer[pos..], inst.operands[0]);
             pos += 4;
             writeU32(buffer[pos..], inst.operands[1]);
@@ -209,16 +201,6 @@ pub fn encodeInstruction(inst: Instruction, buffer: []u8) !usize {
             writeU32(buffer[pos..], inst.operands[0]);
             pos += 4;
             writeU32(buffer[pos..], inst.operands[1]);
-            pos += 4;
-        },
-
-        // u8 + u32 + i32
-        .LOOP => {
-            buffer[pos] = @intCast(inst.operands[0]);
-            pos += 1;
-            writeU32(buffer[pos..], inst.operands[1]);
-            pos += 4;
-            // Offset would be written here in real implementation
             pos += 4;
         },
 

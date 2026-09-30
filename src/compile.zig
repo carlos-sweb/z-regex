@@ -1,13 +1,12 @@
 //! Main compiler API
 //!
 //! This module provides the high-level compiler interface,
-//! orchestrating the lexer, parser, code generator, and optimizer.
+//! orchestrating the lexer, parser and code generator.
 
 const std = @import("std");
 const Allocator = std.mem.Allocator;
 
 const generator_mod = @import("tier2").generator;
-const optimizer_mod = @import("tier2").optimizer;
 const bytecode_writer = @import("tier2").writer;
 const format_mod = @import("tier2").format;
 const charset_mod = @import("ir").charset;
@@ -19,7 +18,6 @@ const Tier = classify.Tier;
 const build_options = @import("build_options");
 
 const CodeGenerator = generator_mod.CodeGenerator;
-const OptLevel = optimizer_mod.OptLevel;
 const BytecodeWriter = bytecode_writer.BytecodeWriter;
 pub const NamedGroup = format_mod.NamedGroup;
 pub const CharSet = charset_mod.CharSet;
@@ -32,11 +30,6 @@ const hir = @import("ir").hir;
 
 /// Compiler options
 pub const CompileOptions = struct {
-    /// Optimization level. No effect: the `Optimizer` never optimized, and
-    /// since F7b `compile` doesn't run it (kept for API compatibility until
-    /// the 1.0 API review, F7c).
-    opt_level: OptLevel = .basic,
-
     /// Case insensitive matching
     case_insensitive: bool = false,
 
@@ -266,8 +259,9 @@ fn generate(allocator: Allocator, fe: *const lower_mod.Frontend, options: Compil
     generator.empty_check = true;
     try generator.generate(fe.root);
 
-    // Phase 5 was a no-op `Optimizer` that copied the bytecode (F7b): the
-    // copy is now the writer's own (`takeBytecode`).
+    // The bytecode is the writer's own (`takeBytecode`); the no-op
+    // `Optimizer` of phase 5 is gone (F7b stopped running it, F7c-2 removed
+    // it).
     const bytecode = try writer.takeBytecode();
     errdefer allocator.free(bytecode);
 
@@ -429,19 +423,6 @@ test "compile: anchors" {
 
 test "compile: complex pattern" {
     const result = try compileSimple(std.testing.allocator, "(a|b)+c*");
-    defer result.deinit();
-
-    try std.testing.expect(result.bytecode.len > 0);
-}
-
-test "compile: with options" {
-    const options = CompileOptions{
-        .opt_level = .aggressive,
-        .case_insensitive = true,
-        .multiline = true,
-    };
-
-    const result = try compile(std.testing.allocator, "test", options);
     defer result.deinit();
 
     try std.testing.expect(result.bytecode.len > 0);

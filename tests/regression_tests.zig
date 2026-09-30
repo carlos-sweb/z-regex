@@ -349,6 +349,33 @@ test "B′: a lookbehind of fixed length runs on the explicit-stack backtracker 
     try expectLookbehind("(?<=x)(a*)*", "", "xaa", &.{ 1, 3, 1, 3 });
 }
 
+// F7c-2: CHAR2 (0x02) and LOOP (0x16) were never emitted; their values are
+// reserved (`RESERVED_02`, `RESERVED_16`). No pattern's bytecode holds them.
+test "F7c-2: the reserved opcodes 0x02 and 0x16 are never emitted" {
+    const a = testing.allocator;
+    const Opcode = zregex.tier2.opcodes.Opcode;
+    const cases = [_]struct { p: []const u8, o: zregex.CompileOptions = .{} }{
+        .{ .p = "abc" },                                    .{ .p = "a|b|cd" },
+        .{ .p = "a*b+c?d{2,5}e{3}f{2,}?" },                 .{ .p = "(a)(?<n>b)\\1\\k<n>" },
+        .{ .p = "[a-z\u{E9}]\\d\\w\\s." },                  .{ .p = "(?=a)(?!b)(?<=c)(?<!d)" },
+        .{ .p = "(?<=a+(b)\\1)c" },                         .{ .p = "^a$\\b\\B" },
+        .{ .p = "(?:ab){2,3}" },                            .{ .p = "[^abc]+?" },
+        .{ .p = "ab", .o = .{ .case_insensitive = true } }, .{ .p = "\\p{L}+\\u{1F600}", .o = .{ .unicode = true } },
+        .{ .p = "[[a-z]--[q]]", .o = .{ .v = true } },      .{ .p = "[a-z]k", .o = .{ .v = true, .case_insensitive = true } },
+        .{ .p = "a*+", .o = .{ .possessive = true } },
+    };
+    for (cases) |c| {
+        const r = try zregex.compile(a, c.p, c.o);
+        defer r.deinit();
+        var pc: usize = 0;
+        while (pc < r.bytecode.len) {
+            const inst = try zregex.tier2.format.decodeInstruction(r.bytecode, pc);
+            try testing.expect(inst.opcode != Opcode.RESERVED_02 and inst.opcode != Opcode.RESERVED_16);
+            pc += inst.size;
+        }
+    }
+}
+
 // F7c-0: under `v` with `i`, literals and classes fold as under `iu` (the
 // long s and the Kelvin sign included); what `v` would fold otherwise is
 // error.UnsupportedFeature. V8's results.

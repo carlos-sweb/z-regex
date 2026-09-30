@@ -202,7 +202,7 @@ Medido con la `.so` de `c5aa744` contra V8 (Node 22):
 |---|---|---|---|
 | **F7c-0** ✅ | `i`+`v` resuelto con (b″) (sección 0) | 1 | **Sí** (el freeze) |
 | **F7c-1** ✅ | Herramientas al repo: `tools/{pfdiff,t1diff,lldiff,cgprobe}.zig`, `scripts/gate.sh`, `scripts/gate/` (árbitros V8), `scripts/test262/ivdiff.mjs`, `tests/corpus/{f2c,f2c-2}.txt` y `npm.tsv`, referencias `pfdiff-slots.tsv` e `ivdiff-f7c0.json`. `tagck` y la copia `old` del repo no se traen (fuera del gate y sin uso) | 1–1.5 | Sí: es el gate de las fases siguientes y del período de producción |
-| **F7c-2** | Código muerto: `Optimizer`, `OptLevel`, `opt_level`, `placeholder`, `LOOP`, `CHAR2` (valores reservados), sus tests | 0.5–1 | Sí (API) |
+| **F7c-2** ✅ | Código muerto: `Optimizer`, `OptLevel`, `opt_level` y sus 5 tests, borrados; `LOOP` y `CHAR2` reservados (`RESERVED_16`, `RESERVED_02`) y sin referencias en codegen, executors ni encoder/decoder; test de que no se emiten. `placeholder()` queda para F7c-3 (no estaba en el alcance). `pending_trail` no es código muerto (lo usa el lexer en `code_units`) | 0.5–1 | Sí (API) |
 | **F7c-3** | `zregex.internal`: mover 44 símbolos, exportar `RegexError`, adaptar 12 archivos y las herramientas; resolver los «sin decidir» de la sección 4 | 1.5–2 | Sí |
 | **F7c-4** | Contrato de API: la sección API stability, la regla de errores, `max_steps`, `ExecLimits` en la C API y el estado de la C API | 1 | Sí |
 | **F7c-5** | Docs: `ARCHITECTURE.md` y `PROJECT_STRUCTURE.md` reescritos (2); `KNOWN_LIMITATIONS` dividido en limitaciones vigentes e historial, y el «Summary» corregido (1); `REGEX_TIERS_PLAN` §6.1 y el roadmap (0.25) | 3–3.5 | Sí, salvo lo de abajo |
