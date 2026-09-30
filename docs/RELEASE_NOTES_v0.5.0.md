@@ -2,7 +2,7 @@
 
 Four pieces since v0.4.0: F7a (correctness), F7b (performance and size), step 1 of F6b
 (B′, fixed-length lookbehind) and error names in the C API. Details and measurements are in
-`docs/KNOWN_LIMITATIONS.md` ("Fixed in F7a", "F7b closed", "F6b step 1 (B′)"), and the plan
+`docs/HISTORY.md` ("Fixed in F7a", "F7b closed", "F6b step 1 (B′)"), and the plan
 is in `docs/plans/F7.md`.
 
 ## F7a: correctness

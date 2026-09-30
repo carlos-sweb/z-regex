@@ -19,9 +19,10 @@ An ECMA-262 regular expression engine in Zig, independent of the JavaScript engi
 - Engine-agnostic: no dependency on a JS engine's values, objects or garbage collector.
 - A convenience facade for plain Zig use: `find`, `findAll`, `test_`, `replace`,
   `replaceAll`, and `Regex.iterator` (every match without allocating).
-- A C ABI (`src/c_api.zig`, `zig build shared`): 40 `zregex_*` symbols, part of the stable
-  API ([docs/API.md](docs/API.md)). There is no C header yet; the declarations are in
-  `src/c_api.zig`.
+- A C ABI (`src/c_api.zig`, `zig build shared`): 40 `zregex_*` symbols, stable for FFI
+  consumers such as the test262 harness ([docs/API.md](docs/API.md)). It is not a
+  documented public C API: there is no C header, and callers declare the functions they use
+  from `src/c_api.zig`.
 
 ## Status
 
@@ -236,7 +237,8 @@ against V8, Rust regex, PCRE2 and zig-regex.
   means the same thing wherever it runs.
 - **Layers as build modules:** the table in `build.zig` says which module may import which
   (`tier0` never sees Unicode data or the backtracker); `zig build check-layers` enforces it.
-- Design and phases: [docs/REGEX_TIERS_PLAN.md](docs/REGEX_TIERS_PLAN.md).
+- How it works: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md). Design and phases:
+  [docs/REGEX_TIERS_PLAN.md](docs/REGEX_TIERS_PLAN.md).
 
 ## Building and testing
 
@@ -275,13 +277,15 @@ The cross-engine benchmark: `bench/compare/prepare.sh`, then `node bench/compare
   `ZREGEXP_ERROR_UNSUPPORTED`), never a wrong result: a lookbehind matched backward (variable
   length, captures or backreferences inside) under `u`/`v` or with a lookaround inside,
   and under `v` `\q{…}`, chained operations, a bare character as a set operand, a
-  union with a nested class, properties of strings. The table: KNOWN_LIMITATIONS, "E0".
+  union with a nested class, properties of strings. The table: [docs/LIMITATIONS.md](docs/LIMITATIONS.md).
 - **RegExp modifiers (ES2025)**, `(?i:…)`, `(?-m:…)`: not implemented, pending until further
   notice; `(?i:a)` is `error.UnsupportedFeature`.
 - Patterns with a raw, non-UTF-8 byte (WTF-8 only) stay on the backtracker, as does a tagged
   program over the slot bound.
 
-The full list, with measurements: [docs/KNOWN_LIMITATIONS.md](docs/KNOWN_LIMITATIONS.md).
+The full list: [docs/LIMITATIONS.md](docs/LIMITATIONS.md); how each phase got here, with its
+measurements: [docs/HISTORY.md](docs/HISTORY.md). How the engine works:
+[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
 
 ## Roadmap
 
@@ -298,8 +302,8 @@ The full list, with measurements: [docs/KNOWN_LIMITATIONS.md](docs/KNOWN_LIMITAT
   captures and backreferences inside; test262 2994/3017
   ([release notes](docs/RELEASE_NOTES_v0.6.0.md)).
 - **To 1.0** ([docs/plans/ROADMAP_1.0.md](docs/plans/ROADMAP_1.0.md)): E0 (v0.5.1) → E1, full
-  F6b (v0.6.0) → E3, F7c: API freeze and documentation (v1.0.0). RegExp modifiers: pending
-  until further notice.
+  F6b (v0.6.0) → F7c: API freeze and documentation (v0.7.0) → 1–3 months of production use
+  → v1.0.0 with the same API. RegExp modifiers: pending until further notice.
 - **F5, T1 (Unicode):** F5a done (`u` and `\p{…}` on the VM, every UCD property name);
   F5b done (full case folding under `i`); F5c (full `v`) pending.
 - **F6a, T2 without lookbehind: done** (explicit-stack backtracker, capture trail,

@@ -43,6 +43,8 @@ El repo debe seguir siendo agnóstico al motor JS: no depende de APIs internas d
 
 ### 2.1 Estructura (verificada)
 
+> Estado del repo al escribir este documento (2026-09-25), antes de F1. El árbol actual está en §6.1 y en [PROJECT_STRUCTURE.md](PROJECT_STRUCTURE.md).
+
 | Ruta | Rol | Notas |
 |---|---|---|
 | `build.zig`, `build.zig.zon` | Módulo público `zregex` (`src/main.zig`), shared lib FFI (`src/c_api.zig`), pasos `test`, `test-unit`, `test-integration`, `test-conformance`, `examples` | Sin dependencias. `build.zig.zon` todavía lista `include/` (ya no existe) y la descripción menciona "C/C++ bindings" (obsoleto). |
@@ -435,25 +437,28 @@ Lo que no cambia: **T0 va primero, porque es la base de T1** (T1 no tiene ejecut
 
 ### 6.1 Módulos
 
+> Reescrita en F7c-5. La versión original proponía `api/`, `syntax/`, `tier1/unicode_sets.zig`… y tres módulos en `build.zig` (`zregex-t0`, `zregex-t1`, `zregex`). No se construyó así; esto es lo que hay.
+
+**Árbol real de `src/`** (detalle por archivo en [PROJECT_STRUCTURE.md](PROJECT_STRUCTURE.md), funcionamiento en [ARCHITECTURE.md](ARCHITECTURE.md)):
+
 ```
 src/
-  api/         regex.zig (fachada nueva + la actual como wrapper), options.zig, errors.zig
-  syntax/      lexer.zig, parser.zig, ast.zig, early_errors.zig   (desde src/parser/)
-  analysis/    features.zig, classify.zig, cost.zig
-  ir/          hir.zig, lower.zig, charset.zig, canonicalize_ascii.zig
-  subject/     subject.zig (Unit = u8 | u16; decode u/no-u; surrogates WTF-8)
-  tier0/       program.zig, compile.zig, pikevm.zig, prefilter.zig
-  tier1/       unicode_sets.zig, fold.zig, class_strings.zig, counters.zig  (usa src/unicode/)
-  tier2/       compile.zig, backtrack.zig (pila explícita), trail.zig, memo.zig
-  unicode/     (existente) tables.zig, properties.zig, casefold.zig (+ CaseFolding.txt)
+  main.zig, regex.zig, compile.zig, c_api.zig   módulo público `zregex` y la C API
+  analysis/    classify.zig                      el Tier mínimo, desde el HIR
+  frontend/    parser/{lexer,parser,ast}.zig, lower/{lower,fold}.zig
+  ir/          hir.zig, charset.zig, word.zig, word_fold.zig
+  subject/     root.zig (WTF-8 y UTF-16)
+  tier0/       compile.zig, program.zig, pikevm.zig, pikevm_tagged.zig, prefilter.zig
+  tier1/       root.zig (vacío)
+  tier2/       program.zig, bytecode/, codegen/generator.zig, executor/{backtrack,core,matcher,thread}.zig
+  unicode/     tables.zig, properties.zig, casefold.zig
+  utils/       bitset, bittable, dynbuf, pool, budget, debug, config
 ```
 
-Módulos en `build.zig`:
-- `zregex-t0`: syntax + analysis + ir + subject + tier0.
-- `zregex-t1`: lo anterior + unicode + tier1.
-- `zregex`: todo.
-
-Un consumidor que solo necesite T0 puede importar `zregex-t0` y no enlaza las ~330 KB de tablas.
+**Módulos de `build.zig`:**
+- **El único módulo público es `zregex`.** Las capas (`ir`, `unicode`, `utils`, `subject`, `frontend`, `tier0`, `tier1`, `tier2`) son módulos internos. La tabla `layers` fija qué puede importar cada una y `zig build check-layers` lo comprueba.
+- **`zregex-t0` no existe.** Es un candidato condicionado a que un consumidor lo pida (`plans/F7.md`, decisión 3): un módulo básico sin `unicode` ni `tier2` ahorraría unos 90 KB, el 17–19 % del binario.
+- **`zregex-t1` no existe ni está previsto.** T1 no tiene ejecutor propio: sus patrones corren en la VM de T0 en modo code point (`u`, `\p{…}`, plegado Unicode) o en el backtracker (`v`, contadores grandes). `tier1/` es una capa vacía que reserva el sitio.
 
 ### 6.2 Comptime vs runtime
 
@@ -773,4 +778,4 @@ Trabajo suelto que no pertenece a ninguna fase. No son mitigaciones: reducen el 
 - Tests de clasificación estables (§5.2).
 - Diferencial `force_tier`: señal hasta F6a; bloquea merges desde F6a (sin lookbehind) y desde F6b (con lookbehind).
 - `std.testing.allocator` sin fugas; `checkAllAllocationFailures` en compile y exec.
-- Conformidad test262 medida y documentada en `docs/KNOWN_LIMITATIONS.md` al cierre de cada fase.
+- Conformidad test262 medida y documentada al cierre de cada fase: el estado en `docs/LIMITATIONS.md`, la medición de la fase en `docs/HISTORY.md`.

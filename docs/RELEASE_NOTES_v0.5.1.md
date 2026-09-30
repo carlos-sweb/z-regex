@@ -1,7 +1,7 @@
 # z-regex v0.5.1
 
 E0, the first stage of the road to 1.0 (`docs/plans/ROADMAP_1.0.md`). Details in
-`docs/KNOWN_LIMITATIONS.md`, "E0: honest errors".
+`docs/LIMITATIONS.md`, "The rule: honest errors", and `docs/HISTORY.md`, "E0: honest errors (0.5.1), measurements".
 
 ## Honest errors
 
@@ -25,7 +25,7 @@ name. The 1.0 freeze relies on it: what comes later only removes error cases.
   `\p` without braces compiled under `v`, and V8 rejects them.
   - Internal corpora (44,443 patterns): 340 changed status. 335 are now a SyntaxError, and
     V8 rejects every one. 4 are forms above that are now `UnsupportedFeature`. 1 is the
-    limit case documented in KNOWN_LIMITATIONS.
+    limit case documented in LIMITATIONS.
   - The 3,667 `v` patterns that compile before and after give the same matches.
 - **A backreference to a duplicated group name gave a wrong result.**
   `/^(?:(?<x>a)|(?<x>b))\k<x>$/` didn't match "bb": `\k<x>` only looked at the first `x`.

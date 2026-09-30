@@ -12,7 +12,7 @@ que llegue después solo puede quitar casos de error, nunca añadir errores nuev
 ## 0. Hallazgo bloqueante: `i` + `v` da resultados incorrectos en silencio
 
 Bajo `v`, los sets todavía pliegan con la regla anterior a F5b: letras ASCII y el par simple de
-un literal (`KNOWN_LIMITATIONS.md`, «Unicode case folding under `v` (F5c)»). No es un
+un literal (entonces en `KNOWN_LIMITATIONS.md`, «Unicode case folding under `v` (F5c)»; hoy `LIMITATIONS.md`, «`v` with `i`»). No es un
 `UnsupportedFeature`, es un resultado distinto del de V8.
 
 Medido con la `.so` de `c5aa744`, UTF-16:
@@ -46,7 +46,7 @@ nuevo).
 
 `lbdiff-v8` pasa a la referencia `lbdiff-v8-f7c0.json` (la de v0.5.1, archivada): 6 patrones fijos con `iv` pasan a `UnsupportedFeature`, uno de ellos el de las 6 diferencias. `lbdiff` sigue con 0 discrepancias; sus cuentas se mueven (invalid 16 → 672, B′ 15,532 → 14,904, comparados 13,142 → 13,116), porque los cuerpos `iv` rechazados cuentan como «invalid».
 
-(b′) no bastaba: bajo `v`, `\P{…}` complementa después de plegar, y V8 no hace coincidir el signo Kelvin con `\p{ASCII}/iv`. Detalle en `KNOWN_LIMITATIONS.md`, «`v` with `i` (F7c-0)».
+(b′) no bastaba: bajo `v`, `\P{…}` complementa después de plegar, y V8 no hace coincidir el signo Kelvin con `\p{ASCII}/iv`. Detalle en `LIMITATIONS.md`, «`v` with `i`», y las mediciones en `HISTORY.md`.
 
 ## 1. API pública actual
 
@@ -206,9 +206,9 @@ Medido con la `.so` de `c5aa744` contra V8 (Node 22):
 | **F7c-3** ✅ | `zregex.internal` con 42 símbolos, 15 estables en la raíz más `RegexError`, `replace` y `replaceAll` libres; `placeholder()` y `zig_version_required` borrados; `CaptureIndices` estable (lo devuelve `MatchResult`); los 4 campos de diagnóstico de `CompileOptions` documentados fuera de la API estable; 17 archivos adaptados (10 de tests, 5 herramientas, `bench.zig`, `c_api.zig`); sección «API stability» en el README | 1.5–2 | Sí |
 | **F7c-4** ✅ | Contrato de API en `docs/API.md`: los 19 símbolos estables con doc comment, `RegexError` (35) y `ExecError` (8) con sus códigos C, la regla del freeze, qué cambios rompen y la deprecación (`/// Deprecated: use X`, al menos un minor). Tests: la raíz, los dos conjuntos de errores y la tabla de códigos. Mapeo C corregido antes del freeze: 11 errores de sintaxis del frontend pasan de UNKNOWN a SYNTAX; 14 siguen en UNKNOWN (límites, invariantes, diagnóstico o sin productor). Paso `== fmt` en el gate (`tests/test262_data.zig` excluido: generado); `pfdiff`, `t1diff` y `lldiff` formateados. Movido a F7c-5: `max_steps` por posición de inicio como contrato, `ExecLimits` en la C API y el estado de la C API | 1 | Sí |
 | **F7c-4b** ✅ | Antes del freeze, en clases `v`: la mezcla de `--` y `&&` es `MixedClassSetOperators` también con operandos planos (`[a--b&&c]` era `UnsupportedFeature`), y una lista o un rango como operando izquierdo es `InvalidClassSetOperand` (`[ab&&[c]]` y `[a-z&&[b]]` compilaban). V8 y ECMA-262 rechazan las dos formas. El bug B (operando derecho suelto, `[\p{L}--a]`) sigue en `UnsupportedFeature` | 0.5 | Sí |
-| **F7c-5** | Docs (y lo movido desde F7c-4, que no estaba en su pedido: son texto sin código, y la contradicción de la C API vive en los archivos que F7c-5 reescribe): en `API.md`, `max_steps` por posición de inicio como contrato (`F7.md` ítem 8) y la sección de `ExecLimits` de la C API (solo expone `max_steps`; `max_recursion_depth` es un campo reservado sin efecto); el estado de la C API, estable según `API.md` y el README, pero «internal FFI substrate» en `PROJECT_STRUCTURE.md:25` y en la tabla de `KNOWN_LIMITATIONS`. `ARCHITECTURE.md` y `PROJECT_STRUCTURE.md` reescritos (2); `KNOWN_LIMITATIONS` dividido en limitaciones vigentes e historial, y el «Summary» corregido (1); `REGEX_TIERS_PLAN` §6.1 y el roadmap (0.25) | 3–3.5 | Sí, salvo lo de abajo |
+| **F7c-5** ✅ | Docs, solo texto. `ARCHITECTURE.md` reescrito como referencia (pipeline, capas, compilación, ejecución, bytecode, memoria, errores, tests) y `PROJECT_STRUCTURE.md` como índice del árbol. `KNOWN_LIMITATIONS.md` dividido: `LIMITATIONS.md` (lo vigente: la regla, los `UnsupportedFeature`, divergencias con V8, lookbehind, `v` con `i`, qué funciona, límites, notas de API) e `HISTORY.md` (las secciones por fase, tal cual); `KNOWN_LIMITATIONS.md` queda como índice porque lo citan comentarios de `src/`. `REGEX_TIERS_PLAN` §6.1 con el árbol real (`zregex-t0` candidato, `zregex-t1` no existe). `ROADMAP_1.0.md`: F7c → v0.7.0 → producción 1–3 meses → v1.0.0, y la corrección del claim ES2023. `API.md`: `max_steps` por posición de inicio como contrato, `ExecLimits` en la C API (`max_recursion_depth` reservado). La C API: estable para el consumidor FFI, sin header, en `API.md`, `LIMITATIONS.md` y el README. `README.es.md`, `ROADMAP.md`, `CONCEPTS.md`, `F0C_*`, `F5_PLAN.md` y `F5A_CLOSING.md` a `docs/archive/` | 3–3.5 | Sí |
 | **F7c-6** | Benchmarks re-medidos en 0.7.0 (`BENCHMARKS.md`, `results.json`) | 1–1.5 | No: puede ir en paralelo con F7c-5 o durante el período de producción **(sin decidir)** |
-| **F7c-7** | `README.es.md` puesto al día, o retirado **(sin decidir)**; archivar `docs/ROADMAP.md` | 0.5–1 | No |
+| **F7c-7** ✅ (en F7c-5) | `README.es.md` archivado en `docs/archive/` (solo queda el README en inglés); `docs/ROADMAP.md` archivado | — | No |
 | **F7c-8** | Gate completo, versión 0.7.0 y release notes | 0.5–1 | Sí |
 
 **Total:** 10–13.5 días, más F7c-0 si se elige (a).

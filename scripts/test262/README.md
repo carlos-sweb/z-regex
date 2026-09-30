@@ -84,7 +84,7 @@ The pinned test262 revision is in `TEST262_SHA`.
 
 - **No status differs between the encodings:** green.
 - **Differences that are documented and justified:** accepted. They are recorded in
-  `docs/KNOWN_LIMITATIONS.md` and `baseline-wtf8.json` is updated.
+  `docs/LIMITATIONS.md` and `baseline-wtf8.json` is updated.
 - **Undocumented differences:** they block the phase.
 
 A test that passes with WTF-8 and fails with UTF-16 is an engine bug; the other way

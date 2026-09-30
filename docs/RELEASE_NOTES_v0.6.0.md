@@ -1,7 +1,7 @@
 # z-regex v0.6.0
 
 E1, the second stage of the road to 1.0 (`docs/plans/ROADMAP_1.0.md`): F6b, lookbehind
-matched backward. Details in `docs/KNOWN_LIMITATIONS.md`, "F6b (0.6.0)", and
+matched backward. Details in `docs/LIMITATIONS.md`, "Lookbehind", `docs/HISTORY.md`, "F6b (0.6.0): measurements", and
 `docs/plans/E1.md`.
 
 ## Lookbehind

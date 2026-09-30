@@ -13,7 +13,6 @@
         "examples/",
         "docs/",
         "README.md",
-        "README.es.md",
         "LICENSE",
     },
     .dependencies = .{},

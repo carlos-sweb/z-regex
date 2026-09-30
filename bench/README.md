@@ -113,4 +113,4 @@ Notes:
 (F7b): the `.so` built for x86_64-linux with a fixed CPU model (`-Dcpu=x86_64_v3`),
 stripped, in ReleaseFast and ReleaseSmall, with its main sections and its `zregex_*`
 symbol count. A `native` build follows the host's CPU features, so figures measured that
-way differ between hosts (~26 KB on this container: `docs/KNOWN_LIMITATIONS.md`).
+way differ between hosts (~26 KB on this container: `docs/HISTORY.md`, "Binary size").

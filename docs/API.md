@@ -26,10 +26,33 @@ The 19 declarations at the root of the `zregex` module:
 | `unicode` | `isInCategory` and `UnicodeProperty`: the General_Category tables, for reuse outside the engine. |
 | `internal` | The engine's pieces, outside the contract (section 2). |
 
-**The C API** (`src/c_api.zig`, `zig build shared`) is stable too:
+**The C API** (`src/c_api.zig`, `zig build shared`) is stable for FFI consumers, such as
+this repository's test262 harness:
 - its 40 exported `zregex_*` symbols;
 - the `ZRegexOptions` layout (an `extern struct`; `reserved` fields for additions);
 - the `ZRegexError` codes (section 3).
+
+It is not a documented public C API: there is no C header and no C++ wrapper; a caller
+declares the functions it uses from `src/c_api.zig`. What is stable is the ABI above, so
+such declarations keep working across releases.
+
+**Execution limits** (`ExecLimits`) are part of the contract:
+- **`max_steps` counts per start position**, not per execution (1,000,000 by default). A
+  search that tries `n` start positions can take up to `n × max_steps` steps before it
+  answers; a single start position that passes the budget is `StepLimitExceeded`. This
+  won't change to a budget per execution: long subjects that match correctly would then
+  fail (`plans/F7.md`, item 8, D11).
+- `max_backtrack_stack_bytes` (64 MiB) bounds the backtracker's stacks
+  (`BacktrackStackExhausted`); `max_memo_bytes` (1 MiB) bounds LookLinear's memo, and a
+  lookahead whose memo doesn't fit runs without it, never an error.
+- T0's VM runs in linear time and doesn't read `ExecLimits`; which patterns run on it is
+  outside the contract (section 2), so a caller can't rely on a pattern never raising
+  `StepLimitExceeded`.
+- **In the C API**, `ZRegexOptions.max_steps` is `ExecLimits.max_steps` for every
+  execution of that regex (0 keeps the default). `max_recursion_depth` is reserved and has
+  no effect (since 0.4.0, F6a: the backtracker has no recursion). The C API doesn't expose
+  `max_backtrack_stack_bytes` or `max_memo_bytes`: they keep their defaults. Adding them
+  would use the `reserved` fields.
 
 ## 2. Outside the contract
 
