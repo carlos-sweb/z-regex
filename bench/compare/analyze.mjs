@@ -1,6 +1,8 @@
 // Aggregates the rounds of the cross-engine benchmark into bench/results.json
 // and prints the Markdown tables of docs/BENCHMARKS.md (one per tier and
-// metric; median of the rounds, with min–max).
+// metric; the best round, with min–max: since F7-0 the best round is the
+// estimator, ~4% p90 between two series of 10 against ~20% for the median).
+// With a `zregex_base` engine (run.mjs), a table of z-regex against it.
 //
 //   node bench/compare/analyze.mjs
 import fs from 'node:fs';
@@ -61,14 +63,16 @@ for (const r of rounds) for (const a of r.adversarial) {
   adv[k].outcomes.add(a.outcome);
 }
 
-const stat = (v) => {
+// Throughput is better high; times and sizes are better low.
+const higherIsBetter = new Set(['findall_mbps', 'execat_mbps', 'iter_mbps', 'mbps']);
+const stat = (v, m) => {
   if (!v || !v.length) return null;
   const s = [...v].sort((a, b) => a - b);
-  return { median: s[Math.floor(s.length / 2)], min: s[0], max: s[s.length - 1], n: s.length };
+  return { best: higherIsBetter.has(m) ? s[s.length - 1] : s[0], median: s[Math.floor(s.length / 2)], min: s[0], max: s[s.length - 1], n: s.length };
 };
 const summary = {};
-for (const [e, ids] of Object.entries(data)) for (const [id, ms] of Object.entries(ids)) for (const [m, v] of Object.entries(ms)) ((summary[e] ??= {})[id] ??= {})[m] = stat(v);
-const advSummary = Object.values(adv).map((a) => ({ engine: a.engine, id: a.id, n: a.n, ms: stat(a.ms), outcomes: [...a.outcomes], route: a.route }));
+for (const [e, ids] of Object.entries(data)) for (const [id, ms] of Object.entries(ids)) for (const [m, v] of Object.entries(ms)) ((summary[e] ??= {})[id] ??= {})[m] = stat(v, m);
+const advSummary = Object.values(adv).map((a) => ({ engine: a.engine, id: a.id, n: a.n, ms: stat(a.ms, 'ms'), outcomes: [...a.outcomes], route: a.route }));
 let scaling = null;
 try { scaling = JSON.parse(fs.readFileSync(`${X}/zigregex-scaling.json`, 'utf8')); } catch {}
 
@@ -82,7 +86,7 @@ for (const c of cases.filter((x) => !x.adversarial)) {
 fs.writeFileSync('bench/results.json', JSON.stringify({ generated: new Date().toISOString(), rounds: rounds.length, machine, summary, adversarial: advSummary, zigregex_scaling: scaling, notes, match_count_mismatches: mismatches }, null, 1) + '\n');
 
 // ---------------------------------------------------------------- tables
-const fmt = (s, digits) => (s ? `${s.median.toFixed(digits)} (${s.min.toFixed(digits)}–${s.max.toFixed(digits)})` : '—');
+const fmt = (s, digits) => (s ? `${s.best.toFixed(digits)} (${s.min.toFixed(digits)}–${s.max.toFixed(digits)})` : '—');
 const cell = (e, id, m, d) => {
   const n = notes[`${e}/${id}`];
   if (n) return 'unsupported';
@@ -98,7 +102,7 @@ const metrics = [
   ['compile_us', 'µs per compile', 2],
   ['bytes', 'bytes per compiled pattern', 0],
 ];
-let md = `Rounds: ${rounds.length} interleaved; each cell: median (min–max) over the rounds.\n`;
+let md = `Rounds: ${rounds.length} interleaved; each cell: the best round (highest MB/s, lowest ns, µs or ms) and the min–max band over the rounds.\n`;
 for (const [tier, engines] of Object.entries(tiers)) {
   const tc = cases.filter((c) => c.tier === tier);
   for (const [m, title, d] of metrics) {
@@ -112,13 +116,28 @@ for (const [tier, engines] of Object.entries(tiers)) {
     }
   }
 }
-md += `\n#### Adversarial: ms until the engine answers or gives up (median over rounds; outcome)\n\n| Case | n | ${['zregex', 'v8', 'pcre2_jit', 'pcre2_interp'].map((e) => label[e]).join(' | ')} |\n|---|---|---|---|---|---|\n`;
+md += `\n#### Adversarial: ms until the engine answers or gives up (best round; outcome)\n\n| Case | n | ${['zregex', 'v8', 'pcre2_jit', 'pcre2_interp'].map((e) => label[e]).join(' | ')} |\n|---|---|---|---|---|---|\n`;
 for (const c of cases.filter((x) => x.adversarial)) for (const n of c.adversarial) {
   const row = ['zregex', 'v8', 'pcre2_jit', 'pcre2_interp'].map((e) => {
     const a = advSummary.find((x) => x.engine === e && x.id === c.id && x.n === n);
-    return a ? `${a.ms.median.toFixed(3)} (${a.outcomes.join(', ')})` : '—';
+    return a ? `${a.ms.best.toFixed(3)} (${a.outcomes.join(', ')})` : '—';
   });
   md += `| ${c.name.replaceAll('|', '\\|')} | ${n} | ${row.join(' | ')} |\n`;
+}
+if (summary.zregex_base) {
+  const base = rounds[0]?.engines?.zregex_base?.version ?? 'base';
+  md += `\n#### z-regex ${machine.zregex} against z-regex ${base}, same rounds (best round; ratio > 1: better now)\n\n| Case | Tier | execAt MB/s now | ${base} | ratio | findAll MB/s now | ${base} | ratio | ns short now | ${base} | ratio |\n|---|---|---|---|---|---|---|---|---|---|---|\n`;
+  const r = (a, b, hi) => (a && b ? (hi ? a.best / b.best : b.best / a.best).toFixed(2) : '—');
+  const v = (s, d) => (s ? s.best.toFixed(d) : '—');
+  for (const c of cases.filter((x) => !x.adversarial && x.engines.includes('zregex'))) {
+    const now = summary.zregex?.[c.id] ?? {}, old = summary.zregex_base?.[c.id] ?? {};
+    md += `| ${c.name.replaceAll('|', '\\|')} | ${c.tier} | ${v(now.execat_mbps, 1)} | ${v(old.execat_mbps, 1)} | ${r(now.execat_mbps, old.execat_mbps, true)} | ${v(now.findall_mbps, 1)} | ${v(old.findall_mbps, 1)} | ${r(now.findall_mbps, old.findall_mbps, true)} | ${v(now.short_ns, 0)} | ${v(old.short_ns, 0)} | ${r(now.short_ns, old.short_ns, false)} |\n`;
+  }
+  md += `\n| Adversarial | n | now | ${base} |\n|---|---|---|---|\n`;
+  for (const c of cases.filter((x) => x.adversarial)) for (const n of c.adversarial) {
+    const f = (e) => { const a = advSummary.find((x) => x.engine === e && x.id === c.id && x.n === n); return a ? `${a.ms.best.toFixed(3)} (${a.outcomes.join(', ')})` : '—'; };
+    md += `| ${c.name.replaceAll('|', '\\|')} | ${n} | ${f('zregex')} | ${f('zregex_base')} |\n`;
+  }
 }
 if (mismatches.length) md += `\n**Match-count mismatches:** ${JSON.stringify(mismatches)}\n`;
 else md += `\nMatch counts: identical across every engine that runs a case.\n`;
