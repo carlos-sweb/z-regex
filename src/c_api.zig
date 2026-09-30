@@ -882,7 +882,14 @@ test "a SyntaxError of the pattern is ZREGEXP_ERROR_SYNTAX, a limit stays UNKNOW
         .{ .pattern = "a{2,3", .name = "UnterminatedRepeat", .u = true },
         .{ .pattern = "\\p{Foo}", .name = "UnknownUnicodeProperty", .u = true },
         .{ .pattern = "[a&&]", .name = "InvalidClassSetOperand", .v = true },
+        // F7c-4b: a list or a range as an operand.
+        .{ .pattern = "[ab&&[c]]", .name = "InvalidClassSetOperand", .v = true },
+        .{ .pattern = "[a-z--\\p{Lu}]", .name = "InvalidClassSetOperand", .v = true },
         .{ .pattern = "[[a]&&[b]--[c]]", .name = "MixedClassSetOperators", .v = true },
+        // F7c-4b: with flat operands too.
+        .{ .pattern = "[a--b&&c]", .name = "MixedClassSetOperators", .v = true },
+        .{ .pattern = "[a&&b--c]", .name = "MixedClassSetOperators", .v = true },
+        .{ .pattern = "[\\w&&\\d--x]", .name = "MixedClassSetOperators", .v = true },
     };
     for (syntax) |c| {
         var opts = zregex_default_options();

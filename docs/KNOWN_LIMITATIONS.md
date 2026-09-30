@@ -1591,16 +1591,22 @@ and never a SyntaxError name. What `v` doesn't implement:
 |---|---|---|---|
 | `[\q{a}]` (`\q{...}`) | valid | **wrong result**: `\q` was the letter q | `UnsupportedFeature` |
 | `\q`, `[\q]`, `\q{a}`, `\z` | SyntaxError | accepted | `InvalidEscape` |
-| `[\p{L}--\d]`, `[\p{L}--a]` (a bare operand, bug B) | valid | `InvalidClassSetOperand` | `UnsupportedFeature` |
+| `[\p{L}--\d]`, `[\p{L}--a]`, `[a--b]`, `[a&&b]`, `[[a]&&b]`, `[\w--\d]` (a bare right operand, bug B) | valid | `InvalidClassSetOperand` | `UnsupportedFeature` |
 | `[[a][b]]`, `[a[b]]` (a union with nested classes) | valid | `InvalidClassSetOperand` / `UnexpectedToken` | `UnsupportedFeature` |
 | `[A--B--C]`, `[A&&B&&C]` (the same operator chained) | valid | `ChainedClassSetOperatorNotSupported` | `UnsupportedFeature` |
-| `[A--B&&C]` (operators mixed) | SyntaxError | `ChainedClassSetOperatorNotSupported` | `MixedClassSetOperators` |
+| `[A--B&&C]` (operators mixed) | SyntaxError | `ChainedClassSetOperatorNotSupported` | `MixedClassSetOperators` (flat operands too since F7c-4b) |
+| `[ab&&[c]]`, `[a-z--b]` (a list or a range as an operand) | SyntaxError | compiled / `UnsupportedFeature` | `InvalidClassSetOperand` (F7c-4b) |
 | `[a--]`, `[--a]` | SyntaxError | `InvalidClassSetOperand` | the same |
 | `\p{RGI_Emoji}` and the other 6 properties of strings | valid | `UnknownUnicodeProperty` | `UnsupportedFeature` |
 | `\P{RGI_Emoji}`; those names with `u` | SyntaxError | `UnknownUnicodeProperty` | the same |
 | `(?i:a)`, `(?-m:a)`, `(?i-s:a)` (RegExp modifiers, any flags) | valid (ES2025) | `UnexpectedToken` | `UnsupportedFeature` |
 | `(?x:a)`, `(?i)`, `(?ii:a)`, `(?-:a)` | SyntaxError | `UnexpectedToken` | the same |
 
+- **An operand of `--`/`&&` is one character, `\p{…}`, shorthand or nested class
+  (F7c-4b).** ECMA-262 (`ClassSetOperand`) and V8 agree: a list or a range is only a
+  `ClassUnion`, so `[a-z--b]` is a SyntaxError and the range is written nested,
+  `[[a-z]--b]`. Until F7c-4b a list or a range as the left operand compiled when the right
+  operand was a nested class (`[ab&&[c]]`), and was `UnsupportedFeature` otherwise.
 - **`v` applies `u`'s early errors.** The lexer's strict mode was set from `u` only
   (`lower.zig`), so under `v` alone zregex accepted what `u` rejects. Over the internal
   corpora (44,443 unique patterns) 340 changed status: 335 compiled or were

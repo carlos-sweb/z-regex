@@ -374,6 +374,43 @@ test "F7c-4: the stable root is exactly the 19 declarations of docs/API.md" {
     }, @typeInfo(zregex).@"struct".decls);
 }
 
+test "F7c-4b: mixed operators and non-atom operands in a v class are a SyntaxError" {
+    const v: zregex.CompileOptions = .{ .v = true };
+    const Case = struct { []const u8, anyerror };
+    // V8 (Node 22) throws a SyntaxError on each.
+    for ([_]Case{
+        // A list or a range as the left operand: `[ab&&[c]]` and
+        // `[a-z&&[b]]` compiled until F7c-4b, the others were
+        // UnsupportedFeature.
+        .{ "[ab&&[c]]", error.InvalidClassSetOperand },
+        .{ "[a-z&&[b]]", error.InvalidClassSetOperand },
+        .{ "[a-z--\\p{Lu}]", error.InvalidClassSetOperand },
+        .{ "[a-z--b]", error.InvalidClassSetOperand },
+        .{ "[a\\-\\-b&&c]", error.InvalidClassSetOperand },
+        // `--` and `&&` in one class: the first three were
+        // UnsupportedFeature (the bare operand stopped the parse first).
+        .{ "[a--b&&c]", error.MixedClassSetOperators },
+        .{ "[a&&b--c]", error.MixedClassSetOperators },
+        .{ "[\\w&&\\d--x]", error.MixedClassSetOperators },
+        .{ "[[a]--[b]--[c]&&[d]]", error.MixedClassSetOperators },
+        .{ "[[a]&&[b]--[c]]", error.MixedClassSetOperators },
+    }) |c| {
+        try testing.expectError(c[1], zregex.Regex.compileWithOptions(testing.allocator, c[0], v));
+    }
+    // V8 accepts these. One operation between nested classes compiles; a
+    // range as an operand is written nested.
+    for ([_][]const u8{ "[[a]--[b]]", "[[a]&&[b]]", "[[a-z]--[b]]" }) |p| {
+        var re = try zregex.Regex.compileWithOptions(testing.allocator, p, v);
+        re.deinit();
+    }
+    // Also valid, not implemented: a bare character or shorthand as the
+    // right operand (bug B, F5c) and a chain of one operator (F5c). The
+    // opposite of the rows above: valid syntax zregex doesn't run yet.
+    for ([_][]const u8{ "[a--b]", "[a&&b]", "[[a]&&b]", "[\\p{L}--a]", "[\\w--\\d]", "[[a-z]--b]", "[a--b--c]" }) |p| {
+        try testing.expectError(error.UnsupportedFeature, zregex.Regex.compileWithOptions(testing.allocator, p, v));
+    }
+}
+
 test "F7c-4: RegexError and ExecError are the error sets of docs/API.md" {
     try expectNames(&.{
         "OutOfMemory",             "BufferTooSmall",    "TierUnavailable",        "InvalidGroupName",
