@@ -363,6 +363,13 @@ const Builder = struct {
     /// `min` copies, then either `max - min` optional copies or a loop.
     /// Tagged: each iteration starts with `clear` of the body's groups (D4),
     /// and an optional iteration of a nullable body is a phase product (D3).
+    ///
+    /// `x+` and `x{n,}` over a body that always consumes (J): the last
+    /// mandatory copy is the loop, `x{n-1} L: x; split(L, out)`, so the body
+    /// isn't emitted twice. Same priority as `x; x*` (another iteration
+    /// before leaving, or the reverse when lazy), and no empty iteration to
+    /// reject. A thread seeded at the loop's start now lands on the same pc
+    /// as the one already iterating there, and the VM's dedup merges them.
     fn emitRepeat(self: *Builder, r: hir.Repeat, flags: hir.Flags) Allocator.Error!void {
         const iter: Iteration = .{
             .body = r.body,
@@ -370,8 +377,16 @@ const Builder = struct {
             .clear = if (!self.tagged) null else if (hir.captureRange(r.body)) |g| .{ .lo = 2 * @as(u32, g.lo), .hi = 2 * @as(u32, g.hi) + 2 } else null,
             .product = self.tagged and hir.nullable(r.body),
         };
-        for (0..r.min) |_| try self.emitIteration(iter, false);
         const greedy = r.policy != .lazy;
+        if (r.max == null and r.min >= 1 and !hir.nullable(r.body)) {
+            for (0..r.min - 1) |_| try self.emitIteration(iter, false);
+            const loop = self.pc();
+            try self.emitIteration(iter, false);
+            const out = self.pc() + 1;
+            _ = try self.add(.{ .split = if (greedy) .{ .x = loop, .y = out } else .{ .x = out, .y = loop } });
+            return;
+        }
+        for (0..r.min) |_| try self.emitIteration(iter, false);
         if (r.max) |max| {
             // x{n,m}: each optional copy may be skipped to the end.
             var exits: std.ArrayListUnmanaged(u32) = .empty;
@@ -522,6 +537,35 @@ test "alternation and repeats compile in priority order" {
     );
 }
 
+test "J: x+ and x{n,} loop on their last mandatory copy (no second body)" {
+    const a = lit("a");
+    const plus: hir.Node = .{ .repeat = .{ .min = 1, .max = null, .policy = .greedy, .syntax_form = .plus, .body = &a } };
+    try expectProgram(&plus,
+        \\  0: char 'a'
+        \\  1: split 0, 2
+        \\  2: match
+        \\
+    );
+    const lazy: hir.Node = .{ .repeat = .{ .min = 1, .max = null, .policy = .lazy, .syntax_form = .plus, .body = &a } };
+    try expectProgram(&lazy,
+        \\  0: char 'a'
+        \\  1: split 2, 0
+        \\  2: match
+        \\
+    );
+    const ab = lit("ab");
+    const two: hir.Node = .{ .repeat = .{ .min = 2, .max = null, .policy = .greedy, .syntax_form = .counted, .body = &ab } };
+    try expectProgram(&two,
+        \\  0: char 'a'
+        \\  1: char 'b'
+        \\  2: char 'a'
+        \\  3: char 'b'
+        \\  4: split 2, 5
+        \\  5: match
+        \\
+    );
+}
+
 test "flags: i on ASCII letters, m on anchors" {
     const ab = lit("a1");
     const caret: hir.Node = .{ .assert = .caret };
@@ -599,6 +643,22 @@ test "tagged: a group saves its start and end" {
         \\  2: char 'b'
         \\  3: save 3
         \\  4: match
+        \\
+    );
+}
+
+test "tagged J: (ab)+ clears its group at each iteration, the loop included" {
+    const ab = lit("ab");
+    const g1: hir.Node = .{ .capture = .{ .index = 1, .name = null, .body = &ab } };
+    const plus: hir.Node = .{ .repeat = .{ .min = 1, .max = null, .policy = .greedy, .syntax_form = .plus, .body = &g1 } };
+    try expectTagged(&plus,
+        \\  0: clear 2..4
+        \\  1: save 2
+        \\  2: char 'a'
+        \\  3: char 'b'
+        \\  4: save 3
+        \\  5: split 0, 6
+        \\  6: match
         \\
     );
 }

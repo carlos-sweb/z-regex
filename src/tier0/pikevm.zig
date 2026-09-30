@@ -531,6 +531,30 @@ test "greedy and lazy repeats" {
     try expectMatch(null, try run(&seq, "aaa", 0, false));
 }
 
+test "J: x+ and x{n,} on one loop copy give the same bounds" {
+    const a = lit("a");
+    const b = lit("b");
+    const c = lit("c");
+    const ab: hir.Node = .{ .seq = &.{ &a, &b } };
+    const plus = rep(&a, 1, null, false);
+    try expectMatch(.{ 1, 4 }, try run(&plus, "baaab", 0, false));
+    try expectMatch(null, try run(&plus, "bbb", 0, false));
+    // (?:ab)+c: a seed at every position lands on the loop's pc.
+    const ab_plus = rep(&ab, 1, null, false);
+    const abc: hir.Node = .{ .seq = &.{ &ab_plus, &c } };
+    try expectMatch(.{ 1, 6 }, try run(&abc, "aababc", 0, false));
+    try expectMatch(null, try run(&abc, "ababab", 0, false));
+    // a{2,}: two mandatory copies, then the loop.
+    const two = rep(&a, 2, null, false);
+    try expectMatch(.{ 2, 5 }, try run(&two, "abaaa", 0, false));
+    try expectMatch(null, try run(&two, "ababa", 0, false));
+    // a+? stops at one, and grows only when what follows needs it.
+    const lazy = rep(&a, 1, null, true);
+    try expectMatch(.{ 0, 1 }, try run(&lazy, "aaa", 0, false));
+    const lazy_b: hir.Node = .{ .seq = &.{ &lazy, &b } };
+    try expectMatch(.{ 0, 3 }, try run(&lazy_b, "aab", 0, false));
+}
+
 test "a higher-priority thread that matches later replaces the match" {
     // /(?:a|ab)(?:c|bcd)/ on "abcd": "a" then "bcd" (the first alternative
     // wins, and its thread matches after "ab"+"c" would have).
