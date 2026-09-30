@@ -87,7 +87,7 @@ const match = try regex.exec("CAFÉ", allocator); // Returns null, should match
 ### Suggesting Features
 
 Feature requests are welcome! Please:
-1. Check if it's already planned in [ROADMAP.md](docs/ROADMAP.md)
+1. Check if it's already planned in [ROADMAP_1.0.md](docs/plans/ROADMAP_1.0.md)
 2. Explain the use case
 3. Consider ECMAScript compatibility
 4. Propose API if applicable

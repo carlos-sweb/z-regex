@@ -9,7 +9,6 @@ pub const format = @import("bytecode/format.zig");
 pub const writer = @import("bytecode/writer.zig");
 pub const reader = @import("bytecode/reader.zig");
 pub const generator = @import("codegen/generator.zig");
-pub const optimizer = @import("codegen/optimizer.zig");
 pub const program = @import("program.zig");
 pub const matcher = @import("executor/matcher.zig");
 pub const core = @import("executor/core.zig");

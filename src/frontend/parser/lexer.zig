@@ -741,8 +741,8 @@ pub const Lexer = struct {
     ///     step, observable only for a subject that actually contains
     ///     >= MAX_REPEAT_UNROLL repetitions (a >=64K-char adversarial input).
     /// This is the same class of bounded-repeat limit engines like RE2 use.
-    /// A fully faithful fix would be a runtime counted loop (the unused
-    /// `LOOP` opcode was reserved for exactly that).
+    /// A fully faithful fix would be a runtime counted loop (a new opcode;
+    /// the old unused `LOOP` value, 0x16, is reserved since F7c-2).
     pub const MAX_REPEAT_UNROLL: u32 = 1 << 16;
 
     /// Accumulate a decimal digit into a quantifier count, saturating once it

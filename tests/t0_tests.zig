@@ -8,7 +8,7 @@
 const std = @import("std");
 const zregex = @import("zregex");
 const testing = std.testing;
-const tier0 = zregex.tier0;
+const tier0 = zregex.internal.tier0;
 
 const Flags = struct { i: bool = false, m: bool = false, s: bool = false };
 
@@ -111,7 +111,7 @@ test "T0 VM matches the backtracker on eligible patterns" {
     defer vs.deinit();
     for (cases) |c| {
         const pattern, const f = c;
-        const fe = try zregex.lower.Frontend.init(gpa, pattern, .{}, .{ .ignore_case = f.i, .multiline = f.m, .dot_all = f.s });
+        const fe = try zregex.internal.lower.Frontend.init(gpa, pattern, .{}, .{ .ignore_case = f.i, .multiline = f.m, .dot_all = f.s });
         defer fe.deinit();
         testing.expectEqual(@as(?tier0.Ineligible, null), tier0.check(fe.root)) catch |err| {
             std.debug.print("/{s}/ is not T0-eligible\n", .{pattern});
@@ -127,7 +127,7 @@ test "T0 VM matches the backtracker on eligible patterns" {
         defer re.deinit();
         try testing.expect(re.t0 == null);
         for (subjects) |s| {
-            const s16 = try zregex.subject.utf16FromWtf8(gpa, s);
+            const s16 = try zregex.internal.subject.utf16FromWtf8(gpa, s);
             defer gpa.free(s16);
             try compareAll(&re, &prog, .{ .wtf8 = s }, &bt, &vs);
             try compareAll(&re, &prog, .{ .utf16 = s16 }, &bt, &vs);
@@ -147,7 +147,7 @@ fn routedToVm(pattern: []const u8, options: zregex.CompileOptions) !bool {
 
 test "dispatcher: eligible T0 patterns go to the VM, the rest to the backtracker" {
     // Routing to the VM: not in the forced-backtracker run (F4a(5)).
-    if (zregex.force_backtracker) return error.SkipZigTest;
+    if (zregex.internal.force_backtracker) return error.SkipZigTest;
     for (cases) |c| try testing.expect(try routedToVm(c[0], .{ .case_insensitive = c[1].i, .multiline = c[1].m, .dot_all = c[1].s }));
     // Groups and iterated nullable bodies: the tagged program (F4b).
     for ([_]struct { []const u8, u32 }{ .{ "(a)", 4 }, .{ "(?<n>a)b", 4 }, .{ "(?:a?)*", 2 }, .{ "((a)|b)+", 6 } }) |c| {
@@ -189,8 +189,8 @@ test "dispatcher: an unclassifiable pattern goes to the backtracker, without err
     try testing.expect(try re.find("aaa") == null);
 }
 
-fn expectUnavailable(pattern: []const u8, options: zregex.CompileOptions, expected: zregex.TierUnavailable) !void {
-    var diag: zregex.TierUnavailable = undefined;
+fn expectUnavailable(pattern: []const u8, options: zregex.CompileOptions, expected: zregex.internal.TierUnavailable) !void {
+    var diag: zregex.internal.TierUnavailable = undefined;
     var o = options;
     o.force_tier = .regular;
     o.tier_diagnostic = &diag;
@@ -228,21 +228,21 @@ test "force_tier .regular: the three reasons it can't be honored" {
 
 test "force_tier .expert and .unicode" {
     // Routing to the VM: not in the forced-backtracker run (F4a(5)).
-    if (zregex.force_backtracker) return error.SkipZigTest;
+    if (zregex.internal.force_backtracker) return error.SkipZigTest;
     try testing.expect(!try routedToVm("abc", .{ .force_tier = .expert }));
     // `.unicode` (F5a): the VM for T0 and for T1 without folding.
     try testing.expect(try routedToVm("abc", .{ .force_tier = .unicode }));
     try testing.expect(try routedToVm("\\p{L}+", .{ .unicode = true, .force_tier = .unicode }));
     // Since F5b, Unicode folding too; `v` still isn't built.
     try testing.expect(try routedToVm("\u{E9}", .{ .unicode = true, .case_insensitive = true, .force_tier = .unicode }));
-    var diag: zregex.TierUnavailable = undefined;
+    var diag: zregex.internal.TierUnavailable = undefined;
     try testing.expectError(error.TierUnavailable, zregex.Regex.compileWithOptions(testing.allocator, "[\\p{L}--[a]]", .{ .v = true, .force_tier = .unicode, .tier_diagnostic = &diag }));
-    try testing.expectEqualDeep(zregex.TierUnavailable{ .not_built = .unicode }, diag);
+    try testing.expectEqualDeep(zregex.internal.TierUnavailable{ .not_built = .unicode }, diag);
     try expectUnavailableTier("a(?=b)", .unicode, .{ .tier_too_high = .expert });
 }
 
 test "F5a: T1 without folding runs on T0's VM" {
-    if (zregex.force_backtracker) return error.SkipZigTest;
+    if (zregex.internal.force_backtracker) return error.SkipZigTest;
     for ([_][]const u8{ "a", "\\p{L}+", "[\\p{Script=Greek}\\d]+", "(\\p{Lu})\\p{Ll}*", "\\P{L}", ".", "\\u{1F600}" }) |p|
         testing.expect(try routedToVm(p, .{ .unicode = true })) catch |err| {
             std.debug.print("/{s}/u stays off the VM\n", .{p});
@@ -253,7 +253,7 @@ test "F5a: T1 without folding runs on T0's VM" {
 }
 
 test "F5b: T1 with Unicode case folding runs on T0's VM" {
-    if (zregex.force_backtracker) return error.SkipZigTest;
+    if (zregex.internal.force_backtracker) return error.SkipZigTest;
     // `iu`, and `i` without `u` on non-ASCII content: the folded sets are in
     // the HIR; `\b` counts the extended WordCharacters on the VM too.
     for ([_][]const u8{ "\\p{L}", "k", "\u{DF}+", "[\u{C0}-\u{D6}]", "\\w+\\b", "[^\\W]" }) |p|
@@ -268,15 +268,15 @@ test "F5b: T1 with Unicode case folding runs on T0's VM" {
         };
 }
 
-fn expectUnavailableTier(pattern: []const u8, tier: zregex.analysis.Tier, expected: zregex.TierUnavailable) !void {
-    var diag: zregex.TierUnavailable = undefined;
+fn expectUnavailableTier(pattern: []const u8, tier: zregex.internal.analysis.Tier, expected: zregex.internal.TierUnavailable) !void {
+    var diag: zregex.internal.TierUnavailable = undefined;
     try testing.expectError(error.TierUnavailable, zregex.Regex.compileWithOptions(testing.allocator, pattern, .{ .force_tier = tier, .tier_diagnostic = &diag }));
     try testing.expectEqualDeep(expected, diag);
 }
 
 test "the facade gives the same results on the VM and on the backtracker" {
     // Routing to the VM: not in the forced-backtracker run (F4a(5)).
-    if (zregex.force_backtracker) return error.SkipZigTest;
+    if (zregex.internal.force_backtracker) return error.SkipZigTest;
     const a = testing.allocator;
     const inputs = [_][]const u8{ "", "abc aab ab", "\u{E9}ab\u{1F600}abab", "xxaaaa" };
     for ([_][]const u8{ "ab", "a*", "a+?b", "(?:ab|a)", "\\bab", "$", "[^b]" }) |p| {
@@ -322,7 +322,7 @@ test "the facade gives the same results on the VM and on the backtracker" {
 
 test "execAt on the VM: a warm composite scratch allocates nothing" {
     // Routing to the VM: not in the forced-backtracker run (F4a(5)).
-    if (zregex.force_backtracker) return error.SkipZigTest;
+    if (zregex.internal.force_backtracker) return error.SkipZigTest;
     const a = testing.allocator;
     var re = try zregex.Regex.compile(a, "a+b|c");
     defer re.deinit();
@@ -347,7 +347,7 @@ test "execAt on the VM: a warm composite scratch allocates nothing" {
 }
 
 test "execAt on the tagged VM (F4b): a warm composite scratch allocates nothing" {
-    if (zregex.force_backtracker) return error.SkipZigTest;
+    if (zregex.internal.force_backtracker) return error.SkipZigTest;
     const a = testing.allocator;
     var failing: std.testing.FailingAllocator = .init(a, .{});
     var scratch = zregex.Scratch.init(failing.allocator());
@@ -361,7 +361,7 @@ test "execAt on the tagged VM (F4b): a warm composite scratch allocates nothing"
         const subject = "x555-1234 abac y";
         _ = try re.execAt(.{ .wtf8 = subject }, 0, &scratch, &out, .{});
         const warm = failing.allocations;
-        const s16 = try zregex.subject.utf16FromWtf8(a, subject);
+        const s16 = try zregex.internal.subject.utf16FromWtf8(a, subject);
         defer a.free(s16);
         _ = try re.execAt(.{ .utf16 = s16 }, 0, &scratch, &out, .{});
         const warm16 = failing.allocations;
@@ -379,8 +379,8 @@ test "execAt on the tagged VM (F4b): a warm composite scratch allocates nothing"
 
 test "unicode and v together are a SyntaxError, as in Flags.parse" {
     try testing.expectError(error.IncompatibleFlags, zregex.Regex.compileWithOptions(testing.allocator, "a", .{ .unicode = true, .v = true }));
-    try testing.expectError(error.IncompatibleFlags, zregex.analysis.Flags.parse("uv"));
-    try testing.expectError(error.IncompatibleFlags, zregex.compile(testing.allocator, "a", .{ .unicode = true, .v = true }));
+    try testing.expectError(error.IncompatibleFlags, zregex.internal.analysis.Flags.parse("uv"));
+    try testing.expectError(error.IncompatibleFlags, zregex.internal.compile(testing.allocator, "a", .{ .unicode = true, .v = true }));
 }
 
 test "Regex.findAll (F4a) and tier2 Matcher.findAll agree on the backtracker" {
@@ -391,7 +391,7 @@ test "Regex.findAll (F4a) and tier2 Matcher.findAll agree on the backtracker" {
         const pattern, const f = c;
         const re = try zregex.Regex.compileWithOptions(a, pattern, .{ .case_insensitive = f.i, .multiline = f.m, .dot_all = f.s, .force_tier = .expert });
         defer re.deinit();
-        const m = zregex.tier2.matcher.Matcher.initCompiled(a, re.compiled);
+        const m = zregex.internal.tier2.matcher.Matcher.initCompiled(a, re.compiled);
         for (subjects) |s| {
             var x = try re.findAll(s);
             defer {
@@ -418,17 +418,17 @@ test "existsAnchoredMatch at a position agrees with a sticky exec there" {
     defer vs.deinit();
     for (cases) |c| {
         const pattern, const f = c;
-        const fe = try zregex.lower.Frontend.init(gpa, pattern, .{}, .{ .ignore_case = f.i, .multiline = f.m, .dot_all = f.s });
+        const fe = try zregex.internal.lower.Frontend.init(gpa, pattern, .{}, .{ .ignore_case = f.i, .multiline = f.m, .dot_all = f.s });
         defer fe.deinit();
         const prog = try tier0.compile(gpa, fe.root);
         defer prog.deinit(gpa);
         for (subjects) |s8| {
-            const s16 = try zregex.subject.utf16FromWtf8(gpa, s8);
+            const s16 = try zregex.internal.subject.utf16FromWtf8(gpa, s8);
             defer gpa.free(s16);
             for ([_]zregex.Subject{ .{ .wtf8 = s8 }, .{ .utf16 = s16 } }) |subj| {
                 for (0..subj.len() + 1) |i| {
                     if (!subj.isPosition(i)) continue;
-                    var budget: zregex.Budget = .unlimited;
+                    var budget: zregex.internal.Budget = .unlimited;
                     const exists = try tier0.existsAnchoredMatch(&prog, subj, .code_unit, i, .forward, &vs, &budget);
                     const found = (try vm(&prog, subj, i, true, &vs)).found;
                     testing.expectEqual(found, exists) catch |err| {
@@ -451,7 +451,7 @@ fn prefilterKind(pattern: []const u8) !std.meta.Tag(tier0.prefilter.Prefilter.Ki
 
 test "prefilters: which one each pattern gets" {
     // Routing to the VM: not in the forced-backtracker run (F4a(5)).
-    if (zregex.force_backtracker) return error.SkipZigTest;
+    if (zregex.internal.force_backtracker) return error.SkipZigTest;
     try testing.expectEqual(.literal, try prefilterKind("hello"));
     try testing.expectEqual(.class_run, try prefilterKind("[a-z]+"));
     try testing.expectEqual(.first, try prefilterKind("\\d{3}-\\d{4}"));
@@ -464,7 +464,7 @@ test "prefilters: which one each pattern gets" {
 
 test "class_run sticky: only at the index" {
     // Routing to the VM: not in the forced-backtracker run (F4a(5)).
-    if (zregex.force_backtracker) return error.SkipZigTest;
+    if (zregex.internal.force_backtracker) return error.SkipZigTest;
     var re = try zregex.Regex.compileWithOptions(testing.allocator, "[a-z]+", .{ .sticky = true });
     defer re.deinit();
     var scratch = zregex.Scratch.init(testing.allocator);
@@ -479,7 +479,7 @@ test "class_run sticky: only at the index" {
 
 test "fast paths never touch the VM scratch" {
     // Routing to the VM: not in the forced-backtracker run (F4a(5)).
-    if (zregex.force_backtracker) return error.SkipZigTest;
+    if (zregex.internal.force_backtracker) return error.SkipZigTest;
     var failing: std.testing.FailingAllocator = .init(testing.allocator, .{});
     var scratch = zregex.Scratch.init(failing.allocator());
     defer scratch.deinit();
@@ -501,7 +501,7 @@ test "fast paths never touch the VM scratch" {
 test "forced-backtracker build: an eligible pattern stays on the backtracker" {
     const re = try zregex.Regex.compile(testing.allocator, "abc");
     defer re.deinit();
-    try testing.expectEqual(zregex.force_backtracker, re.t0 == null);
+    try testing.expectEqual(zregex.internal.force_backtracker, re.t0 == null);
     // An explicit force_tier still wins.
     const forced = try zregex.Regex.compileWithOptions(testing.allocator, "abc", .{ .force_tier = .regular });
     defer forced.deinit();
@@ -530,7 +530,7 @@ const capture_cases = [_]struct { []const u8, Flags }{
 };
 
 fn tagged(gpa: std.mem.Allocator, pattern: []const u8, f: Flags) !tier0.Program {
-    const fe = try zregex.lower.Frontend.init(gpa, pattern, .{}, .{ .ignore_case = f.i, .multiline = f.m, .dot_all = f.s });
+    const fe = try zregex.internal.lower.Frontend.init(gpa, pattern, .{}, .{ .ignore_case = f.i, .multiline = f.m, .dot_all = f.s });
     defer fe.deinit();
     return tier0.compileWith(gpa, fe.root, .{ .tagged = true });
 }
@@ -554,7 +554,7 @@ test "tagged VM (two passes) matches the backtracker, all slots" {
         defer re.deinit();
         const n = prog.nslots;
         for (subjects) |s| {
-            const s16 = try zregex.subject.utf16FromWtf8(gpa, s);
+            const s16 = try zregex.internal.subject.utf16FromWtf8(gpa, s);
             defer gpa.free(s16);
             for ([_]zregex.Subject{ .{ .wtf8 = s }, .{ .utf16 = s16 } }) |subj| {
                 for ([_]bool{ false, true }) |sticky| {
@@ -621,7 +621,7 @@ test "tagged VM gives V8's captures where the backtracker doesn't (empty iterati
         const pattern, const s, const want = c;
         const prog = try tagged(gpa, pattern, .{});
         defer prog.deinit(gpa);
-        const s16 = try zregex.subject.utf16FromWtf8(gpa, s);
+        const s16 = try zregex.internal.subject.utf16FromWtf8(gpa, s);
         defer gpa.free(s16);
         var got: [8]?usize = undefined;
         try testing.expect(try tier0.execCaptures(&prog, u16, s16, .code_unit, 0, false, &vs, got[0..prog.nslots]));
@@ -660,7 +660,7 @@ test "tagged VM on the iteration corpus: V8's captures (F4b, D3 and D4)" {
                 while (it.next()) |v| : (k += 1) want[k] = if (v[0] == '-') null else try std.fmt.parseInt(usize, v, 10);
                 try testing.expectEqual(n, k);
             }
-            const s16 = try zregex.subject.utf16FromWtf8(gpa, s);
+            const s16 = try zregex.internal.subject.utf16FromWtf8(gpa, s);
             defer gpa.free(s16);
             var got8: [8]?usize = undefined;
             var got16: [8]?usize = undefined;
@@ -717,7 +717,7 @@ fn compareRoutes(vm_re: *zregex.Regex, bt_re: *zregex.Regex, subj: zregex.Subjec
 }
 
 test "F5a: the VM in code-point mode matches the backtracker on T1 patterns" {
-    if (zregex.force_backtracker) return error.SkipZigTest;
+    if (zregex.internal.force_backtracker) return error.SkipZigTest;
     const gpa = testing.allocator;
     const Case = struct { []const u8, zregex.CompileOptions };
     const u: zregex.CompileOptions = .{ .unicode = true };
@@ -746,7 +746,7 @@ test "F5a: the VM in code-point mode matches the backtracker on T1 patterns" {
         var bt_re = try zregex.Regex.compileWithOptions(gpa, pattern, o);
         defer bt_re.deinit();
         for (t1_subjects) |s| {
-            const s16 = try zregex.subject.utf16FromWtf8(gpa, s);
+            const s16 = try zregex.internal.subject.utf16FromWtf8(gpa, s);
             defer gpa.free(s16);
             try compareRoutes(&vm_re, &bt_re, .{ .wtf8 = s });
             try compareRoutes(&vm_re, &bt_re, .{ .utf16 = s16 });
@@ -755,7 +755,7 @@ test "F5a: the VM in code-point mode matches the backtracker on T1 patterns" {
 }
 
 test "F5a: a group reset per iteration, as V8 (the backtracker keeps the stale group)" {
-    if (zregex.force_backtracker) return error.SkipZigTest;
+    if (zregex.internal.force_backtracker) return error.SkipZigTest;
     // `/(?:(\p{L})|\d)+/u` from 5 on "ab\nab xyz09": V8 gives [6, 11] with
     // group 1 undefined (the last iteration took `\d`, and each iteration
     // resets the group). The VM does; the backtracker keeps "z" (8, 9),
@@ -776,13 +776,13 @@ test "F5a: a group reset per iteration, as V8 (the backtracker keeps the stale g
 // lowering (Part 2), so the VM runs here from the HIR directly, in code
 // point mode, as the dispatcher will run it.
 test "F5b: \\b under u + i, VM against the backtracker" {
-    if (zregex.force_backtracker) return error.SkipZigTest;
+    if (zregex.internal.force_backtracker) return error.SkipZigTest;
     const gpa = testing.allocator;
     const patterns = [_][]const u8{ "a\\b", "k\\b", "s\\B", "\\b\\w", "\\w\\b", "\\B" };
     const word_subjects = [_][]const u8{ "a\u{17F}", "a\u{212A}", "k\u{212A}!", "s\u{17F}x", "!\u{17F}x", "x\u{212A} y", "abc", "" };
     var extended_seen = false;
     for (patterns) |pattern| {
-        const fe = try zregex.lower.Frontend.init(gpa, pattern, .{ .unicode = true }, .{ .ignore_case = true });
+        const fe = try zregex.internal.lower.Frontend.init(gpa, pattern, .{ .unicode = true }, .{ .ignore_case = true });
         defer fe.deinit();
         const prog = try tier0.compile(gpa, fe.root);
         defer prog.deinit(gpa);
@@ -794,7 +794,7 @@ test "F5b: \\b under u + i, VM against the backtracker" {
         var bt_scratch = zregex.Scratch.init(gpa);
         defer bt_scratch.deinit();
         for (word_subjects) |subj| {
-            const s16 = try zregex.subject.utf16FromWtf8(gpa, subj);
+            const s16 = try zregex.internal.subject.utf16FromWtf8(gpa, subj);
             defer gpa.free(s16);
             for ([_]zregex.Subject{ .{ .wtf8 = subj }, .{ .utf16 = s16 } }) |s| {
                 var i: usize = 0;

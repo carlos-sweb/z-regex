@@ -5,7 +5,7 @@
 # size, its main sections and its exported `zregex_*` symbols. The CPU is
 # fixed because `native` follows the host's CPU features: the same commit
 # measured 1,112,272 B and 1,138,656 B (ReleaseFast) on two hosts of this
-# container (docs/KNOWN_LIMITATIONS.md). Figures measured some other way
+# container (docs/HISTORY.md, "Binary size"). Figures measured some other way
 # (native CPU, unstripped, another artifact) aren't comparable with these.
 #
 #   scripts/measure_binary.sh            the working tree

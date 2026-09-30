@@ -1,14 +1,14 @@
-> **This document is outdated. See [README.md](README.md) for the current state.**
+> **This document is outdated. See [README.md](../../README.md) for the current state.**
 > (Este documento está desactualizado: describe una versión anterior a la 0.3.0, y su
 > ejemplo de configuración no compila con Zig 0.16. El estado actual está en README.md.)
 
 # zregex - Motor Moderno de Expresiones Regulares para Zig
 
-[![Licencia: MIT](https://img.shields.io/badge/Licencia-MIT-blue.svg)](LICENSE)
+[![Licencia: MIT](https://img.shields.io/badge/Licencia-MIT-blue.svg)](../../LICENSE)
 [![Tests](https://img.shields.io/badge/tests-402%2F402-brightgreen)](#)
 [![Zig](https://img.shields.io/badge/zig-0.16.0-orange)](https://ziglang.org/)
 
-[🇺🇸 English Version](README.md)
+[🇺🇸 English Version](../../README.md)
 
 Un motor de expresiones regulares potente y rico en características, escrito en Zig con sintaxis similar a JavaScript y protección contra ReDoS.
 
@@ -16,7 +16,7 @@ Un motor de expresiones regulares potente y rico en características, escrito en
 
 - **🚀 Alto Rendimiento**: Máquina virtual basada en bytecode con ejecución optimizada
 - **🛡️ Protección contra ReDoS**: Límites integrados de profundidad de recursión y pasos para prevenir backtracking catastrófico
-- **📝 Sintaxis Compatible con JavaScript**: 168/168 (100%) de aprobación en una muestra de conformidad derivada de test262 (`zig build test-conformance`) — una medición real pero sesgada/pequeña, no un porcentaje de conformidad completo; ver [Known Limitations](docs/KNOWN_LIMITATIONS.md) para el desglose verificado característica por característica, y el [Plan de Compatibilidad ECMAScript](docs/ECMASCRIPT_COMPATIBILITY_PLAN.md) para el camino al 100%; ambos documentos disponibles solo en inglés
+- **📝 Sintaxis Compatible con JavaScript**: 168/168 (100%) de aprobación en una muestra de conformidad derivada de test262 (`zig build test-conformance`) — una medición real pero sesgada/pequeña, no un porcentaje de conformidad completo; ver [Known Limitations](../KNOWN_LIMITATIONS.md) para el desglose verificado característica por característica, y el [Plan de Compatibilidad ECMAScript](../ECMASCRIPT_COMPATIBILITY_PLAN.md) para el camino al 100%; ambos documentos disponibles solo en inglés
 - **🔧 Cero Dependencias**: Implementación pura en Zig
 - **✅ Bien Probado**: 402 tests exhaustivos que aseguran confiabilidad
 
@@ -53,7 +53,7 @@ Un motor de expresiones regulares potente y rico en características, escrito en
 - ✅ `\w`, `\W` Caracteres de palabra / no-palabra
 - ✅ `\s`, `\S` Espacios en blanco / no-espacios
 - ✅ `\p{L}`, `\p{Lu}`, `\p{Letter}`, `\P{L}`, ... Escapes de propiedades Unicode General_Category
-- ✅ `\p{White_Space}`, `\p{Alphabetic}`, `\p{Math}`, `\p{Dash}`, `\p{Hex_Digit}`, `\p{ID_Start}`, `\p{Emoji}`, `\p{ASCII}`, `\p{Any}`, `\p{Bidi_Mirrored}`, `\p{Assigned}`, y 39 más (50 en total, ver [Known Limitations](docs/KNOWN_LIMITATIONS.md)) Escapes de propiedades binarias Unicode
+- ✅ `\p{White_Space}`, `\p{Alphabetic}`, `\p{Math}`, `\p{Dash}`, `\p{Hex_Digit}`, `\p{ID_Start}`, `\p{Emoji}`, `\p{ASCII}`, `\p{Any}`, `\p{Bidi_Mirrored}`, `\p{Assigned}`, y 39 más (50 en total, ver [Known Limitations](../KNOWN_LIMITATIONS.md)) Escapes de propiedades binarias Unicode
 - ✅ `\p{Script=Greek}`, `\p{sc=Han}`, `\p{Script=Latin}`, `\p{Script=Grek}` (alias corto), ... (los 174 scripts de Unicode + alias cortos) Escapes de propiedad Script de Unicode
 - ✅ `\p{Script_Extensions=Latin}`, `\p{scx=Grek}`, ... Escapes de propiedad Script_Extensions de Unicode (membresía por codepoint más amplia que Script, ej. acentos combinantes)
 - ✅ `[\p{L}\d]`, `[\P{Alphabetic}a-z]`, `[^\p{L}\d]` `\p{...}`/`\P{...}` como miembro de una clase de caracteres (General_Category, propiedad binaria, Script, o Script_Extensions; hasta 4 por clase)
@@ -94,7 +94,7 @@ exe.root_module.addImport("zregex", zregex.module("zregex"));
 > soportada (sin headers, sin librería wrapper, sin artefactos de build para linkeo
 > externo). Sí exporta un ABI C simple (`src/c_api.zig`, compilado como librería
 > compartida vía `zig build shared`) que las herramientas propias del proyecto usan vía
-> FFI — ver [`ECMASCRIPT_COMPATIBILITY_PLAN.md`](docs/ECMASCRIPT_COMPATIBILITY_PLAN.md)
+> FFI — ver [`ECMASCRIPT_COMPATIBILITY_PLAN.md`](../ECMASCRIPT_COMPATIBILITY_PLAN.md)
 > Fase 8 (en inglés). Si querés llamar a zregex desde C o C++, sos libre de escribir tus
 > propios bindings contra esos símbolos exportados; no se provee ni mantiene ninguno acá.
 
@@ -299,7 +299,7 @@ zig test src/regex.zig
 
 ## 📄 Licencia
 
-Este proyecto está licenciado bajo la Licencia MIT - ver el archivo [LICENSE](LICENSE) para detalles.
+Este proyecto está licenciado bajo la Licencia MIT - ver el archivo [LICENSE](../../LICENSE) para detalles.
 
 ## 🙏 Agradecimientos
 
@@ -347,7 +347,7 @@ Este proyecto está licenciado bajo la Licencia MIT - ver el archivo [LICENSE](L
 - **Líneas de Código**: ~11,000
 - **Cantidad de Tests**: 402 tests exhaustivos
 - **Tasa de Éxito de Tests**: 100%
-- **Compatibilidad JavaScript**: 168/168 (100%) en una muestra de conformidad derivada de test262 (ver [Known Limitations](docs/KNOWN_LIMITATIONS.md) para lo que esta medición cubre y lo que no)
+- **Compatibilidad JavaScript**: 168/168 (100%) en una muestra de conformidad derivada de test262 (ver [Known Limitations](../KNOWN_LIMITATIONS.md) para lo que esta medición cubre y lo que no)
 - **Plataformas Soportadas**: Linux, macOS, Windows, *BSD
 - **Dependencias**: Cero (Zig puro)
 - **Lenguaje**: Zig 0.16.0+

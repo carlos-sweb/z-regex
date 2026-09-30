@@ -6,20 +6,20 @@
 const std = @import("std");
 const zregex = @import("zregex");
 
-const Matcher = zregex.Matcher;
-const CodeGenerator = zregex.CodeGenerator;
-const BytecodeWriter = zregex.BytecodeWriter;
-const Opcode = zregex.Opcode;
-const Lexer = zregex.Lexer;
-const Parser = zregex.Parser;
-const lower = zregex.lower;
-const hir = zregex.hir;
-const format = zregex.tier2.format;
+const Matcher = zregex.internal.Matcher;
+const CodeGenerator = zregex.internal.CodeGenerator;
+const BytecodeWriter = zregex.internal.BytecodeWriter;
+const Opcode = zregex.internal.Opcode;
+const Lexer = zregex.internal.Lexer;
+const Parser = zregex.internal.Parser;
+const lower = zregex.internal.lower;
+const hir = zregex.internal.hir;
+const format = zregex.internal.tier2.format;
 
 // --- from src/tier2/executor/matcher.zig ---
 
 test "Matcher: matchFull success" {
-    const compiler = zregex;
+    const compiler = zregex.internal;
 
     const compiled = try compiler.compileSimple(std.testing.allocator, "hello");
     defer compiled.deinit();
@@ -31,7 +31,7 @@ test "Matcher: matchFull success" {
 }
 
 test "Matcher: CHAR_SET without its CharSet table is InvalidCharSet, not a panic" {
-    const compiler = zregex;
+    const compiler = zregex.internal;
     const compiled = try compiler.compileSimple(std.testing.allocator, "[\u{E9}]");
     defer compiled.deinit();
 
@@ -46,7 +46,7 @@ test "Matcher: CHAR_SET without its CharSet table is InvalidCharSet, not a panic
 }
 
 test "Matcher: matchFull failure" {
-    const compiler = zregex;
+    const compiler = zregex.internal;
 
     const compiled = try compiler.compileSimple(std.testing.allocator, "hello");
     defer compiled.deinit();
@@ -58,7 +58,7 @@ test "Matcher: matchFull failure" {
 }
 
 test "Matcher: find match" {
-    const compiler = zregex;
+    const compiler = zregex.internal;
 
     const compiled = try compiler.compileSimple(std.testing.allocator, "world");
     defer compiled.deinit();
@@ -74,7 +74,7 @@ test "Matcher: find match" {
 }
 
 test "Matcher: find no match" {
-    const compiler = zregex;
+    const compiler = zregex.internal;
 
     const compiled = try compiler.compileSimple(std.testing.allocator, "xyz");
     defer compiled.deinit();
@@ -86,7 +86,7 @@ test "Matcher: find no match" {
 }
 
 test "Matcher: find with capture" {
-    const compiler = zregex;
+    const compiler = zregex.internal;
 
     const compiled = try compiler.compileSimple(std.testing.allocator, "(wo..)");
     defer compiled.deinit();
@@ -103,7 +103,7 @@ test "Matcher: find with capture" {
 }
 
 test "Matcher: findAll multiple matches" {
-    const compiler = zregex;
+    const compiler = zregex.internal;
 
     const compiled = try compiler.compileSimple(std.testing.allocator, "a");
     defer compiled.deinit();
@@ -124,7 +124,7 @@ test "Matcher: findAll multiple matches" {
 }
 
 test "Matcher: findAll no matches" {
-    const compiler = zregex;
+    const compiler = zregex.internal;
 
     const compiled = try compiler.compileSimple(std.testing.allocator, "x");
     defer compiled.deinit();
@@ -137,7 +137,7 @@ test "Matcher: findAll no matches" {
 }
 
 test "Matcher: test_ function" {
-    const compiler = zregex;
+    const compiler = zregex.internal;
 
     const compiled = try compiler.compileSimple(std.testing.allocator, "test");
     defer compiled.deinit();
@@ -153,16 +153,16 @@ test "Matcher: test_ function" {
 
 /// One run of the backtracker anchored at `pos` (`Matcher.exec`, sticky):
 /// the match's end, or null; the group slots in `slots[2..]`.
-fn runAt(comptime Unit: type, compiled: zregex.CompileResult, input: []const Unit, pos: usize, slots: []?usize, limits: zregex.ExecLimits) !?usize {
+fn runAt(comptime Unit: type, compiled: zregex.internal.CompileResult, input: []const Unit, pos: usize, slots: []?usize, limits: zregex.ExecLimits) !?usize {
     const m = Matcher.initCompiled(std.testing.allocator, compiled);
-    var scratch = zregex.tier2.matcher.Scratch.init(std.testing.allocator);
+    var scratch = zregex.internal.tier2.matcher.Scratch.init(std.testing.allocator);
     defer scratch.deinit();
     if (!try m.exec(Unit, input, pos, true, &scratch, slots, limits)) return null;
     return slots[1].?;
 }
 
 test "backtracker: question quantifier" {
-    const result = try zregex.compileSimple(std.testing.allocator, "a?");
+    const result = try zregex.internal.compileSimple(std.testing.allocator, "a?");
     defer result.deinit();
     var slots: [2]?usize = undefined;
     try std.testing.expectEqual(@as(?usize, 0), try runAt(u8, result, "", 0, &slots, .{}));
@@ -170,7 +170,7 @@ test "backtracker: question quantifier" {
 }
 
 test "backtracker: simple star quantifier" {
-    const result = try zregex.compileSimple(std.testing.allocator, "a*");
+    const result = try zregex.internal.compileSimple(std.testing.allocator, "a*");
     defer result.deinit();
     var slots: [2]?usize = undefined;
     try std.testing.expectEqual(@as(?usize, 0), try runAt(u8, result, "", 0, &slots, .{}));
@@ -180,7 +180,7 @@ test "backtracker: simple star quantifier" {
 test "backtracker: ReDoS protection - step limit" {
     // (a+)+b over 20 'a' and no 'b': exponential, stopped by the default
     // step budget.
-    const result = try zregex.compileSimple(std.testing.allocator, "(a+)+b");
+    const result = try zregex.internal.compileSimple(std.testing.allocator, "(a+)+b");
     defer result.deinit();
     var slots: [4]?usize = undefined;
     try std.testing.expectError(error.StepLimitExceeded, runAt(u8, result, "aaaaaaaaaaaaaaaaaaaaX", 0, &slots, .{}));
@@ -192,7 +192,7 @@ test "backtracker: quantified backreference to an empty capture doesn't crash" {
     // can capture zero characters. Matches "b": group 1 captures "", \1+
     // matches it once and stops (test262's S15.10.2.9_A1_T5.js expects
     // ["b", ""]).
-    const result = try zregex.compileSimple(std.testing.allocator, "(a*)b\\1+");
+    const result = try zregex.internal.compileSimple(std.testing.allocator, "(a*)b\\1+");
     defer result.deinit();
     var slots: [4]?usize = undefined;
     try std.testing.expectEqual(@as(?usize, 1), try runAt(u8, result, "baaac", 0, &slots, .{}));
@@ -209,7 +209,7 @@ test "backtracker: 1000 groups capture exactly, and \\1000 matches (D9)" {
     var input: [1001]u8 = undefined;
     for (input[0..1000], 0..) |*c, i| c.* = @intCast('!' + (i % 94));
     input[1000] = input[999];
-    const compiled = try zregex.compileSimple(gpa, pattern.items);
+    const compiled = try zregex.internal.compileSimple(gpa, pattern.items);
     defer compiled.deinit();
     const slots = try gpa.alloc(?usize, 2 * 1001);
     defer gpa.free(slots);
@@ -340,11 +340,11 @@ fn hasOpcode(code: []const u8, op: Opcode) !bool {
 
 test "backtracker: the u16 instance matches like the u8 one (code points, F3c)" {
     const a = std.testing.allocator;
-    const subject = zregex.subject;
+    const subject = zregex.internal.subject;
     const patterns = [_][]const u8{ "a", "\\u00e9+", ".", "(.)(.)", "[^a]+", "[\\u00e0-\\u00ff]", "\\p{L}+", "\\bx\\b", "(\\w)\\1", "(?<=.)x", "(?<!\\u00e9)x", "^.$", "\\u{1F600}", "[\\u{1F600}a]" };
     const subjects = [_][]const u8{ "", "a", "\u{E9}\u{E9}x", "ax\u{E9}x", "\u{1F600}", "x\u{1F600}x", "\xED\xA0\x80x", "\u{2028}a\nb", "aa bb \u{E9}\u{E9}" };
     for (patterns) |p| {
-        const c = try zregex.compile(a, p, .{ .unicode = true });
+        const c = try zregex.internal.compile(a, p, .{ .unicode = true });
         defer c.deinit();
         const n = 2 * (@as(usize, c.group_count) + 1);
         var s8slots: [8]?usize = undefined;

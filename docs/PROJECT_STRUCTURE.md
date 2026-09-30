@@ -1,370 +1,116 @@
 # Project Structure
 
-This document describes the organization of the zregex codebase.
+Where each thing is, one line per file or directory. How the pieces work together is in
+[ARCHITECTURE.md](ARCHITECTURE.md); which module may import which is `build.zig`'s
+`layers` table, checked by `zig build check-layers`.
 
-> **Accuracy note**: this document was originally written before implementation began.
-> The directory tree, module purpose/file lists, dependency diagram, build commands, and
-> line counts below have been corrected against the current source tree (2026-07-04). A
-> few small illustrative code snippets further down (e.g. in the Utils Module section)
-> may still show simplified/original-design APIs rather than the exact current function
-> signatures — check `src/` directly when precision matters.
-
-## Directory Overview
+## Root
 
 ```
-zregex/
-├── src/              # Source code
-│   ├── core/         # Compile-time config flags (tiny)
-│   ├── parser/        # Lexer, AST, recursive-descent parser
-│   ├── codegen/       # AST -> bytecode generator, optimizer, compile() entry point
-│   ├── executor/     # Recursive backtracking matcher
-│   ├── bytecode/     # Opcode definitions and format
-│   ├── unicode/      # Unicode support (design only, not implemented)
-│   ├── utils/        # Shared utilities
-│   ├── regex.zig     # High-level Regex API
-│   ├── c_api.zig     # Exported C ABI -- internal FFI substrate for the conformance
-│   │                 # harness (docs/ECMASCRIPT_COMPATIBILITY_PLAN.md Phase 8), not a
-│   │                 # supported public C/C++ API (no headers/wrapper are shipped)
-│   └── main.zig      # Public module entry point
-├── tests/            # Integration tests
-├── docs/             # Documentation
-├── examples/         # Usage examples
-├── build.zig         # Build configuration
-├── README.md         # Project overview (English, primary)
-├── README.es.md      # Project overview (Spanish translation)
-├── LICENSE           # MIT license
-└── CONTRIBUTING.md   # Contribution guidelines
+build.zig            the module layers, every build step
+build.zig.zon        package manifest (version, minimum Zig 0.16.0)
+README.md            overview, usage, the API stability summary
+CONTRIBUTING.md
+LICENSE
+src/                 the engine (below)
+tests/               integration tests, corpora, references (below)
+tools/               Zig tools run by build steps: differentials, layer check, probes
+scripts/             test262 harness, generators, the gate, measurement
+bench/               performance baseline and the cross-engine comparison
+examples/            small programs using the public API (`zig build examples`)
+docs/                documentation (below)
 ```
 
-## Source Code Organization (`src/`)
-
-### Core Module (`src/core/`)
-
-**Purpose**: Compile-time configuration flags. This is the entire module today — it's
-much smaller than originally planned; there's no `types.zig`/`errors.zig`/`allocator.zig`.
-`CompileOptions` (the equivalent of a "flags" type) lives in `src/codegen/compiler.zig`
-instead, and error sets are defined per-module and combined into `RegexError` in
-`src/regex.zig`.
-
-**Files**:
-- `config.zig` - Two compile-time booleans (`enable_execution_trace`,
-  `panic_on_internal_error`), consumed by `src/utils/debug.zig`
-
-**Dependencies**: None (foundation layer)
-
-### Parser Module (`src/parser/`)
-
-**Purpose**: Parse regex pattern strings into an AST.
-
-**Files**:
-- `lexer.zig` - Tokenizes the pattern string
-- `ast.zig` - Abstract syntax tree node definitions
-- `parser.zig` - Recursive descent parser (tokens → AST)
-- `parser_tests.zig` - Module test entry point
-
-**Dependencies**: none
-
-### Codegen Module (`src/codegen/`)
-
-**Purpose**: Generate bytecode from the AST, and drive the overall compile pipeline.
-
-**Files**:
-- `compiler.zig` - Top-level `compile()`/`compileSimple()` entry points and
-  `CompileOptions` (`case_insensitive`, `multiline`, `dot_all`)
-- `generator.zig` - AST → bytecode code generator
-- `optimizer.zig` - Bytecode optimization passes
-- `codegen_tests.zig` - Module test entry point
-
-**Dependencies**: `parser`, `bytecode`
-
-**Processing Pipeline**:
-```
-Pattern String → Lexer → Parser → AST → Generator → Bytecode
-                                             ↓
-                                        Optimizer
-```
-
-### Executor Module (`src/executor/`)
-
-**Purpose**: Execute compiled bytecode to find matches.
-
-**Files**:
-- `recursive_matcher.zig` - The matching engine: a recursive backtracker. Zig's native
-  call stack acts as the backtrack stack (no explicit stack data structure). An earlier
-  Pike-VM/thread-based design (`vm.zig`) had an infinite-loop bug in alternation and has
-  been removed.
-- `thread.zig` - `Capture` (capture group start/end positions)
-- `matcher.zig` - High-level matching interface (`find`, `findAll`, `matchFull`)
-- `executor_tests.zig` - Module test entry point
-
-**Dependencies**: `bytecode`
-
-**Execution Model**:
-```
-Bytecode + Input → RecursiveMatcher (backtracking) → Match Result
-                              ↓
-                          Captures
-```
-
-### Bytecode Module (`src/bytecode/`)
-
-**Purpose**: Define bytecode format and opcodes.
-
-**Files**:
-- `opcodes.zig` - Opcode enumeration and metadata
-- `format.zig` - Bytecode layout specification
-- `writer.zig` - Bytecode emission utilities
-- `reader.zig` - Bytecode reading utilities
-- `bytecode_tests.zig` - Module test entry point
-
-**Key Components**: 34 opcodes (`CHAR`, `CHAR32`, `CHAR_RANGE[_INV]`, `CHAR_CLASS[_INV]`,
-`GOTO`, `SPLIT*`, `SAVE_START`/`SAVE_END`, `LINE_START`/`LINE_END`,
-`STRING_START`/`STRING_END`, `BACK_REF[_I]`, lookaround opcodes, ...) — see
-`src/bytecode/opcodes.zig` for the authoritative, current list and exact byte values.
-
-**Dependencies**: none
-
-**Binary Format**: No fixed header. `BytecodeWriter.finalize()` produces a flat
-`[opcode][operands...]` sequence terminated by `MATCH`.
-
-### Unicode Module (`src/unicode/`) — ⚠️ design only, not implemented
-
-**Status**: `src/unicode/` currently contains only a README describing this design; none
-of the files below exist yet. See [KNOWN_LIMITATIONS.md](KNOWN_LIMITATIONS.md) and
-[ECMASCRIPT_COMPATIBILITY_PLAN.md](ECMASCRIPT_COMPATIBILITY_PLAN.md) for current status.
-
-**Purpose**: Unicode character operations and properties.
-
-**Files**:
-- `charrange.zig` - Efficient character range representation
-- `properties.zig` - Unicode property lookup
-- `casefold.zig` - Case folding tables and operations
-- `normalize.zig` - Unicode normalization
-- `tables.zig` - Generated Unicode data
-- `tables_generated.zig` - Auto-generated (gitignored)
-- `unicode_tests.zig` - Module test entry point
-
-**Key Components**:
-```zig
-// Represents a set of character ranges
-pub const CharRange = struct {
-    points: []u32,  // [start, end+1, start, end+1, ...]
-    pub fn contains(self: CharRange, ch: u32) bool;
-    pub fn union(self: *CharRange, other: CharRange) !void;
-};
-
-// Unicode property lookup
-pub fn hasProperty(ch: u32, property: Property) bool;
-```
-
-**Dependencies**: `core`
-
-**Data Size**: ~249KB of Unicode tables
-
-### Utils Module (`src/utils/`)
-
-**Purpose**: Shared utility functions and data structures.
-
-**Files**:
-- `dynbuf.zig` - Dynamic buffer (generic wrapper over ArrayList)
-- `bitset.zig` - Bit set for fast character lookups
-- `pool.zig` - Object pooling for performance
-- `debug.zig` - Debug utilities (dumpers, printers)
-- `utils_tests.zig` - Module test entry point
-
-**Key Components**:
-```zig
-// Generic dynamic buffer
-pub fn DynBuf(comptime T: type) type {
-    return struct {
-        list: std.ArrayList(T),
-        pub fn append(self: *@This(), item: T) !void;
-    };
-}
-
-// Bit set for character ranges
-pub const BitSet = struct {
-    bits: []u64,
-    pub fn set(self: *BitSet, index: usize) void;
-    pub fn isSet(self: BitSet, index: usize) bool;
-};
-```
-
-**Dependencies**: `core`
-
-## Tests Organization (`tests/`)
-
-### Unit Tests
-
-**Purpose**: Test individual modules in isolation.
-
-**Organization**: Tests are co-located with source as inline `test { ... }` blocks, and
-each module has a `*_tests.zig` file that re-exports them (e.g. `src/parser/parser_tests.zig`,
-`src/codegen/codegen_tests.zig`, `src/executor/executor_tests.zig`,
-`src/bytecode/bytecode_tests.zig`, `src/utils/utils_tests.zig`); `src/main.zig`'s top-level
-`test { }` block pulls all of them in via `std.testing.refAllDecls`.
-
-### Integration Tests (`tests/`)
-
-**Purpose**: Test full end-to-end scenarios through the public `zregex` module (as
-opposed to the inline unit tests, which test internal modules directly).
-
-**Files**:
-- `integration_tests.zig` - The full integration suite (23 tests), run via
-  `zig build test-integration`
-
-## Documentation (`docs/`)
-
-**Files** (non-exhaustive; see the directory for the full, current list):
-- `ARCHITECTURE.md` - System design and architecture
-- `ROADMAP.md` - Long-term development plan (aspirational; not all phases/dates reflect
-  what actually shipped)
-- `PROJECT_STRUCTURE.md` - This file
-- `KNOWN_LIMITATIONS.md` - Verified, current list of what works and what doesn't
-- `ECMASCRIPT_COMPATIBILITY_PLAN.md` - Phased plan toward full JS RegExp compatibility
-- `CONCEPTS.md` - General regex engine background
-
-## Examples (`examples/`)
-
-**Purpose**: Usage examples for users.
-
-**Files**:
-- `basic_usage.zig` - Simple pattern matching, metacharacters, quantifiers, anchors
-- `capture_groups.zig` - Working with capture groups (simple, multiple, nested, optional)
-- `find_all.zig` - Finding all matches in a string
-- `validation.zig` - Input validation use cases
-
-**Build and run**:
-```bash
-zig build examples          # builds all examples into zig-out/bin/
-./zig-out/bin/basic_usage
-```
-
-## Main Entry Point (`src/main.zig`)
-
-The main entry point exports the public API. The high-level `Regex` type comes from
-`regex.zig`, not from the parser or codegen modules directly:
-
-```zig
-// src/main.zig (abridged)
-pub const Regex = @import("regex.zig").Regex;
-pub const MatchResult = @import("executor/matcher.zig").MatchResult;
-pub const CompileOptions = @import("codegen/compiler.zig").CompileOptions;
-// ... plus lower-level building blocks (Lexer, Parser, CodeGenerator, ...)
-// for anyone assembling their own pipeline instead of using Regex directly.
-
-// Aggregates every module's tests so `zig build test` reaches all of them
-test {
-    std.testing.refAllDecls(@This());
-    _ = @import("utils/utils_tests.zig");
-    _ = @import("bytecode/bytecode_tests.zig");
-    _ = @import("parser/parser_tests.zig");
-    _ = @import("codegen/codegen_tests.zig");
-    _ = @import("executor/executor_tests.zig");
-    _ = @import("regex.zig");
-}
-```
-
-## Build System (`build.zig`)
-
-Defines build targets:
-- `zig build` - Build the static and shared libraries and install headers
-- `zig build test` - Run all tests (unit + integration)
-- `zig build test-unit` - Run unit tests only
-- `zig build test-integration` - Run integration tests only
-- `zig build lib` - Build all libraries and install headers
-- `zig build static` - Build the static library only
-- `zig build shared` - Build the shared library only
-- `zig build examples` - Build all examples into `zig-out/bin/`
-
-## Module Dependencies
+## `src/`
 
 ```
-┌──────┐   ┌────────┐
-│ core │   │ utils  │  (core has no deps; utils depends on core for config.zig)
-└──────┘   └───┬────┘
-               │
-         ┌─────▼─────┐
-         │ bytecode  │  (no deps)
-         └─────┬─────┘
-               │
-      ┌────────┴────────┐
-      │                 │
-┌─────▼─────┐     ┌─────▼──────┐
-│  parser   │     │  executor  │  (depends on bytecode only)
-│(no deps)  │     └─────┬──────┘
-└─────┬─────┘           │
-      │                 │
-┌─────▼─────┐           │
-│  codegen  │           │
-│ (parser + │           │
-│ bytecode) │           │
-└─────┬─────┘           │
-      │                 │
-      └────────┬────────┘
-               │
-          ┌────▼────┐
-          │ regex.zig│  (public high-level API)
-          └────┬────┘
-               │
-          ┌────▼────┐
-          │ main.zig │  (public module entry point)
-          └─────────┘
+main.zig             the `zregex` module: the 19 stable declarations and `internal`
+regex.zig            `Regex`, the facade (find, findAll, replace, ...), execAt, iterator
+compile.zig          CompileOptions, compileTiers: front end, route, code generation
+c_api.zig            the exported C ABI (`zig build shared`)
+leaves_tests.zig     test aggregator of the leaf layers
+analysis/
+  classify.zig       analyze(): the minimum tier of a pattern, from its HIR
+frontend/
+  root.zig
+  parser/            lexer.zig, parser.zig, ast.zig
+  lower/             lower.zig (AST -> HIR), fold.zig (case-folding closure of a set)
+ir/
+  hir.zig            the HIR
+  charset.zig        CharSet: sorted code point ranges and their algebra
+  word.zig, word_fold.zig   word-character sets for \w, \b
+subject/
+  root.zig           Subject: WTF-8 or UTF-16, positions, decoding both ways
+tier0/
+  compile.zig        HIR -> Thompson program; which patterns T0 takes
+  program.zig        the program
+  pikevm.zig         the Pike VM without captures
+  pikevm_tagged.zig  the tagged Pike VM (captures, two passes)
+  prefilter.zig      exact prefilters and fast paths
+tier1/
+  root.zig           empty: T1 patterns run on tier0 or tier2
+tier2/
+  program.zig        CompileResult: bytecode, CharSet table, named groups, LookLinear sites
+  bytecode/          opcodes.zig, writer.zig, reader.zig, format.zig
+  codegen/           generator.zig (HIR -> bytecode)
+  executor/          backtrack.zig (explicit-stack backtracker), core.zig (its state and
+                     atom checks), matcher.zig (ExecLimits, MatchResult, byte-offset entry
+                     points), thread.zig
+unicode/
+  tables.zig         generated from UCD 17.0.0 (scripts/gen_unicode_tables.py)
+  properties.zig     \p{...} name resolution and lookup
+  casefold.zig       Canonicalize classes and simple case mapping
+utils/
+  bitset.zig, bittable.zig, dynbuf.zig, pool.zig, budget.zig, debug.zig, config.zig
 ```
 
-Note: `unicode/` isn't in this diagram — it has no implementation yet (see
-[KNOWN_LIMITATIONS.md](KNOWN_LIMITATIONS.md)), so nothing depends on it today.
-
-## File Naming Conventions
-
-- `snake_case.zig` - Source files
-- `PascalCase` - Types and structs
-- `camelCase` - Functions
-- `SCREAMING_SNAKE_CASE` - Constants
-- `*_tests.zig` - Test aggregation files
-- `*_generated.zig` - Auto-generated files
-
-## Line Count Targets
-
-Actual line counts (2026-07-04, including inline tests):
+## `tests/`
 
 ```
-src/parser/        ~2000 lines (lexer, ast, parser)
-src/utils/         ~1950 lines
-src/bytecode/      ~1470 lines
-src/executor/      ~1430 lines (recursive_matcher, thread, matcher)
-src/codegen/       ~1180 lines (compiler, generator, optimizer)
-src/regex.zig      ~1400 lines (high-level API + tests)
-src/c_api.zig      ~500 lines
-src/main.zig       ~120 lines
-src/unicode/       0 lines (design only — see status note above)
-src/core/          ~4 lines
-
-tests/             ~290 lines
-examples/          ~680 lines
+integration_tests.zig    end-to-end tests; the root of the integration binary
+regression_tests.zig     one test per fixed bug or contract (API, errors, V8 cases)
+syntax_tests.zig, captures_tests.zig, exec_tests.zig, subject_tests.zig,
+code_unit_tests.zig, dual_encoding.zig, t0_tests.zig, tier2_pipeline_tests.zig,
+hir_contract_tests.zig   by subject
+bytecode_snapshot.zig, snapshot_common.zig, snapshot_update.zig, snapshots/bytecode.txt
+fuzz_common.zig, fuzz_parser.zig, fuzz_stress.zig
+differential.zig         WTF-8 against UTF-16: the same match from every position
+test262_conformance.zig, test262_data.zig   the 168-case sample (generated data)
+layers/ref_all.zig       compile canaries of check-layers
+corpus/                  pattern corpora: f2c.txt, f2c-2.txt, npm.tsv, lookbehind.tsv, iter_v8.tsv
+differential/reference/  references the gate compares against (dv8, lbdiff-v8, ivdiff, pfdiff slots)
 ```
 
-**Compare to libregexp**: 3,261 lines (single file)
+## `tools/`, `scripts/`, `bench/`
 
-## Code Organization Principles
+```
+tools/check_layers.zig   the layer lint
+tools/pfdiff.zig, t1diff.zig, lldiff.zig, lbdiff.zig   internal differentials
+tools/f0c.zig, cgprobe.zig                         tier histogram, callgrind probe
+scripts/gate.sh          the gate (every check, one verdict)
+scripts/gate/            V8 arbiters of pfdiff and t1diff
+scripts/test262/         the test262 harness, baselines, V8 differentials (Node + koffi)
+scripts/measure_binary.sh   binary size, one procedure
+scripts/gen_unicode_tables.py, gen_test262_data.py, extract_test262.py
+scripts/f0c/, snapshot/, iter_corpus/   corpus extraction and generators
+bench/bench.zig          the performance baseline (`zig build bench`)
+bench/compare/           z-regex against V8, Rust regex, PCRE2 and zig-regex
+```
 
-1. **Separation of Concerns**: Each module has a single responsibility
-2. **Minimal Dependencies**: Core has no deps, others depend on core
-3. **Testability**: Each module independently testable
-4. **Documentation**: Each module has README explaining purpose
-5. **No Circular Deps**: Strict dependency hierarchy
+## `docs/`
 
-## Adding New Modules
-
-If adding a new module:
-
-1. Create directory under `src/`
-2. Add module exports to `src/main.zig`
-3. Add test target to `build.zig`
-4. Create `<module>_tests.zig` aggregator
-5. Add to this document
-6. Update dependency diagram
-
----
-
-**Last Updated**: 2026-07-04
+```
+API.md                   the API contract
+ARCHITECTURE.md          how the engine works
+PROJECT_STRUCTURE.md     this file
+LIMITATIONS.md           what works and what doesn't, today
+HISTORY.md               the record of every phase
+KNOWN_LIMITATIONS.md     index to the two above (cited by the sources)
+BENCHMARKS.md            performance numbers
+REGEX_TIERS_PLAN.md      the tier design and its phases
+ECMASCRIPT_COMPATIBILITY_PLAN.md   the compatibility plan of the first phases
+F6A_PRECHECK.md          F6a's precheck (cited by the sources)
+RELEASE_NOTES_v*.md      one per release
+plans/                   ROADMAP_1.0.md and the plans of E1, F7 and F7c
+archive/                 documents of closed phases and the Spanish README
+```

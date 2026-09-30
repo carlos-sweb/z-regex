@@ -1,5 +1,26 @@
 # scripts/
 
+## The gate (`gate.sh`)
+
+`scripts/gate.sh [OUTDIR]` runs what every phase closes with and ends with GATE-PASS or
+GATE-FAIL (exit 1). The steps:
+- the tests (Debug, ReleaseSafe), `check-layers`, the fuzz stress in both modes;
+- test262 in UTF-16 and WTF-8 against their baselines;
+- `differential-v8` against `tests/differential/reference/diff-F7a.json`;
+- `lbdiff-v8`, `lbdiff` and `ivdiff`;
+- the internal differentials `pfdiff`, `t1diff` and `lldiff` (`tools/`, on
+  `tests/corpus/{f2c,f2c-2}.txt` and `npm.tsv`; `pfdiff --slots` against
+  `tests/differential/reference/pfdiff-slots.tsv`);
+- `measure_binary.sh` (informational).
+
+Zig's cache is emptied after each group of steps. Logs go to OUTDIR (default `zig-out/gate`).
+It needs Node with `scripts/test262`'s `npm ci`, the test262 checkout of
+`scripts/test262/fetch.sh` (`.test262/`) and python3. `scripts/gate/` holds the V8 arbiters for
+a `pfdiff --slots` or `t1diff` difference (manual, after a failure).
+
+The corpora (F2c: `f2c.txt`, `f2c-2.txt`; F0c: `npm.tsv`, the npm dependency tree of
+`scripts/f0c/packages.txt`, which needs the network to rebuild) are committed as they are.
+
 ## test262 conformance sample
 
 `extract_test262.py` + `gen_test262_data.py` regenerate `tests/test262_data.zig`,

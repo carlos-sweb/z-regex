@@ -405,7 +405,7 @@ pub fn build(b: *std.Build) void {
     // Lookbehind differential against V8 (E1): every pattern of
     // tests/corpus/lookbehind.tsv, checked against the committed reference
     // run; fails on any new or changed pattern.
-    const run_lbdiff_v8 = b.addSystemCommand(&.{ "node", "scripts/test262/lbdiff-v8.mjs", "--check", "tests/differential/reference/lbdiff-v8-v051.json", "--lib" });
+    const run_lbdiff_v8 = b.addSystemCommand(&.{ "node", "scripts/test262/lbdiff-v8.mjs", "--check", "tests/differential/reference/lbdiff-v8-f7c0.json", "--lib" });
     run_lbdiff_v8.addArtifactArg(test262_lib);
     run_lbdiff_v8.has_side_effects = true;
     const lbdiff_v8_step = b.step("lbdiff-v8", "Compare zregex with V8 on the lookbehind corpus against its reference (needs Node + koffi)");
@@ -430,6 +430,41 @@ pub fn build(b: *std.Build) void {
     run_lbdiff.has_side_effects = true;
     const lbdiff_step = b.step("lbdiff", "Lookbehind oracle without V8: (?<=B) against ^(?:B)$ on the slices ending at each position");
     lbdiff_step.dependOn(&run_lbdiff.step);
+
+    // Internal differentials of the gate (scripts/gate.sh; F7c-1 brought
+    // them from the scratch tools of F4a, F4b, F5a and F6a). Each runs on the
+    // corpora in tests/corpus and takes its files and flags after `--`:
+    // - pfdiff: T0's prefilters and tagged VM against the backtracker and
+    //   the plain VM (`--slots out.tsv files...`: all slots, two passes vs
+    //   one);
+    // - t1diff: what the dispatcher routes from T1 to the VM, against the
+    //   backtracker (UTF-16 discrepancies to stdout, for V8 arbitration);
+    // - lldiff: LookLinear on vs off on the backtracker.
+    const safe_zregex = addModules(b, target, .ReleaseSafe, false).get("zregex");
+    for ([_][]const u8{ "pfdiff", "t1diff", "lldiff" }) |name| {
+        const m = b.createModule(.{ .root_source_file = b.path(b.fmt("tools/{s}.zig", .{name})), .target = target, .optimize = .ReleaseSafe });
+        m.addImport("zregex", safe_zregex);
+        const run = b.addRunArtifact(b.addExecutable(.{ .name = name, .root_module = m }));
+        run.setCwd(b.path("."));
+        run.has_side_effects = true;
+        if (b.args) |a| run.addArgs(a);
+        b.step(name, b.fmt("Internal differential {s} (scripts/gate.sh; files after --)", .{name})).dependOn(&run.step);
+    }
+
+    // `v` with `i` differential against V8 (F7c-0), checked against its
+    // reference run: fails on any changed outcome or any compiled pattern
+    // that differs from V8.
+    const run_ivdiff = b.addSystemCommand(&.{ "node", "scripts/test262/ivdiff.mjs", "--check", "tests/differential/reference/ivdiff-f7c0.json", "--lib" });
+    run_ivdiff.addArtifactArg(test262_lib);
+    run_ivdiff.has_side_effects = true;
+    b.step("ivdiff", "Compare zregex with V8 on every i+v pattern of the corpora against its reference (needs Node + koffi)").dependOn(&run_ivdiff.step);
+
+    // Callgrind probe (E1 P3): fixed work per case on the forward path,
+    // `cgprobe N`. Not in the gate. Under valgrind, build with a baseline CPU:
+    // `zig build cgprobe -Dcpu=x86_64_v3 --prefix DIR`.
+    const cg_module = b.createModule(.{ .root_source_file = b.path("tools/cgprobe.zig"), .target = target, .optimize = .ReleaseFast });
+    cg_module.addImport("zregex", addModules(b, target, .ReleaseFast, false).get("zregex"));
+    b.step("cgprobe", "Build the callgrind probe (tools/cgprobe.zig)").dependOn(&b.addInstallArtifact(b.addExecutable(.{ .name = "cgprobe", .root_module = cg_module }), .{}).step);
 
     // Performance baseline (bench/bench.zig, docs/REGEX_TIERS_PLAN.md F0d).
     // Always ReleaseFast, whatever -Doptimize says, so numbers are comparable.

@@ -33,9 +33,9 @@ pub const Opcode = enum(u8) {
     /// Format: [CHAR32 c:u32]
     CHAR32 = 0x01,
 
-    /// Match one of two characters (optimization)
-    /// Format: [CHAR2 c1:u32 c2:u32]
-    CHAR2 = 0x02,
+    /// Reserved, never emitted (was CHAR2, "one of two characters"; removed
+    /// in F7c-2). Kept so that 0x02 is never reused.
+    RESERVED_02 = 0x02,
 
     /// Match character in range [min, max]
     /// Format: [CHAR_RANGE min:u32 max:u32]
@@ -152,9 +152,9 @@ pub const Opcode = enum(u8) {
     /// Format: [SPLIT_POSSESSIVE offset1:i32 offset2:i32]
     SPLIT_POSSESSIVE = 0x15,
 
-    /// Loop check (for quantifiers)
-    /// Format: [LOOP counter_index:u8 max:u32 offset:i32]
-    LOOP = 0x16,
+    /// Reserved, never emitted (was LOOP, a counted loop that was never
+    /// implemented; removed in F7c-2). Kept so that 0x16 is never reused.
+    RESERVED_16 = 0x16,
 
     // =========================================================================
     // Capture Groups (0x20-0x2F)
@@ -334,14 +334,14 @@ pub const Opcode = enum(u8) {
     /// Get the category of this opcode
     pub fn category(self: Opcode) OpcodeCategory {
         return switch (self) {
-            .CHAR, .CHAR32, .BYTE, .CHAR2, .CHAR_RANGE, .CHAR_RANGE_INV, .CHAR_CLASS, .CHAR_CLASS_INV, .CHAR_ANY, .CHAR_SET, .CHAR_SET_INV, .UNICODE_PROPERTY, .UNICODE_PROPERTY_INV, .UNICODE_SCRIPT, .UNICODE_SCRIPT_INV, .UNICODE_SCRIPT_EXTENSIONS, .UNICODE_SCRIPT_EXTENSIONS_INV, .CHAR_B, .CHAR32_B, .BYTE_B, .CHAR_RANGE_B, .CHAR_RANGE_INV_B, .CHAR_CLASS_B, .CHAR_CLASS_INV_B, .CHAR_ANY_B, .CHAR_SET_B, .CHAR_SET_INV_B, .UNICODE_PROPERTY_B, .UNICODE_PROPERTY_INV_B, .UNICODE_SCRIPT_B, .UNICODE_SCRIPT_INV_B, .UNICODE_SCRIPT_EXTENSIONS_B, .UNICODE_SCRIPT_EXTENSIONS_INV_B => .character_match,
-            .MATCH, .GOTO, .SPLIT, .SPLIT_GREEDY, .SPLIT_LAZY, .SPLIT_POSSESSIVE, .LOOP => .control_flow,
+            .CHAR, .CHAR32, .BYTE, .CHAR_RANGE, .CHAR_RANGE_INV, .CHAR_CLASS, .CHAR_CLASS_INV, .CHAR_ANY, .CHAR_SET, .CHAR_SET_INV, .UNICODE_PROPERTY, .UNICODE_PROPERTY_INV, .UNICODE_SCRIPT, .UNICODE_SCRIPT_INV, .UNICODE_SCRIPT_EXTENSIONS, .UNICODE_SCRIPT_EXTENSIONS_INV, .CHAR_B, .CHAR32_B, .BYTE_B, .CHAR_RANGE_B, .CHAR_RANGE_INV_B, .CHAR_CLASS_B, .CHAR_CLASS_INV_B, .CHAR_ANY_B, .CHAR_SET_B, .CHAR_SET_INV_B, .UNICODE_PROPERTY_B, .UNICODE_PROPERTY_INV_B, .UNICODE_SCRIPT_B, .UNICODE_SCRIPT_INV_B, .UNICODE_SCRIPT_EXTENSIONS_B, .UNICODE_SCRIPT_EXTENSIONS_INV_B => .character_match,
+            .MATCH, .GOTO, .SPLIT, .SPLIT_GREEDY, .SPLIT_LAZY, .SPLIT_POSSESSIVE => .control_flow,
             .SAVE_START, .SAVE_END, .SAVE_START_NAMED, .SAVE_END_NAMED, .CLEAR_CAPTURE, .REPEAT_MARK, .REPEAT_CHECK => .capture,
             .BACK_REF, .BACK_REF_I, .BACK_REF_B, .BACK_REF_I_B => .backreference,
             .LINE_START, .LINE_END, .WORD_BOUNDARY, .NOT_WORD_BOUNDARY, .STRING_START, .STRING_END => .assertion,
             .LOOKAHEAD, .NEGATIVE_LOOKAHEAD, .LOOKBEHIND_FIXED, .NEGATIVE_LOOKBEHIND_FIXED, .LOOKBEHIND, .NEGATIVE_LOOKBEHIND, .LOOKAHEAD_END, .LOOKBEHIND_END => .lookaround,
             .PUSH_POS, .CHECK_POS => .special,
-            _ => .unknown,
+            .RESERVED_02, .RESERVED_16, _ => .unknown,
         };
     }
 
@@ -367,10 +367,9 @@ pub const Opcode = enum(u8) {
             .GOTO => 5,
 
             // 9 bytes (opcode + 2 * u32)
-            .CHAR2, .CHAR_RANGE, .CHAR_RANGE_INV, .CHAR_RANGE_B, .CHAR_RANGE_INV_B => 9,
+            .CHAR_RANGE, .CHAR_RANGE_INV, .CHAR_RANGE_B, .CHAR_RANGE_INV_B => 9,
 
             // 10 bytes (opcode + u8 + u32 + i32)
-            .LOOP => 10,
 
             // 9 bytes (opcode + 2 * i32 for offsets)
             .SPLIT, .SPLIT_GREEDY, .SPLIT_LAZY, .SPLIT_POSSESSIVE => 9,
@@ -378,7 +377,7 @@ pub const Opcode = enum(u8) {
             // 33 bytes (opcode + 32 bytes bit table)
             .CHAR_CLASS, .CHAR_CLASS_INV, .CHAR_CLASS_B, .CHAR_CLASS_INV_B => 33,
 
-            _ => 1, // Unknown opcodes default to 1 byte
+            .RESERVED_02, .RESERVED_16, _ => 1, // Unknown opcodes default to 1 byte
         };
     }
 
@@ -395,7 +394,7 @@ pub const Opcode = enum(u8) {
     /// Check if this opcode can cause backtracking
     pub fn canBacktrack(self: Opcode) bool {
         return switch (self) {
-            .SPLIT, .SPLIT_GREEDY, .SPLIT_LAZY, .LOOP => true,
+            .SPLIT, .SPLIT_GREEDY, .SPLIT_LAZY => true,
             else => false,
         };
     }
@@ -540,7 +539,6 @@ test "Opcode: control flow check" {
 
 test "Opcode: backtracking check" {
     try std.testing.expect(Opcode.SPLIT.canBacktrack());
-    try std.testing.expect(Opcode.LOOP.canBacktrack());
     try std.testing.expect(!Opcode.MATCH.canBacktrack());
     try std.testing.expect(!Opcode.CHAR.canBacktrack());
 }

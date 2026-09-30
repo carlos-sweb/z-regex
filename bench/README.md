@@ -32,12 +32,14 @@ name contains it (`bench out.json '<'`).
 
 ## Comparing two versions
 
-One run moves by ±15 % on this machine, so a comparison is:
+A case moves by ±20% from one process to the next on this machine, so a comparison is:
 
 - **10 runs of each version, interleaved** (A, B, A, B, ...), so drift in the machine
   hits both alike. The base goes in a separate directory (`git archive <commit>`).
-- **The median of the 10 per case.** The measured resolution is about 5 %; below that a
-  difference is noise.
+- **The best run per case** (the minimum time, the maximum MB/s), not the median: since F7-0
+  two series of 10 differ by ~4% (p90) on the best run and by ~20% on the median
+  (docs/BENCHMARKS.md, "Precision"). A flag still needs callgrind or a probe to confirm it
+  (F7b's criterion).
 - **Nothing else runs meanwhile.** Don't compile or run tests while a bench runs: the
   build competes for the CPU and skews the numbers (it happened in F3c, and that run was
   thrown away).
@@ -57,55 +59,52 @@ One run moves by ±15 % on this machine, so a comparison is:
 raw aggregated numbers in `bench/results.json`). The full tables, the method, the machine and
 the analysis are in **[docs/BENCHMARKS.md](../docs/BENCHMARKS.md)**.
 
-Summary: `execAt` MB/s, median of 10 interleaved rounds (min–max bands and the
-other metrics — findAll, V8 cold, ns per short exec, compile, bytes — in docs/BENCHMARKS.md).
-zig-regex has no execAt API and a quadratic findAll: it isn't in these tables.
-`zregex_xbench` also reports `iter_mbps` (`Regex.iterator`: every match, warm `Scratch`, no
-allocation); analyze.mjs prints it as z-regex-only tables. It runs at the execAt loop's speed;
-findAll against it: docs/BENCHMARKS.md, "findAll against the iterator".
+A second z-regex (another build of `zregex_xbench`, e.g. the last published version) runs in
+the same rounds as engine `zregex_base` when `zig-out/xbench/bin/zregex_base_xbench` exists;
+`analyze.mjs` then adds a table of the two.
+
+Summary: `execAt` MB/s, the best of 10 interleaved rounds, z-regex at the end of F7c (0.7.0)
+built with `-Dcpu=x86_64_v3` (bands and the other metrics — findAll, V8 cold, iterator, ns per
+short exec, compile, bytes, adversarial — in docs/BENCHMARKS.md). zig-regex has no execAt API
+and a quadratic findAll: it isn't in these tables.
 
 | T0 case | z-regex | V8 (warm) | Rust regex |
 |---|---|---|---|
-| `literal hello` | 16925.1 † | 1791.8 | 20999.1 |
-| `[a-z]+` | 214.8 | 116.7 | 75.0 |
-| `\d{3}-\d{4} (sparse)` | 644.7 | 1342.9 | 2319.2 |
-| `\d{3}-\d{4} (dense)` | 42.5 | 222.8 | 85.0 |
-| `email` | 45.5 | 87.8 | 778.0 |
-| `(\d{3})-(\d{4}) (sparse)` | 358.9 | 1629.6 | 1493.7 |
-| `(\d{3})-(\d{4}) (dense)` | 33.6 | 198.5 | 76.5 |
-| `(?:(a)\|b)*c` | 15.5 | 37.2 | 58.4 |
-| `book: Darcy` | 15925.0 † | 15514.4 | 19231.8 |
-| `book: [A-Z][a-z]+` | 400.7 | 622.9 | 290.1 |
-| `book: (Mr\|Mrs\|Miss)\.? ([A-Z][a-z]+)` | 681.5 | 532.0 | 2662.5 |
+| `literal hello` | 13668.9 | 1809.3 | 19916.7 |
+| `[a-z]+` | 195.3 | 77.9 | 59.0 |
+| `\d{3}-\d{4} (sparse)` | 473.4 | 909.5 | 1819.2 |
+| `\d{3}-\d{4} (dense)` | 34.0 | 172.8 | 84.3 |
+| `email` | 36.2 | 79.4 | 705.0 |
+| `(\d{3})-(\d{4}) (sparse)` | 244.3 | 1002.5 | 1155.5 |
+| `(\d{3})-(\d{4}) (dense)` | 24.8 | 143.7 | 71.5 |
+| `(?:(a)\|b)*c` | 13.6 | 29.5 | 51.3 |
+| `book: Darcy` | 13284.0 | 8759.7 | 19276.8 |
+| `book: [A-Z][a-z]+` | 322.4 | 506.5 | 301.0 |
+| `book: (Mr\|Mrs\|Miss)\.? ([A-Z][a-z]+)` | 527.7 | 460.8 | 2116.5 |
 
 | T1 case | z-regex | V8 (warm) | Rust regex |
 |---|---|---|---|
-| `\p{L}+ /u` | 30.1 | 48.8 | 85.1 |
-| `\p{Script=Greek}+ /u` | 32.2 | 100.7 | 252.6 |
-| `\p{General_Category=Lu} /u` | 26.5 | 61.8 | 204.1 |
-| `[\p{L}--[a-z]] /v` | 25.6 | 36.6 | n/a |
-| `book: \p{L}+ /u` | 24.7 | 34.2 | 67.7 |
+| `\p{L}+ /u` | 40.3 | 38.0 | 67.6 |
+| `\p{Script=Greek}+ /u` | 55.6 | 94.2 | 228.9 |
+| `\p{General_Category=Lu} /u` | 47.7 | 53.2 | 186.8 |
+| `[\p{L}--[a-z]] /v` | 20.1 | 27.1 | n/a |
+| `book: \p{L}+ /u` | 38.8 | 26.2 | 53.1 |
 
 | T2 case | z-regex | V8 (warm) | PCRE2 (JIT) | PCRE2 (interp.) |
 |---|---|---|---|---|
-| `<(\w+)>.*?<\/\1>` | 33.8 | 262.1 | 276.3 | 69.6 |
-| `(?=.*[a-z])(?=.*[A-Z]).{8,}` | 3.8 | 54.8 | 70.3 | 10.9 |
-| `(?<=\$)\d+` | 0.8 | 233.2 | 1073.6 | 529.1 |
-| `book: \b(\w+) \1\b` | 11.4 | 134.1 | 112.3 | 31.9 |
-
-† Re-measured after the SIMD literal search (z-regex alone, 10 interleaved rounds against
-the previous code: 926.3 and 886.5 before); see docs/BENCHMARKS.md. Measured on Xeon with
-SSE2 + AVX2 + AVX-512BW; other CPUs will see less.
+| `<(\w+)>.*?<\/\1>` | 28.5 | 176.6 | 207.9 | 65.4 |
+| `(?=.*[a-z])(?=.*[A-Z]).{8,}` | 7.5 | 42.0 | 57.6 | 9.1 |
+| `(?<=\$)\d+` | 15.1 | 200.5 | 872.8 | 440.3 |
+| `book: \b(\w+) \1\b` | 8.9 | 123.6 | 88.7 | 21.6 |
 
 Notes:
 
 - V8 has a JIT; z-regex doesn't. Both are real.
 - Rust regex doesn't support backreferences; the T2 cases are not compared against it.
-- Absolute numbers vary with LLVM's code layout between builds. Median of 10 runs.
-- 735 of the corpus's 10,386 T0-routed patterns are pure literals (~7%), but literals are
-  the most common case in real use.
-- z-regex T0 has 0 divergences from V8 in test262 and in the differential. The 477
-  divergences are T2/T1.
+- Against z-regex 0.3.2 in the same rounds: the `u` cases of T1 1.4–2.2× faster (on T0's VM since F5a), the
+  lookbehind case ~24× (F6b), the double lookahead 2.4× (LookLinear); everything else within
+  ±10% but one z-regex-only cell (docs/BENCHMARKS.md, "Against 0.3.2").
+- Measured on one shared container; compare engines within a table, not across machines.
 
 ## Binary size
 
@@ -113,4 +112,4 @@ Notes:
 (F7b): the `.so` built for x86_64-linux with a fixed CPU model (`-Dcpu=x86_64_v3`),
 stripped, in ReleaseFast and ReleaseSmall, with its main sections and its `zregex_*`
 symbol count. A `native` build follows the host's CPU features, so figures measured that
-way differ between hosts (~26 KB on this container: `docs/KNOWN_LIMITATIONS.md`).
+way differ between hosts (~26 KB on this container: `docs/HISTORY.md`, "Binary size").

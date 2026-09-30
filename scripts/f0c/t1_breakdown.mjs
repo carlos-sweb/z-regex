@@ -1,5 +1,5 @@
 // F0c follow-up: which sub-features put the T1 regexes of the corpus in T1
-// (docs/F0C_T1_BREAKDOWN.md). Input: the per-regex dump of `analyze()` over an
+// (docs/archive/F0C_T1_BREAKDOWN.md). Input: the per-regex dump of `analyze()` over an
 // extract.mjs corpus (flags, pattern hex, occurrences, packages, min_tier,
 // comma-separated features). `analyze()` doesn't tell a General_Category
 // property from a Script one, nor `\q{}`, nor counts over 100, so each T1

@@ -1,0 +1,1929 @@
+# History - zregex
+
+The record of how zregex got where it is: what each phase (F1 to F7c) changed, measured
+and fixed, and the bugs found on the way, up to 0.7.0. It is the body of
+`KNOWN_LIMITATIONS.md` up to F7c-4b, kept as it was written; the later phases of 0.7.0
+(F7c-5 to F7c-8, documentation and benchmarks) are in `docs/plans/F7c.md` and
+`docs/RELEASE_NOTES_v0.7.0.md`.
+
+**What applies today is in [LIMITATIONS.md](LIMITATIONS.md)**, and the API contract in
+[API.md](API.md). Here, a paragraph describes the engine of its own phase: file paths,
+opcodes and limits it names may have changed or gone since (for example
+`src/executor/recursive_matcher.zig`, retired in B′, or the bytecode `Optimizer`, removed
+in F7c-2). A "see ... below" may point to a section now in `LIMITATIONS.md`. Documents of
+closed phases cited here are in `docs/archive/`.
+
+## Contents
+
+- Versions up to 0.6.0
+- What works, as recorded up to 0.6.0
+- test262 conformance sample (the 168-case sample of Phase 6)
+- Phases: F1, F2b-F2e, F3b-F3d, F4a, F4b, F5a, F6a, F7-0, F5b, the test262 baseline of
+  F0b, the behavior changes of F1
+- Fixed in E0, E0's measurements
+- Fixed in F7a, F7b, F7c-2's reserved opcodes, the binary procedure, F6b step 1 (B′)
+- F6b (0.6.0): measurements
+- `v` with `i` (F7c-0): measurements
+- Fixed in F2b
+- The `u` and `v` flags as they were built (Phases 4-5)
+
+## Versions up to 0.6.0
+
+Version 0.6.0 (E1, F6b: lookbehind matched backward outside `u`/`v`, with variable length, captures and backreferences inside, architecture B; a lookaround inside a backward body and any backward body under `u`/`v` are `UnsupportedFeature`; test262 2994/3017, `lookBehind/` 32/34; see "F6b (0.6.0)" below; release notes: `docs/RELEASE_NOTES_v0.6.0.md`). 0.5.1 was E0 (valid syntax that isn't implemented is `error.UnsupportedFeature`, never a wrong result, and `v` applies `u`'s early errors; see "E0: honest errors" below). 0.5.0 was F7a: bugs D and E, RepeatMatcher steps 4 and 2.b on the backtracker; F7b: compile cost, loop guard, LookLinear under `iu`, C API `max_steps`; F6b step 1 (B′): fixed-length lookbehind on the explicit-stack backtracker, the recursive matcher retired, any other lookbehind is `UnsupportedFeature`; every C API function records the error name; test262 2968/3017; see "Fixed in F7a", "F7b closed" and "F6b step 1 (B′)" below; release notes: `docs/RELEASE_NOTES_v0.5.0.md`). 0.4.0 was F5a: `u` and `\p{...}` on T0's VM; F6a: explicit-stack backtracker, capture trail, LookLinear; F5b: full case folding under `i`; test262 2978/3017; see "F5a", "F6a" and "F5b" below). 0.3.2 was 0.3.0 plus the SIMD pairwise literal search in the literal fast path (0.3.1) and `Regex.iterator` (0.3.2). 0.3.0 closed T0: F4a and F4b, test262 2856/3017; see "F4a" and "F4b" below. v0.2.0 was F1 (test262 2846/3017, see "F1 closed" below). The rest of this
+header describes the earlier state: 402/402 unit/integration tests passing, 168/168 (100%) on a test262-derived
+conformance sample (Phases 0, 1, 2 (now including duplicate named groups across
+mutually exclusive alternation branches, e.g. `(?<x>a)|(?<x>b)`, matching JS exactly),
+3 (including `\p{...}` General_Category support, 50 binary properties incl.
+Emoji/Bidi_Mirrored/Assigned, all 174 Unicode scripts via `\p{Script=...}`, their short
+aliases via `\p{Script=Grek}`, Script_Extensions via
+`\p{Script_Extensions=...}`/`\p{scx=...}`, and `\p{...}`/`\P{...}` as a character-class
+member, e.g. `[\p{L}\d]`), 4 (case_insensitive folding of a literal non-ASCII
+character's simple case pair, standalone or as a single class member — non-ASCII
+*ranges* and `\p{...}`-in-a-class members still don't fold), 5a, 5b (`CompileOptions.unicode`
+now rejects an unrecognized escape as `error.InvalidEscape`; malformed `\x`/`\u`/`\c`/
+`\k`/`\p` and bad backrefs still lenient), 5c (`CompileOptions.v` now supports one
+character-class set operation per class, `[A--B]`/`[A&&B]`; no chaining/deep nesting,
+`\q{...}`, or full `u` strictness yet), the Phase 6 character-class gaps and
+backtracking-correctness fixes, and Phase 7's `replace()`/`replaceAll()`, including
+`$1`/`$&` substitution, complete — see
+[ECMASCRIPT_COMPATIBILITY_PLAN.md](ECMASCRIPT_COMPATIBILITY_PLAN.md)). **100% on this
+168-case sample is not 100% JS RegExp compatibility** — see "test262 conformance sample"
+below for exactly what this measures and its known biases.
+
+---
+
+## What works, as recorded up to 0.6.0
+
+The following are confirmed working correctly by direct testing, including cases that
+older internal notes had previously (incorrectly) listed as broken:
+
+- **Backreferences** `\1`-`\9` — e.g. `(\w+) \1` correctly matches `"hello hello"` and
+  rejects `"hello world"`.
+- **Alternation** `a|b` — no infinite loop; correctly matches either branch.
+- **Lookahead** `(?=...)`, `(?!...)` and **lookbehind** `(?<=...)`, `(?<!...)` — all four
+  forms are zero-width and behave correctly (verified with `find`, not `test_`, since
+  these assertions don't consume input — see the `test_` vs `find` note below). Since
+  0.6.0 (F6b) a lookbehind runs if it is of fixed length without captures, or, outside
+  `u`/`v`, has no lookaround inside a body matched backward; any other is
+  `error.UnsupportedFeature` (see "F6b (0.6.0)").
+- **`\W`, `\S` negation** — correctly inverted (an older internal note claimed these were
+  "parsed but not correctly inverted"; that is no longer true).
+- **Counted quantifiers** `{n}`, `{n,}`, `{n,m}` and their lazy forms `{n,m}?`.
+- **Possessive quantifiers** `*+`, `++`, `?+` — an opt-in extension since F1b
+  (`CompileOptions.possessive = true`; by default `a*+` is a SyntaxError, as in JS). With the
+  opt-in, verified non-backtracking (`a++a` correctly
+  fails to match `"aaaa"` because the possessive `a++` consumes all four `a`s and refuses
+  to give any back).
+- **Character classes** `\d \D \w \W \s \S`, `[abc]`, `[^abc]`, `[a-z]`.
+- **`\s`/`\S` include `\f` (form feed) and `\v` (vertical tab)** *(bug found and fixed in
+  Phase 6)* — the standalone-atom code path's comment already said `\s is [ \t\n\r\f\v]`
+  but the implementation only ever included space/`\t`/`\n`/`\r`, silently dropping the
+  other two. Fixed by introducing shared `DIGIT_RANGES`/`WORD_RANGES`/`WHITESPACE_RANGES`
+  byte-range tables in `src/parser/parser.zig`, used by both the standalone shorthand atoms
+  and the new shorthand-as-class-member handling below, so both stay in sync.
+- **Anchors** `^`, `$`, `\b`, `\B` (string-level; see the multiline caveat below).
+- **`case_insensitive` option** — works correctly for ASCII letters.
+- **`findAll`** — returns all non-overlapping matches correctly.
+- **ReDoS protection** — verified with the classic catastrophic pattern `(a+)+b` against
+  40 `a`s followed by a non-matching character: the engine returns
+  `error.StepLimitExceeded` in under 0.2s instead of hanging. The step limit and
+  recursion-depth limit (`max_steps`, `max_recursion_depth` in `CompileOptions`) are real
+  and enforced in `src/executor/recursive_matcher.zig`.
+- **`multiline` option** *(fixed in Phase 0)* — `^`/`$` now anchor at line boundaries
+  (after/before `\n`) when set, via a new `LINE_START`/`LINE_END` vs. `STRING_START`/
+  `STRING_END` opcode split (`codegen/generator.zig`, `executor/recursive_matcher.zig`).
+- **`dot_all` option and default dot-vs-newline** *(fixed in Phase 0)* — `.` now excludes
+  `\n` by default (matching JS) and only matches it when `dot_all = true`.
+- **Escapes `\xHH`, `\uHHHH`, `\u{H+}`, `\0`, `\cX`** *(fixed in Phase 0)* — all decode to
+  the correct byte/code point instead of being read as literal characters. `\u{H+}` code
+  points above `0x7F` are UTF-8-encoded and expanded into an atomic multi-byte sequence, so
+  `\u{1F600}+` correctly repeats the whole 4-byte emoji, not just its last byte.
+- **Invalid quantifier ranges** *(fixed in Phase 0)* — `{n,m}` with `n > m` (e.g. `a{2,1}`)
+  is now a compile-time `error.InvalidQuantifier`, matching JS's `SyntaxError`.
+- **`.` consumes one Unicode scalar value, not one byte** *(fixed in Phase 1)* — `^.$`
+  now matches a single 2-byte character like `é` or a 4-byte emoji like 😀 in one step
+  (`^..$` correctly does *not* match a single `é`). Implemented via a new `CHAR_ANY`
+  opcode (dot with `dot_all`) and by making the existing `CHAR` opcode (dot without
+  `dot_all`) decode a full UTF-8 sequence at match time instead of one byte
+  (`src/executor/recursive_matcher.zig`). Falls back to matching exactly 1 byte if the
+  input isn't valid UTF-8 at that position, so non-UTF-8/binary input doesn't error.
+- **Negated character classes consume one Unicode scalar value** *(fixed in Phase 1)* —
+  `\W`, `\S`, and `[^...]` now correctly match (and fully consume) a whole non-ASCII
+  character as a single unit, the same fix applied to `CHAR_RANGE_INV`/`CHAR_CLASS_INV`.
+- **Literal multi-byte characters in a pattern quantify as one atomic unit** *(fixed in
+  Phase 1)* — a literal `é` (2 UTF-8 bytes) directly in a pattern now tokenizes as one
+  unit, so `é+` correctly repeats the whole character (previously `+` only applied to
+  the second byte, and could even match stray continuation bytes as if they were more
+  `é`s). Implemented in the lexer (`src/parser/lexer.zig`), reusing the same
+  "decode to a `sequence` of byte nodes" mechanism built in Phase 0 for `\u{H+}` escapes.
+- **Named capture groups `(?<name>...)` and `\k<name>` backreferences** *(added in
+  Phase 2)* — `(?<year>\d+)` compiles, and `MatchResult.getNamedCapture("year", input)`
+  retrieves it; named groups are still numbered like ordinary groups (`getCapture(1, ...)`
+  works too). Duplicate names are rejected (`error.DuplicateGroupName`) *unless* every
+  occurrence is in a mutually exclusive alternation branch, matching JS exactly — see
+  the dedicated bullet below for how that's determined. An unresolvable `\k<name>` is
+  `error.UnknownGroupName`; a bare `\k` not followed by a valid `<name>` falls back to a
+  literal `k` (Annex-B-style leniency, like `\x`/`\u`/`\c` when malformed).
+- **Literal `-` outside a character class** *(bug found and fixed while verifying Phase
+  2)* — `555-1234` previously failed to compile at all (`error.UnexpectedToken`): the
+  lexer always tokenizes `-` as `.hyphen` (used for character-class ranges) with no notion
+  of "inside a class," and the parser only ever handled `.hyphen` inside
+  `parseCharClass`, never as a plain atom. Fixed by treating `.hyphen` as a literal `-`
+  character in `parseAtom`.
+- **Character classes can contain multi-byte members and ranges** *(added in Phase 3)* —
+  `[é]`, `[a-\u{2FF}]`, `[\u{1F600}-\u{1F64F}]` (and negated forms, `[^...]`) now work
+  correctly, including with quantifiers (`[é]+`). Classes with only byte-range
+  (≤ U+007F) members use the original 256-bit bitmap opcodes. Any other class is,
+  **since F2b**, a CharSet materialized at compile time and matched by `CHAR_SET`/
+  `CHAR_SET_INV idx:u32` against `CompileResult.charsets`, with no cap on its size
+  other than `MAX_PROGRAM_BYTES` (see "F2b: dynamic CharSet" below). Before F2b the
+  `CHAR_CLASS_RANGES(_INV)` opcodes held a fixed table of 30 ranges (8 before F1a) and
+  a larger class was `error.TooManyRanges`. This closes out the character-class work
+  Phase 1 deliberately deferred (see Phase 1's notes in the compatibility plan).
+- **`sticky` option (JS `y` flag)** *(added in Phase 5a)* — `CompileOptions{ .sticky =
+  true }` makes `find` only match starting exactly at position 0 (no scanning ahead), and
+  makes `findAll` stop at the first non-matching position instead of skipping past it.
+  New `Regex.findAt(input, pos)` / `Matcher.findAt` primitive underlies this and is also
+  public on its own, for manually resuming iteration from a caller-tracked position (the
+  Zig equivalent of tracking `lastIndex` in JS).
+- **Capture indices (JS `d`/`hasIndices` flag equivalent)** *(added in Phase 5a)* —
+  `MatchResult.getCaptureIndices(index)` / `getNamedCaptureIndices(name)` return the
+  `{start, end}` byte offsets of a capture. There's no `has_indices` `CompileOptions`
+  field: captures already track their positions internally regardless, so gating this
+  behind a flag (the way JS does, since JS's flag is a real memory/perf trade-off in a
+  JIT-compiled engine) would only add API surface without saving anything here.
+- **Quantified backreference to an empty capture no longer crashes** *(fixed in Phase 6)*
+  — `/(a*)b\1+/.exec("baaac")` (a real test262 case, `S15.10.2.9_A1_T5.js`) used to
+  **segfault the process** with the default `ExecOptions` (`max_recursion_depth = 1000`),
+  not return a graceful error. Root cause: `isStarConsumePath` (the heuristic that
+  recognizes a `SPLIT` as a bounded quantifier loop so it can be handled by the iterative,
+  zero-width-progress-guarded `matchStarGreedy`) didn't recognize `BACK_REF`/`BACK_REF_I`
+  as a quantifiable atom, *and* only recognized the `X*`-shaped bytecode
+  (`SPLIT; X; GOTO back`), not the `X+`-shaped bytecode (`X; SPLIT_GREEDY back`) that
+  `generatePlus` actually emits. Both gaps sent `\1+` down the generic "regular
+  alternation" recursion path, which has no protection against an atom that matches zero
+  width — recursing 1000 times (the default limit) through that specific call chain
+  overflows the native stack before the counter ever returns
+  `error.RecursionLimitExceeded`. Fixed in `src/executor/recursive_matcher.zig`
+  (`isQuantifiableAtomOpcode`, `isStarConsumePath`, `checkBackRef`). This was found by
+  the test262 conformance sample below — the second real crash bug found in this project
+  by systematic testing this way (the first was the `SPLIT` alternation infinite loop
+  documented in project history, already fixed before this document existed).
+- **test262-derived conformance sample** *(added in Phase 6)* — `zig build
+  test-conformance` runs 168 cases heuristically extracted from real test262 RegExp test
+  files (not hand-written by this project) and reports a pass rate: **168/168 (100%)** as
+  of this writing (started at 141/168, 83.9%, with 13 compile errors; see the fixes below
+  and "What we'd do differently" for how it got there). See "test262 conformance sample"
+  below for what this number does and doesn't mean — it is not "100% JS compatible."
+- **Case-insensitive character classes and ranges** *(fixed via test262)* — `/[a-z]+/i`
+  now matches uppercase letters too, and `/[^o]/i` now excludes both `o` and `O`.
+  `generateCharRange`/`generateCharClass` in `src/codegen/generator.zig` previously only
+  applied `case_insensitive` to single-character literals (`generateChar`'s
+  lowercase/uppercase `SPLIT` alternation trick); ranges and classes silently ignored the
+  option. Fixed by having both paths add each ASCII letter's opposite-case bit to the
+  underlying `BitTable` when `case_insensitive` is set.
+- **A quantified/repeated capturing group's last successful iteration wasn't retained**
+  *(fixed via test262)* — `/(123){1,}/.exec("123123")` matched the right *length* but
+  captured `""` instead of `"123"`. Root cause: `SAVE_START`/`SAVE_END` mutate the shared
+  `self.captures` array directly with no rollback, so when a quantifier's loop tries one
+  more (ultimately failing) repetition before settling on the last successful count, that
+  failed attempt's `SAVE_START` write (setting the capture's `start` to the failed
+  attempt's position) was never undone — leaving a corrupted, zero-length capture behind.
+  Fixed by having `SAVE_START`/`SAVE_END` snapshot the previous capture value and restore
+  it if their own immediate continuation fails (`src/executor/recursive_matcher.zig`).
+- **`*` and `?` on a capturing group (or any atom too complex for the internal
+  fast-path heuristic) were not actually greedy** *(fixed via test262)* — `/(a)*/.exec("aa")`
+  matched an empty string instead of `"aa"`, and `/(a)?a/.exec("aa")` matched `"a"` instead
+  of `"aa"`. Root cause: `generateStar` literally had a `// Non-greedy for now` TODO left
+  in since early development, emitting a `SPLIT` that tried "zero reps" *before* "loop
+  body"; `generateQuestion` had the same problem (tried "skip" before "consume"). This was
+  invisible for plain single-character atoms (`a*`, `a?`) because a separate optimization
+  (`isStarQuantifier`/`matchStarGreedy` in `recursive_matcher.zig`) detects that specific
+  bytecode shape and overrides it with correct, explicitly-greedy iteration — but that
+  detection only recognizes a short list of single-instruction opcodes, so it silently
+  never applied to a capturing group (which starts with a multi-instruction `SAVE_START`).
+  Fixed by making `generateStar`/`generateQuestion` emit genuinely greedy-first bytecode
+  (`SPLIT_GREEDY` with loop/consume tried first) so the plain backtracking fallback is
+  correct on its own regardless of atom complexity; the old `?`-specific "try both branches
+  and compare lengths" workaround in the matcher was removed as unnecessary (and was
+  itself buggy: it always evaluated *both* branches against the same shared `self.captures`
+  array before picking one, so the discarded branch's capture mutations could leak into
+  the chosen result).
+- **Lazy `.*?` (and any lazy quantifier) could never expand more than one iteration**
+  *(fixed via test262)* — `/^.*?$/.exec("Hello World")` (or any input longer than 1
+  character) returned no match at all. Root cause: `matchStarLazy`'s zero-width-progress
+  guard compared `matched.end_pos` against `current_pos` *after* `current_pos` had already
+  been overwritten with `matched.end_pos` on the line above — a copy-paste ordering bug
+  that made the comparison trivially always-true, capping the loop at exactly one
+  character regardless of input length. Fixed by moving the check before the update.
+- **A capturing group nested inside a repeated group could leak a stale value across
+  iterations** *(fixed via test262)* — in `/(z)((a+)?(b+)?(c))*/.exec("zaacbbbcac")`, the
+  3rd outer iteration correctly declines to match `(b+)?` (no `b`s left), but its capture
+  still read back `"bbb"` from the *previous* iteration instead of the spec-correct
+  `undefined`, because skipping an optional atom never touches its capture slot at all —
+  there's nothing to roll back. Fixed with a new `CLEAR_CAPTURE` opcode
+  (`src/bytecode/opcodes.zig`) that `generateQuestion`/`generateLazyQuestion` emit for
+  every capture group nested inside an atom, on the atom's "skip" path only (a `GOTO` past
+  a small clear-block keeps the "consume" path from also hitting it).
+- **A backreference to a group that never participated in the match failed outright
+  instead of matching empty** *(fixed via test262)* — `/(a)?\1b/.exec("b")` should match
+  (`\1` referencing the never-taken `(a)?` branch matches the empty string, per spec), but
+  `checkBackRef` explicitly returned "no match" for any capture that wasn't `isValid()`.
+  This is a real, independent spec deviation, not the same bug as the earlier "quantified
+  backreference to an *empty-string* capture" crash fix (that capture *was* valid, just
+  zero-length; this one is a capture that never ran at all). Fixed in
+  `src/executor/recursive_matcher.zig::checkBackRef`.
+- **A negative lookahead's own captures could leak out even when the assertion behaved
+  correctly** *(fixed via test262)* — combined with the backreference fix above,
+  `/(.*?)a(?!(a+)b\2c)\2(.*)/.exec("baaabaac")` still failed: an *earlier, abandoned*
+  attempt at a different `(.*?)` length caused the lookahead's inner `(a+)b\2c` to
+  genuinely succeed as a raw sub-match (setting capture 2), which is exactly what makes a
+  *negative* lookahead's assertion fail — but per-instruction `SAVE_START`/`SAVE_END`
+  rollback only undoes a mutation when its *own* immediate continuation fails, not when a
+  sibling assertion later decides the whole sub-match should never have counted. Per the
+  ECMAScript spec, a lookahead's captures are only ever observable afterward in exactly
+  one case: a *positive* lookahead that *succeeds* (the well-known `/(?=(a))/.exec("a")`
+  capturing `"a"` behavior). Fixed by snapshotting the full `captures` array before
+  probing a lookahead's inner pattern and restoring it in every other outcome
+  (`matchLookahead` in `src/executor/recursive_matcher.zig`).
+- **Character classes treat regex metacharacters as literals** *(fixed in Phase 6)* —
+  `[*&$]`, `[.]`, `[^]{2,3}` etc. now compile and match the literal characters, matching
+  JS's "most metacharacters lose their special meaning inside `[...]`" rule. Fixed by
+  giving the lexer a parser-toggled `in_char_class` mode (`nextInClass`/`parseClassEscape`
+  in `src/parser/lexer.zig`): inside a class, only `]`, `-`, and `\` keep special meaning.
+  The tricky part is the transition at `[`/`[^`: the token right after `[` is fetched in
+  normal mode (so `^` is still recognized as the negation marker, which class-mode doesn't
+  special-case), and if it turns out not to be `^`, the lexer is rewound to that token's
+  start position and re-fetched in class mode (`parseCharClass` in `src/parser/parser.zig`).
+- **Character classes can contain shorthand classes as members** *(fixed in Phase 6)* —
+  `[a-c\d]`, `[\D]`, etc. now compile and match correctly. `parseCharClass` splices a
+  shorthand's byte ranges directly into the enclosing class's children; a negated
+  shorthand (`\D`/`\W`/`\S`) contributes its own complement ranges (via
+  `complementByteRanges`) rather than flipping the enclosing class's `inverted` flag —
+  this is what JS's own "union of ClassAtom sets, then apply outer negation" class
+  semantics require, and it composes correctly regardless of whether the enclosing class
+  itself is negated.
+- **`[^]` (negated empty class) recognized as "match anything"** *(fixed in Phase 6)* —
+  the JS idiom for "match any character including newline" now compiles and works. The
+  parser's `EmptyCharClass` check now only rejects the non-inverted empty case (`[]`,
+  still almost certainly a mistake); `src/codegen/generator.zig`'s `generateCharClass` was
+  updated the same way, so an inverted empty class flows through to an all-zero-bitmap
+  `CHAR_CLASS_INV` opcode ("not nothing" = everything).
+- **`replace()`/`replaceAll()` in the pure Zig API** *(added in Phase 7)* —
+  `Regex.replace(allocator, input, replacement)` replaces only the first match (JS
+  `String.prototype.replace` with a non-global regex), and `Regex.replaceAll` replaces
+  every match (JS `.replaceAll`, or `.replace` with `/g`). Both allocate and return a new
+  string (a plain copy of `input` if there's no match).
+- **`$1`-`$99`, `$&`, `` $` ``, `$'`, `$$`, `$<name>` replacement substitution** *(added
+  after Phase 7)* — `replace`/`replaceAll`'s `replacement` argument now supports JS's
+  full substitution syntax (`expandReplacement` in `src/regex.zig`), not just literal
+  text: numbered groups (two-digit tried first, per spec), the whole match, the
+  before/after portions, a literal `$`, and named groups. A group that exists in the
+  pattern but didn't participate in the match substitutes as an empty string; a `$N`/
+  `$<name>` that doesn't correspond to any group in the pattern at all is left as literal
+  text (matching JS exactly — it does *not* raise an error). `Regex`/`CompileResult`
+  gained a `group_count: u8` field to make that "exists vs. didn't participate"
+  distinction possible.
+- **`src/c_api.zig`'s exported C ABI reached parity with the Zig API, then C/C++ was
+  dropped as a supported public target** *(both later session, Phase 0/8 of the
+  100%-conformance plan)* — `ZRegexOptions` gained `multiline`/`dot_all`/`sticky`/
+  `unicode`/`v` fields, `zregex_replace`/`zregex_replace_all` gained the same
+  `$1`/`$&`/`` $` ``/`$'`/`$<name>` substitution as the Zig `replace`/`replaceAll`, and
+  new capture-index/named-group-enumeration/`find_at` functions were added, all to make
+  the exported symbols usable as a real `RegExp` backend for the planned test262
+  conformance harness (see Phase 8 in `ECMASCRIPT_COMPATIBILITY_PLAN.md`). **Bug found
+  and fixed along the way**: `zregex_match_group`'s doc comment always claimed
+  `group_index=0` returns the full match, but the implementation silently returned
+  `NULL` for index 0 in every case — the internal capture array is 1-indexed by
+  capture-group number (slot 0 is never written), so index 0 needs its own path rather
+  than going through the same lookup as real capture groups; fixed by special-casing
+  `group_index == 0` to read `match.result.start`/`.end`/`.group()` directly. Immediately
+  after this parity work landed, the project's own C/C++ header (`include/zregex.h`),
+  C++ RAII wrapper (`include/zregex.hpp`), and example were **deleted**: maintaining a
+  hand-written header, a C++ wrapper class, an example, and doc sections in lockstep with
+  every Zig-side feature was recurring maintenance debt unrelated to the actual goal (JS
+  conformance), and zregex is Zig-first — see "Not Suitable For" below. The exported C
+  symbols in `src/c_api.zig` still exist (built via `zig build shared`) purely as the FFI
+  substrate the conformance harness needs; they're not a documented or supported public
+  API, and anyone wanting to call zregex from C/C++ needs to write their own bindings
+  against them.
+- **`\p{Name}`/`\P{Name}` Unicode property escapes (General_Category)** *(added in Phase
+  3)* — `\p{L}`, `\p{Lu}`, `\p{Letter}`, `\p{gc=Nd}`, etc. now compile and match real
+  Unicode General_Category data (letters, digits, punctuation, ... including their
+  two-letter subcategories), generated from the official Unicode Character Database's
+  `UnicodeData.txt` (`scripts/gen_unicode_tables.py` → `src/unicode/tables.zig`, ~330KB,
+  checked in — zero runtime dependency, same pattern as the test262 conformance sample).
+  New `UNICODE_PROPERTY`/`UNICODE_PROPERTY_INV` opcodes decode a full UTF-8 codepoint and
+  binary-search the property's range table (`properties.zig::UnicodeProperty`, which now
+  covers General_Category and binary properties uniformly — see next bullet — so this
+  mechanism didn't need to change to support both). An unrecognized property name is a
+  clear `error.UnknownUnicodeProperty` at compile time (not silently ignored). Script
+  properties (`\p{Script=Greek}`) are implemented too — see the dedicated bullet below,
+  and `\p{...}`/`\P{...}` as a character-class member (`[\p{L}\d]`) has its own bullet
+  further down as well.
+- **`\p{Name}`/`\P{Name}` for binary properties** *(added after Phase 3, expanded twice
+  the same day: first an initial 4-property subset to validate the mechanism, then to
+  every available property including Emoji properties)* — every ECMA-262 binary
+  property available from `PropList.txt`/`DerivedCoreProperties.txt`/`emoji-data.txt`
+  (48 properties — e.g. `\p{White_Space}`, `\p{Alphabetic}`, `\p{Math}`, `\p{Dash}`,
+  `\p{Hex_Digit}`, `\p{Quotation_Mark}`, `\p{ID_Start}`, `\p{Cased}`, `\p{Emoji}`,
+  `\p{Extended_Pictographic}`, ...; see `src/unicode/README.md` for the full list),
+  generated with the same range-table/binary-search mechanism as General_Category, plus
+  the two trivial properties `\p{ASCII}` (codepoint ≤ U+007F) and `\p{Any}` (matches
+  every codepoint), computed directly with no table. Found and fixed a real bug in the
+  generator along the way: some `emoji-data.txt` lines have no space before the trailing
+  `#` comment (e.g. `Extended_Pictographic# E0.6 ...`), which a naive `\S+` regex would
+  have folded into the property name, silently losing every such line — caught before it
+  shipped by checking the extracted range count wasn't suspiciously small.
+- **`\p{Script=Name}`/`\p{sc=Name}`/`\P{Script=Name}`** *(added after Phase 3)* — all
+  174 scripts from `Scripts.txt` (e.g. `\p{Script=Greek}`, `\p{Script=Han}`,
+  `\p{sc=Latin}`). Architecturally different from General_Category/binary properties:
+  174 scripts is too many for a hand-maintained `UnicodeProperty` enum variant + switch
+  arm each, so scripts get their own generated lookup (`tables.zig`'s parallel
+  `SCRIPT_NAMES`/`SCRIPT_RANGES` arrays, searched by `properties.zig::resolveScript`/
+  `isInScript`) and their own opcodes (`UNICODE_SCRIPT`/`UNICODE_SCRIPT_INV`, taking a
+  script-table index instead of a `UnicodeProperty` value) — same underlying
+  binary-search-over-codepoint-ranges idea, different plumbing to keep the hand-written
+  `UnicodeProperty` enum from ballooning to ~260 variants. Both the canonical long name
+  (`Greek`) and the short alias (`Grek`, see the next bullet) are accepted; a bare
+  `\p{Greek}` with no `Script=`/`sc=` prefix is correctly rejected too
+  (`error.UnknownUnicodeProperty`), matching real JS (only General_Category can be used
+  bare — Script always needs the prefix). Script_Extensions (`\p{Script_Extensions=...}`
+  / `\p{scx=...}`) is a related but different property — see its own bullet below.
+- **Short script aliases** (`\p{Script=Grek}` as well as the long `\p{Script=Greek}`)
+  *(added after Phase 3)* — sourced from `PropertyValueAliases.txt`'s `sc ; <short> ;
+  <long>` lines (e.g. `sc ; Grek ; Greek`), resolved to a `SCRIPT_NAMES` index at
+  *generation* time and emitted as a third pair of parallel arrays,
+  `SCRIPT_ALIAS_NAMES`/`SCRIPT_ALIAS_INDICES`, so `resolveScript` only ever does a flat
+  binary search (first over aliases, then over canonical names) — no runtime
+  alias-to-canonical string rewriting. No opcode, parser, or codegen changes were
+  needed: `resolveScript`'s return type and callers didn't change, only what it
+  recognizes as input. 174 of the 176 `sc` lines in `PropertyValueAliases.txt` map to a
+  script `Scripts.txt` actually assigns to some codepoint; the two that don't
+  (`Zzzz`→`Unknown`, `Hrkt`→`Katakana_Or_Hiragana`) are silently skipped rather than
+  pointing at a nonexistent table entry.
+- **`\p{Script_Extensions=Name}`/`\p{scx=Name}`/`\P{Script_Extensions=Name}`** *(added
+  after Phase 3)* — a broader, possibly multi-valued property than `Script`: e.g. U+0301
+  (a combining accent) has `Script=Inherited` but `Script_Extensions` includes Latin,
+  Cyrillic, Greek, and every other script it's actually combined with in real text —
+  the textbook UAX24 example of why the property exists. Reuses `Script`'s index space
+  exactly (`resolveScript` resolves both the long name and short alias identically for
+  both properties — a script's identity doesn't change, only which codepoints count as
+  using it), with its own opcodes (`UNICODE_SCRIPT_EXTENSIONS`/`_INV`) and a fourth
+  generated table, `SCRIPT_EXTENSIONS_RANGES` (same index space as `SCRIPT_RANGES`).
+  Per UAX24, `ScriptExtensions.txt` only lists the codepoints (669 total, currently)
+  where Script_Extensions actually diverges from Script — everywhere else `scx == sc` —
+  so the generator builds `SCRIPT_EXTENSIONS_RANGES[i]` by applying just those overrides
+  on top of `SCRIPT_RANGES[i]` (add the codepoint to every script its override line
+  lists; remove it from its old default script if that script isn't listed), never
+  recomputing either table from scratch.
+- **`\p{Bidi_Mirrored}`/`\p{Assigned}`** *(added after Phase 3)* — the two remaining
+  binary properties that don't live in a separate range-list file at all:
+  `Bidi_Mirrored` is a plain Y/N column already present in `UnicodeData.txt` (field 9,
+  previously read but never emitted), and `Assigned` is just "any codepoint
+  `UnicodeData.txt` lists" (every assigned codepoint already falls under one of the 7
+  major General_Category buckets, so this needed no new parsing, just collecting
+  codepoints the General_Category pass already sees into one more table). No new UCD
+  file fetch was needed for either — both simplest of the whole `\p{...}` property
+  set to add, since the data was already being read.
+- **`\p{...}`/`\P{...}` as a character-class member** (`[\p{L}\d]`, `[\P{Alphabetic}a-z]`,
+  `[^\p{L}\d]`) *(added after Phase 3)* — any number of property/script/script-extensions
+  members per class since F2b (4 before, `error.TooManyClassProperties`): the class is
+  materialized into one CharSet at compile time, each `\p{...}` contributing its range
+  table and each `\P{...}` member its complement. A member's own `\P` — `[\P{L}\d]`
+  ("not-a-letter, or a digit," a per-member complement inside the union) — is a
+  different thing from the whole class's `[^...]` negation (`[^\p{L}\d]`, applied once
+  via the `CHAR_SET_INV` opcode); a regression test keeps the two distinct.
+- **`case_insensitive` folds a literal non-ASCII character's simple case pair**
+  *(Phase 4, added later in the session)* — a literal non-ASCII character, standalone
+  (`café` also matches `CAFÉ`) or as a single character-class member (`[é]` also
+  matches `É`; mixed classes like `[aé]` fold both members), also matches its
+  `casefold.zig` case-fold pair when one exists. The parser tags the `.sequence` node
+  it already built for one atomic multi-byte literal character (see the earlier Phase 1
+  note on why multi-byte literals decompose into per-byte nodes) by setting its
+  otherwise-unused `char_value` to the decoded code point — an ordinary multi-atom
+  sequence (`"ab"`) never sets it — so `generateSequence` can tell "one atomic
+  character" apart from any other sequence with no new AST node type, then emits the
+  same SPLIT/GOTO alternation `generateChar` already used for ASCII letters, just with
+  a whole UTF-8 byte run per branch instead of one byte. Quantifiers over a case-folded
+  literal still work correctly (`é+` repeats the whole atomic character regardless of
+  which case each repetition matched). Codepoints with no case pair (`casefold.toUpper`/
+  `toLower` both `null`, e.g. CJK ideographs) are left unchanged, not miscompiled. Not
+  covered: non-ASCII character *ranges* (`[À-Ö]`) and `\p{...}`-in-a-class members —
+  see the dedicated limitation entry below for why those are harder.
+- **`\v`/`\f` recognized as vertical tab / form feed** *(bug found and fixed while
+  building the `u` flag below)* — these were never handled as standalone escapes at
+  all: `\n`/`\r`/`\t` were recognized right next to them in the same `switch`, but
+  `\v`/`\f` silently fell through to a literal `'v'`/`'f'` character, in both the
+  normal-atom and character-class escape paths. Not related to the earlier Phase 6 fix
+  for `\s`/`\S` including form feed/vertical tab as *shorthand-class members* — this is
+  the standalone-escape-token bug, a different code path. Fixed unconditionally (not
+  gated behind the `unicode` flag below), since it was simply wrong before.
+- **`CompileOptions.unicode` (JS `u` flag), partial** *(added after Phase 4)* — this
+  engine was already unconditionally code-point-aware and already supported `\p{...}`
+  (including inside a class) with no flag at all, so most of what `u` mode toggles in
+  real JS was already the only behavior here regardless. What the flag adds: an escaped
+  character that isn't a recognized escape sequence or `SyntaxCharacter` (`^ $ \ . * +
+  ? ( ) [ ] { } |`, plus `/`, plus `-` inside a class) is `error.InvalidEscape` instead
+  of the Annex-B-style literal fallback this engine uses by default (`unicode` defaults
+  to `false`, so no existing pattern's behavior changes unless a caller opts in) — e.g.
+  `\q`, `\-` outside a class, `\B` inside a class, and legacy octal (`\0` followed by a
+  digit) all become compile errors under `unicode = true`. **A real, subtle bug found
+  and fixed while building this**: `parseCharClass` speculatively tokenizes the
+  character right after `[` in *normal* (non-class) mode first, purely to check whether
+  it's `^`, then rewinds and re-tokenizes in class mode if it isn't (a pre-existing
+  design, see its doc comment) — but `-` is a valid class-mode identity escape and *not*
+  a valid normal-mode one, so that speculative fetch could itself trip the new strict
+  check and error out before the rewind-and-retry ever ran, making `[\-a]` wrongly fail
+  to compile under `unicode = true`. Fixed by disabling `unicode_mode` for just that one
+  speculative, always-discarded-or-redone lookahead token. Malformed `\x`/`\u`/`\c`/
+  `\k`/`\p` and backreferences to nonexistent groups are **not** yet made strict under
+  this flag — see the dedicated `u`/`v` section below.
+- **`CompileOptions.v` (JS `v` flag), partial** *(added later in the session)* —
+  character-class set operations, `[A--B]` (difference) and `[A&&B]` (intersection),
+  exactly one per class (no chaining: `error.UnsupportedFeature` since E0; no
+  nesting beyond one bracket level), each operand an ordinary class body, a bare
+  `\p{...}`/`\P{...}` atom, or a nested (possibly `[^...]`-negated) `[...]` class. Since
+  F2b the operation is computed at compile time with CharSet algebra (intersection or
+  difference of the two operands' sets, a negated operand as a complement) and matched
+  with one `CHAR_SET` lookup; before F2b a `CHAR_CLASS_SET_OP` opcode evaluated both
+  operands at match time, because the fixed range tables couldn't hold an operand like
+  `\p{L}` (~700 ranges). `--`/`&&`/`[`
+  (nested operand) only tokenize specially inside a class when `v_mode` is on (default
+  `false` — existing patterns using literal `-`/`&`/`[` in a class are unaffected). Four
+  real bugs found and fixed while building this (a double-free from duplicate `errdefer`
+  ownership between the parser functions handling operand1 vs. the shared
+  operator-and-operand2 logic; two lexer-mode-timing bugs where recursing into
+  `parseCharClass` for a nested operand while still in class mode broke that recursive
+  call's own `^`-negation lookahead, both on the way in and the way back out; and a
+  double-counted outer `[^...]` negation for flat, non-bracketed operands) — see the
+  dedicated `u`/`v` section below for the full writeup of each. **Not implemented**:
+  chaining/deeper nesting (by design), `\q{...}` multi-string literals, `v`'s own
+  additional reserved-punctuator restrictions, and full `u`-mode strictness under `v`.
+- **Duplicate named groups across mutually exclusive alternation branches**
+  *(added later in the session)* — `(?<x>a)|(?<x>b)` now compiles, matching JS's actual
+  rule (this engine previously took the simpler, always-reject subset described in the
+  Phase 2 bullet above). Implemented via a compile-time-only "branch path" the parser
+  tracks per named group: every `parseAlternation` call reserves a fresh id and pushes
+  `(id, branch_index)` onto a fixed-depth stack (`MAX_ALTERNATION_DEPTH = 32`, no heap
+  allocation, `error.AlternationTooDeep` beyond that) while parsing each branch, whether
+  or not that call turns out to contain a real `|` -- necessary so that two groups
+  sharing no real alternation ancestor are guaranteed to disagree on id the first time
+  their paths diverge. A named group snapshots the live stack into its
+  `GroupNameEntry.branch_path` when created; two same-named groups are allowed exactly
+  when their paths first diverge at the *same* id with a *different* branch index (a
+  shared disjunction they take different arms of) -- identical paths, one a prefix of
+  the other, or diverging at different ids, all still conflict. **Two real bugs found
+  and fixed while building this, both pre-existing and unrelated to each other**: (1)
+  `MatchResult.getNamedCapture`/`getNamedCaptureIndices` and `Regex.replace`'s
+  `$<name>` substitution all stopped at the *first* `named_groups` entry with a
+  matching name, regardless of whether that specific group actually participated --
+  never exercised before since duplicate names were always rejected, but with
+  `(?<x>a)|(?<x>b)` now valid, looking up `"x"` after matching `"b"` needs to find the
+  *second* declaration's capture, not the first (unmatched) one; fixed by checking every
+  same-named entry and using whichever one actually captured. (2) An early version of
+  this feature stored each group's branch-path snapshot as a heap-allocated dupe, which
+  meant *every* pattern (not just ones with named groups) now allocated via
+  `parseAlternation` -- silently breaking the many existing unit tests across the
+  codebase that construct a `Parser` directly and never call `parser.deinit()` (previously
+  harmless, since `group_names` starts empty and only allocates for patterns with named
+  groups). Switched to the fixed-depth array above specifically to keep this feature
+  allocation-free, avoiding the need to audit every such test site.
+
+## Phases and fixes
+
+### test262 conformance sample
+
+`zig build test-conformance` (`tests/test262_conformance.zig` + `tests/test262_data.zig`,
+regenerated by `scripts/extract_test262.py` + `scripts/gen_test262_data.py`, see
+`scripts/README.md`) runs a **heuristically extracted** sample of test262's RegExp tests.
+
+**Why "heuristically extracted"**: test262 tests are full JS programs with imperative
+assertions (`var arr = /pattern/.exec(str); if (arr[0] !== "x") throw ...`), not
+declarative pattern/input/expected data — there's no JS interpreter here to run them
+as-is. The extraction scripts recognize a handful of common simple shapes (bare
+`.test()`/`.exec()` calls checked against a boolean, `null`, or a Sputnik-style
+`__expected` capture array) via pattern matching on the JS source, and honestly skip
+anything else (loops, shared harness helpers like `compareArray.js`, multi-statement
+logic) rather than guessing. Of ~2117 files under test262's `test/built-ins/RegExp` and
+`test/language/literals/regexp` (after excluding `\p{...}`/`Symbol.*`-related and
+syntax-error-expecting tests, which are out of scope or need different handling), 168
+cases were extracted from 167 files — a small, simple-case-biased sample, not a
+conformance percentage in the way browser engines report one.
+
+**Current result: 168/168 (100%)**, reached in stages, each one individually triaged and
+fixed (see the "What works" bullets above for the engine-side fixes): the three
+character-class gaps (metacharacters-as-literals, shorthand-classes-as-members, `[^]`)
+first dropped compile errors from 13 to 0; then a real bug in the extraction *tooling*
+itself (not the engine) was found and fixed — `scripts/extract_test262.py`'s JS-string
+decoder didn't handle `\b`/`\f`/`\v` string escapes (only regex-pattern escapes), so a
+JS source string literal like `"easy\btoride"` was silently corrupted into
+`"easybto\x08ride"` (dropping the backslash, keeping the `b`) before ever reaching
+zregex — 4 tests were failing against wrong input data, not because of an engine bug;
+then the six deeper backtracking-correctness bugs listed above accounted for the rest.
+**Caveat unchanged from before**: 168 cases is still a small, simple-case-biased sample of
+test262's several-thousand-plus RegExp-relevant tests (see above) — 100% here means "100%
+of what this harness currently checks," not "0 known JS RegExp incompatibilities." The
+unblocked-but-not-yet-implemented items in the summary table below (`\p{...}`, case
+folding, `u`/`v` flags, `$1`/`$&` in `replace`) are real gaps this sample doesn't exercise.
+
+### F1 closed (v0.2.0)
+
+**test262: 2846/3017** (F0b baseline: 2733; F1's target was 2838), with no
+regression at any step. F1 closed deviations D1-D5, D8, D9, D13 and D16 of
+`docs/REGEX_TIERS_PLAN.md` §2.3 (see "Behavior changes in F1" below for what
+changes for callers). No test262 entry is attributed to F1 any more; what is
+left is F3 (10, D6), F5 (122, Unicode tables), F6a (2), F6b (18, lookbehind)
+and 19 host-side entries.
+
+**Known divergences from V8 (`zig build differential-v8`, seed 0xf1c, 4000
+generated patterns):** 11,043 comparisons, 10,401 identical, 642 different,
+15 `StepLimitExceeded`, 0 crashes, 0 rejections. The 642, classified by
+pattern and subject (not bugs introduced by F1):
+- **248: D6** (a subject with an astral character matched without `u`: `.`
+  consumes the whole code point instead of one UTF-16 code unit). Fixed by
+  F3 (abstract Subject, WTF-8/UTF-16).
+- *(F3d reclassified these: the 248 were counted by condition, not by cause; 106 were
+  D6 alone and 142 are quantifier iteration semantics too. See "F3d" below.)*
+- **394: quantifier iteration semantics**, all on patterns with a quantified
+  group: an iteration that matches empty is accepted where ECMA-262 discards
+  it (`(a*?){1,2}` on "a" gives [0,0], V8 [0,1]), and a group's captures are
+  not cleared at the start of each iteration. 326 differ only in captures,
+  68 in the overall match too. Fixed by F4b (spec RepeatMatcher).
+
+**Skipped tests:** `zig build test` skips 1 test in Debug and 1 in
+ReleaseSafe: D15 (`()\1{1000}`, until F6a). Until F2a the Debug run also
+skipped "MAX_NESTING_DEPTH levels fit in a 1 MiB stack" (twice, since
+`src/parser/parser.zig` is compiled into two test binaries); F2a brought
+the parser under 2 KB per nesting level in Debug and that test now runs in
+every mode.
+
+**PatternTooLarge:** compiled bytecode is capped at `MAX_PROGRAM_BYTES` =
+16 MiB (`src/codegen/generator.zig`); a larger program is
+`error.PatternTooLarge`. Counted repeats are unrolled, so nested counts
+multiply (`(?:a{65536}){65536}` would be 2^32 copies). The value is measured:
+`a{65536}`, the largest single-atom repeat, is 320 KiB, so the cap holds 51
+of them (`(?:a{65536}){51}` compiles, `{52}` doesn't, tested), and a program
+at the cap compiles in ~124 ms in ReleaseSafe (~400 ms in Debug); the i32
+jump-offset limit is 128x higher. F5's counted loops (D10) remove the
+unrolling.
+
+### F2b: dynamic CharSet
+
+Every character class that doesn't fit the ASCII bitmap (a non-ASCII member, a
+`\p{...}` member, a `v`-mode set operation, `[]`) compiles to one CharSet
+(`src/ir/charset.zig`: sorted, merged code point ranges), computed at compile time
+with set algebra, and to `CHAR_SET`/`CHAR_SET_INV idx:u32` in the bytecode.
+
+- **Gone:** `MAX_CLASS_RANGES` (30), `MAX_SET_OP_RANGES` (13 per set-operation
+  operand), `MAX_CLASS_PROPERTIES` (4), `error.TooManyRanges`,
+  `error.TooManyClassProperties` and the three fixed-table opcodes.
+- **The bytecode is not executable alone.** The table lives in
+  `CompileResult.charsets`, not in the bytecode; `Matcher.initCompiled` carries it.
+  Running a program's bytecode without its table fails with `error.InvalidCharSet`.
+  The bytecode is not a stable serialization format; persisting compiled patterns
+  would need a versioned serializer that writes bytecode and tables together (not
+  planned before F7, only on demand).
+- **Size:** the table's bytes (8 per range) count toward `MAX_PROGRAM_BYTES` with the
+  bytecode. Equal classes share one entry, and an unrolled counted repeat reuses its
+  class's entry, so `(?:[\p{L}]){65536}` has a one-entry table. Indices follow the
+  first appearance of each class, so the same pattern always yields the same program.
+- **No semantic change.** Case folding under `i` is exactly what it was (literal
+  members only; see "Unicode Case Folding" below). An old-vs-new comparison over 3,001
+  patterns (the test corpora plus 2,453 random classes, flags `""`/`i`/`u`/`v`/`iu`/`iv`)
+  and 20.8 M code point checks found 0 differences; 25 of those patterns used to be
+  rejected by the old caps and now compile.
+- **Performance** (median of 10 `zig build bench` runs each, F2b against `main`): no
+  case is slower beyond the bench's resolution. `[\p{L}--\p{Lu}] /v` matches 7 %
+  faster (one lookup instead of two operand evaluations) but compiles in ~11.5 µs
+  instead of ~0.7 µs, since the operation is now computed at compile time; every other
+  case is within -4.3 %..+2.7 %, at the noise floor.
+- **Bench resolution on this machine.** A single run varies by up to 33 % between runs
+  of the same code (median spread 9 %), so one run can't judge a 20 % criterion. The
+  median of 10 runs is stable: splitting the 10 runs into two halves, their medians
+  differ by at most 2.0 % (`main`) and 4.6 % (F2b). Comparisons therefore use medians
+  of 10 runs, and differences under ~5 % get no verdict.
+
+### F2c: HIR and lowering
+
+`compile()` is now parse → lower → generate: the parser's AST is lowered into a HIR
+(`src/ir/hir.zig`, built by `src/lower/lower.zig` in a per-compile arena) and the
+code generator reads only the HIR. The bytecode is unchanged: the bytecode snapshot
+(`tests/snapshots/bytecode.txt`, 699 flag/pattern pairs since `0a43ff0`) passes with 0
+differences, and an old-vs-new comparison of 40,636 patterns found identical programs
+(or errors) and identical matches for every one.
+
+The HIR keeps what the current backtracker's behavior depends on:
+
+- `Repeat.syntax_form` (**semantic**): `a?`/`a??` clear the captures inside them when
+  they skip; `a{0,1}` doesn't. This is the pre-F4b iteration semantics (see the 394
+  divergences above).
+- `LitUnit.raw_byte` (**semantic**): a lone pattern byte 0x80–0xFF (invalid UTF-8, or
+  `\` followed by a non-ASCII character) matches that byte, not U+0080–U+00FF.
+- `CharSet.encoding_hint` (cosmetic): which bytecode encoding a class uses. What a
+  CharSet node matches is its `set`, checked against the compiled program by
+  `tests/hir_contract_tests.zig`.
+- Case folding per class path (see "Unicode Case Folding" below).
+
+**Expected divergence between Tiers, F4b to F6a.** T0 (F4a on) generates its own
+program from the HIR with the spec's repetition semantics (captures cleared at the
+start of every iteration, no `syntax_form`), while patterns that stay in the current
+backtracker (T2) keep today's semantics, `syntax_form` included, until F6a replaces
+it. So between F4b and F6a a quantified group can get different captures depending on
+the Tier that runs it — `(a){0,1}` versus `(a)?` is the `syntax_form` case, `(?:(a)|b)*`
+the per-iteration one. That divergence is known and attributed to T2 (§5.5 of the
+plan), not a regression.
+
+Stack per nesting level (capturing groups, minimum stack measured): code generation
+~0.68 KiB in Debug and ~0.12 KiB in ReleaseSafe (was ~0.56 and ~0.04 before F2c);
+non-capturing groups no longer cost the code generator any stack; the new lowering
+pass takes ~0.6 KiB in Debug and ~0.24 KiB in ReleaseSafe. 256 levels stay far below
+1 MiB in every stage.
+
+Performance (median of 10 `zig build bench` runs each against `0a43ff0`): matching is
+unchanged within noise (-5.1 %..+1.8 %; the matcher didn't change; this run's
+half-vs-half resolution was 4.4 % for the old build and 13.2 % for the new one).
+Compilation pays for the extra pass (arena, lowering, CharSets materialized for every
+class): a few microseconds per pattern, e.g. `hello` 0.5 → 1.1 µs, the `email` pattern
+1.8 → 4.9 µs, `[\p{L}--\p{Lu}]` 11.6 → 19.6 µs.
+
+### F2d: `analyze()` on the HIR
+
+`analyze()` now classifies the HIR, through the same front end as `compile()`
+(`lower.Frontend`), so it classifies exactly what `compile()` generates from. Tiers are
+unchanged: an old-vs-new comparison of 162,331 analyses found no Tier or
+classifiability difference. What changed in the result (`zregex.analysis`):
+
+- **A known deviation (D10) keeps its features.** Before F2d, `known_deviation` came
+  with an empty feature set (the walk stopped at the deviation, so `(a)\1{70000}` did not
+  report its backreference); now `features` is complete. `min_tier` is still `null`
+  and `reasons()` still empty, since the semantics deviates until F5. A `parse_error`
+  still has no features.
+- **`Feature.non_capturing_group` is removed**: the lowering drops `(?:...)`, so the HIR
+  has nothing to report. It never affected a Tier.
+- **A one-member class `[a]` reports `literal`, not `char_class`**, and **class members
+  no longer count as `literal`** (`[ab]` reports `char_class` only).
+
+Nothing in this repository depended on the old contract (the only consumer,
+`tests/fuzz_common.zig`, reads `min_tier`); a caller outside it matching on
+`Feature.non_capturing_group` has to drop that case. `analyze()` now pays for the
+lowering too (+57 % on the fuzz stress patterns).
+
+### F2e: module layers (F2 closed)
+
+`src/` is split into build modules, one per layer. A module can import only the modules
+`build.zig` grants it, so an upward dependency does not compile:
+
+| Module | Directory | May import |
+|---|---|---|
+| `ir` | `src/ir/` (CharSet, HIR) | — |
+| `unicode` | `src/unicode/` (tables, properties, case folding) | — |
+| `utils` | `src/utils/` (bitsets, pool, config, debug) | — |
+| `subject` | `src/subject/` (the input: WTF-8 or UTF-16, added in F3a) | — |
+| `frontend` | `src/frontend/` (lexer, parser, AST, lowering) | `ir`, `unicode` |
+| `tier0` | `src/tier0/` (skeleton; the linear VM arrives in F4a) | `ir`, `utils`, `subject` |
+| `tier1` | `src/tier1/` (skeleton) | `ir`, `unicode`, `utils`, `subject`, `tier0` |
+| `tier2` | `src/tier2/` (bytecode, code generator, optimizer, backtracker) | `ir`, `unicode`, `utils`, `subject` |
+| `zregex` | `src/` (`main.zig`, `regex.zig`, `compile.zig`, `analysis/`) | all of the above |
+| `c_api` | `src/c_api.zig` | `zregex` only |
+
+The table lives in `build.zig` (`layers`) and is the single source of truth. Only
+`zregex` is exported as a package. Its public API is unchanged (plus `zregex.tier2`), so a
+consumer depending on the `zregex` module sees no difference, and `libzregex.so` exports
+the same 36 symbols.
+
+**How the rules are checked.** Zig analyzes lazily, so a forbidden import in code that
+nothing references compiles. `zig build check-layers`, a separate step, covers that:
+
+- a textual lint (`tools/check_layers.zig`) of every `@import` under `src/` against the
+  table: module names outside a layer's deps, and relative imports that leave the layer;
+- a forced analysis of each module (`tests/layers/ref_all.zig`, a recursive
+  `refAllDecls`), compile-only;
+- three canaries, generated by the build and never committed: `tier0` importing
+  `unicode`, `tier1` importing `tier2`, and `tier0` importing `../unicode/…`. Each must
+  fail with the exact compiler message ("no module named 'unicode' available within
+  module 'tier0'", …, "import of file outside module path"), and a control importing `ir`
+  must compile.
+
+The forced analysis stays out of `zig build test` because it cost +18 % in Debug and
++77 % in ReleaseSafe. **The split itself makes `zig build test` slower in
+ReleaseSafe** (48.5 → 101.1 s cold; Debug 16.4 → 20.3 s): each module has its own test
+binary, and each binary goes through LLVM. Unit tests now run once each; before, the
+files shared with the C API ran twice (724 test runs → 405, the same 405 unique tests).
+Tests that need the whole pipeline moved from `executor/` and `codegen/` to
+`tests/tier2_pipeline_tests.zig`.
+
+The build compiles the test binaries in parallel (no `-j1`; 4 cores here). Cold
+ReleaseSafe: 117 s wall, 299 s CPU (user + sys, 2.6× parallelism); Debug: 21 s wall,
+42 s CPU. Each ReleaseSafe test binary costs 24–34 s to compile even with a single test
+(`test-tier0`: 25 s), so the fixed cost per binary (test runner and std through LLVM)
+dominates, not module size. **Review trigger:** if cold ReleaseSafe `zig build test`
+goes past 150 s wall during F3–F4, the per-module test binaries get revisited; not
+before.
+
+**F4a step 0, `test-leaves`:** the four leaf layers (`ir`, `unicode`, `utils`, `subject`)
+share one test binary. A module's tests only run in a binary whose root module is that
+module, so `src/leaves_tests.zig` includes their root files directly (possible because a
+leaf imports no other module); `check-layers` allows exactly those imports from it and
+requires all the leaves. Cold ReleaseSafe `zig build test`, median of 3, interleaved:
+125.0 → 98.0 s wall (−21.6 %), 328.1 → 254.2 s CPU (−73.9 s). The same 107 leaf tests
+run.
+
+### F3b: encoding-independent bytecode
+
+Every character opcode now decodes one character of the subject through the `subject`
+module and compares its value: a literal above U+007F is one `CHAR32` with its code
+point (it was one `CHAR32` per UTF-8 byte), and a raw byte of an ill-formed pattern
+(`hir.LitUnit.raw_byte`) is the new `BYTE` opcode, which compares that byte and never
+matches a UTF-16 subject. A literal never matches an ill-formed WTF-8 byte of the same
+value (`\u00e9` doesn't match a lone byte `0xE9`), as before; classes and `.` still take
+such a byte as its value. The semantics are still code points for every pattern (the
+pre-F3 behavior); F3d switches patterns without `u` to code units (D6).
+
+Checked old against new (F3a, `71868c2`) on the 40,636-pattern corpus of F2c, with
+`find` and `findAt` at every byte offset of 22 subjects (astral characters, lone
+surrogates, separately encoded halves, ill-formed bytes): no compile or error
+difference, and three kinds of match difference, all expected:
+
+- **Fixed bug:** `^` with `m` also accepted a lone LF or CR three bytes before the
+  position (the 3-byte LS/PS test looked at `pos - 3` with the single-byte test too), so
+  `/^x/m` matched in `"\nabx"`. 35 of the differences; regression test added.
+- **Lookbehind** (300): start positions go back one character at a time, never from
+  inside a character, up to 100 characters (it was 100 bytes). A capture inside a
+  lookbehind now holds whole characters, and a lookbehind that only succeeded by
+  starting in the middle of a character (so a class read a continuation byte as its
+  value) no longer does. Lookbehind is rewritten in F6b (D7).
+- **`findAt` inside a character.** At `b+2` of a 4-byte sequence, the new position
+  between the two halves, the new matcher decodes the trail half where the old one read
+  bytes (13,543 finds, by design). At any other offset inside a character (1,970
+  finds), which is not a position, the old matcher read byte by byte and the new one
+  also reaches `b+2`. From F3c such an offset gives no match.
+
+Bench (median of 10 against F3a): every case within noise or faster (−1.5 % to
++25.8 %). The first version lost 17–34 % on ASCII cases and 53 % on lookbehind, because
+every character went through the generic decoding path; the matcher now decodes ASCII
+inline and shares one inline character test.
+
+The lookbehind case (+25.8 %) runs the same number of matcher steps as before on the
+bench's ASCII subject (1,233 on a sample), so the gain is cost per step. On non-ASCII
+text it also makes fewer attempts (Greek sample: 2,240 → 1,508 steps), since it no longer
+starts inside a character. That also fixes captures that were silently wrong:
+`(?<=(.))x` on `"éx"` captured the byte `A9` (half a character) and now captures `é`, and
+`(?<=([^a]))x` on `"😀x"` captured `80` and now captures `😀`.
+
+### F3c: `execAt`, `Scratch` and UTF-16 subjects
+
+- **Execution primitive:** `Regex.execAt(subject, index, *Scratch, *MatchSlots,
+  ExecLimits)` over `.{ .wtf8 = bytes }` or `.{ .utf16 = units }`, with indices in the
+  subject's units. With the `sticky` option it matches only at `index`; otherwise it
+  searches forward with `advanceIndex`. An index past the end is no match; an index inside
+  a character is `error.InvalidIndex`. With a warm `Scratch` it doesn't allocate.
+  `Scratch` is not thread-safe or reentrant (one per thread, a second one inside a
+  callback); in safe builds using one twice at once panics.
+- **Still code points everywhere:** until F3d a pattern without `u` also decodes code
+  points, in both encodings. `CompileResult.mode` already records what F3d will use.
+- **`ExecLimits`** was the old `ExecOptions` until F6a, which gave it its own fields
+  (see the F6a section); the step budget is still per start position.
+- **Byte-offset facade:** `findAt` at an offset inside a character returns `null` (it used
+  to start there). New `Regex.findFrom(input, start)` searches from `start`.
+- **C API:** `zregex_exec_wtf8`, `zregex_exec_utf16`, `zregex_advance_index_wtf8` and
+  `zregex_advance_index_utf16` (the 36 older exports are unchanged). The exec functions
+  reuse a thread-local `Scratch`, whose buffers live until the thread ends.
+  `zregex_search_n` from an offset inside a character starts at the next position.
+- **Pattern bytes:** a lone surrogate written in WTF-8 in the pattern (`ED A0 80`) and `\`
+  before a non-ASCII character are one character, not raw bytes. Raw bytes of an
+  ill-formed pattern still exist (`BYTE`) and only match WTF-8 subjects.
+- **test262 harness** (`scripts/test262/`, `--encoding wtf8|utf16`): until F3d the default
+  and the baseline are WTF-8. From F3d the default is UTF-16 (what a JS host sees),
+  `baseline.json` is regenerated with it, and WTF-8 runs as a cross-check with its own
+  `baseline-wtf8.json`; a test whose status differs between the encodings is reported case
+  by case. Today both give 2848, with identical statuses.
+- **Bench, lookbehind case `(?<=\$)\d+`** *(resolved in F3d(1): back to 0.59 MB/s without
+  touching its path, which confirms code layout; closed)*: 0.54–0.55 MB/s against 0.59–0.60 at
+  `35c4f79` (F3c(2)), measured interleaved. The cause is attributed to LLVM code layout:
+  between `35c4f79` and the commit that already shows 0.54–0.55 the only source changes
+  are `c_api.zig` (not part of the bench) and the lexer for bytes >= 0x80 (the pattern
+  has none), nothing the match loop runs. Revisit in F3e if it persists (compare the
+  assembly of the inner loop, inlining hints); otherwise in F4a with the Pike VM.
+- **Partial `v` grammar, pinned by tests:** `[[a]😀]` and `[[😀]a]` under `v` are
+  `InvalidClassSetOperand` (a nested class is only taken as an operand of `--`/`&&`;
+  the same before F3d). `tests/code_unit_tests.zig` asserts that error. When F5 completes
+  `v` they will compile and those assertions must change: that is expected, not a
+  regression.
+- **Consumers:** after F3d a consumer that doesn't set `CompileOptions.unicode` for a `u`
+  pattern gets code-unit semantics.
+
+### F3d: code units without `u` (F3 closed)
+
+- **Semantics (D6, D12 closed):** without `u` or `v` a character is one UTF-16 code unit,
+  as in ECMA-262; with them, one code point. `/^.$/.test("😀")` is false and `/^..$/`
+  true; a lone half (`\ud83d`) matches half of a pair; a capture can hold half a pair
+  (in WTF-8 its bounds use `b+2`). Search, `findAll` and `advanceIndex` step one code unit
+  without `u` (through `b+2` in WTF-8).
+- **Pattern side:** without `u`, an astral pattern character (literal or `\u{...}`, an
+  extension) is two code units. A class range between astral characters is therefore
+  between units and, as in V8, `[😀-🙏]` without `u` is a SyntaxError (`InvalidCharRange`).
+  Astral characters in group names are not split.
+- **Harness:** test262 runs on UTF-16 subjects by default (`zig build test262`, 2856/3017);
+  `zig build test262-wtf8` runs the same on WTF-8 against `baseline-wtf8.json`, with the
+  same status for every test, as a phase-closing gate.
+- **V8 differential, reclassified.** F1's classification of the D6 divergences was by
+  condition (an astral subject without `u`), not by cause. Of the 248, 106 were pure D6
+  and are gone with F3d; 142 also have a quantified group (F4b) and are reclassified there.
+  The 7 of them whose result changed with F3d differ now only in captures: F4b alone.
+  Numbers at F3d's close (`tests/differential/reference/archive/diff-F3d.json` since
+  F4b, UTF-16 and WTF-8 identical): 11,041 compared, 10,505 identical, **536 different,
+  all quantifier iteration semantics (394 + 142)**, 17 `StepLimitExceeded`, 0 D6. F4b
+  resolved the 59 on T0 patterns; the other 477 are T1/T2 patterns on the backtracker
+  (see the F4b section; `diff-F4b.json` is the current reference).
+- **2 new `StepLimitExceeded`:** without `u` an astral character is two characters, and
+  two exponential patterns reach the per-start-position step budget (D11) sooner (worst
+  start: 228,780 → 1,589,290 and 692,785 → 1,294,156 steps, over the 1,000,000 limit).
+  The semantics are right: with an unlimited budget both give no match, like V8. F6a fixes
+  them when the budget becomes per execution.
+- **Consumers:** after F3d a consumer that doesn't set `CompileOptions.unicode` (or `v`)
+  for a `u` pattern gets code-unit semantics.
+
+#### Bytecode snapshot: justified changes per phase
+
+| Phase | Change | Pairs affected | Commit |
+|---|---|---|---|
+| F2b | Classes that don't fit the ASCII bitmap compile to `CHAR_SET idx` over a table (removes `MAX_CLASS_RANGES`) | baseline: the snapshot was taken after F2b (679 pairs; 699 since `0a43ff0`) | `74ac6d1` |
+| F3b | A literal above U+007F is one `CHAR32` with its code point (was one per UTF-8 byte); a raw pattern byte is `BYTE` | 73 | `39765b7` |
+| F3c | none | 0 | — |
+| F3d | Without `u`/`v` an astral pattern character is two `CHAR32`, its UTF-16 halves | 4 | `4d6aa33` |
+| F4a(4) prep | `u` and `v` together are `error.IncompatibleFlags` (a SyntaxError, as `Flags.parse` already said) | 5 | this phase |
+
+### F4a: linear VM without captures (F4a closed)
+
+F4a adds T0's Pike VM for the patterns it can run exactly; everything else stays on the
+backtracker with unchanged behavior. A pattern is eligible (`tier0.check`) when
+`analyze()` gives `min_tier == .regular` and its HIR has no capture, backreference,
+lookaround or raw pattern byte, and no iterating repeat over a nullable body (`{0,1}` and
+`{1,1}` are allowed: they don't iterate, so the spec's empty-iteration rule never applies).
+
+**Coverage over the 40,636-pattern corpus of F2c** (measured in F4a(1)). The metric is
+T0 coverage; the share of the corpus reflects this corpus (test262-derived and fuzz, 65%
+T1+T2), not real-world regexes, which F0c measures.
+
+| Group | Patterns | Recovered by |
+|---|---|---|
+| T0-eligible (on the VM in F4a) | **7,453 = 79.5% of T0 (9,376), 18.3% of the corpus** | F4a |
+| T0 with captures | 1,797 (19.2% of T0) | F4b: T0 coverage → 98.7% |
+| T0 with an iterating repeat over a nullable body | 122 (1.3% of T0) | F4b (empty-iteration rule) |
+| T0 with a raw pattern byte (WTF-8 only) | 4 | stays on the backtracker |
+| T1 (`u`/`v`, `i` over non-ASCII, `\p`) | 14,799 | F5 |
+| Possessive (compile opt-in, D8) | 3,465 | F5 |
+| T2 (lookaround, backreferences) | 11,762 | F6a |
+| Not classified (parse errors, D10) | 1,234 | — |
+
+**Dispatcher (F4a(3)).** `Regex.compileWithOptions` builds one front end, classifies
+its HIR with `analysis.analyzeFrontend` (the answer `analyze()` gives) and, for an
+eligible pattern, compiles T0's `Program` next to the backtracker's (`Regex.t0`). Every
+execution (`execAt` and the whole facade, so also the C API) goes to the VM when `t0` is
+set. An unclassifiable pattern goes to the backtracker without error.
+`zregex.Scratch` holds both executors' buffers (112 + 152 B), each empty until its first
+execution, under one `in_use` flag.
+
+- **Possessive quantifiers are a known deviation again (D8) on `compile`'s opt-in.**
+  `analyze()` never turns the opt-in on (`a*+` is a parse error there), so its walker
+  ignored them; over `compile`'s front end they would have classified as T0 and run
+  greedy on the VM. `analyzeFrontend` reports them as `known_deviation(.d8_possessive)`
+  and they stay on the backtracker (`tier0.check` also rejects them). A pattern compiled
+  with the opt-in that uses no possessive quantifier routes like any other.
+- **`CompileOptions.force_tier`** (tests and diagnostics): `.expert` forces the
+  backtracker; `.regular` forces the VM or fails with `error.TierUnavailable`, with the
+  reason in `CompileOptions.tier_diagnostic`: `not_classifiable` (a known deviation; a
+  parse error fails compilation first), `tier_too_high` (T1/T2), or `not_eligible`
+  (captures, iterated nullable bodies, raw pattern bytes); `.unicode` is
+  `not_built` until F5.
+- **Routing, measured.** Corpus (every line compiled with its own flags): 8,286 on the VM
+  (7,453 without `p`, the F4a(1) predicate exactly, and 833 with the opt-in but no
+  possessive quantifier). test262 (UTF-16): 714 of 4,294 unique pattern/mode pairs,
+  1,541 of 8,743 compilations; 3,289 of the pairs on the backtracker are `u`/`v`.
+  *Correction (F4b(3)):* 711, not 714. The probe's log had 3 lines garbled by
+  interleaved stderr of the harness's workers (two truncated copies of a deeply nested
+  `(?:` pattern and one line glued to the next); the set of patterns on F4a's program is
+  the same. Not a routing change.
+- **Checks.** The fuzz stress runs every pattern the dispatcher sends to the VM on
+  the backtracker too (every index of every subject, sticky and not, both encodings):
+  2,868 of 8,533 executed patterns, no difference. `differential-v8` is identical to
+  `diff-F3d.json` in both encodings.
+
+**Prefilters and fast paths (F4a(4)).** `tier0/prefilter.zig`, computed at compile
+time, used in code-unit mode (all of T0):
+
+| Prefilter | When | What |
+|---|---|---|
+| `anchored` | `^` without `m` leads every path | from an index above 0, no match; from 0, only at 0 |
+| `literal` | the whole pattern is one literal, without `i` on a letter, surrogates, astral or raw bytes | `prefilter.findLiteral` (SIMD first/last-byte pair search; scalar without vectors), no VM |
+| `class_run` | greedy `C+`/`C*` over an ASCII class | the first member, then the longest run, no VM |
+| `first` | anything non-nullable | skips positions where no match can start, while no thread is alive |
+
+The fast paths never touch the VM's scratch. Corpus (8,286 routed patterns: 735
+literal, 75 class_run, 6,009 first, 1,467 none): 0 discrepancies against the backtracker
+and against the VM without prefilters. `CompileOptions.t0_prefilters = false` (tests and
+bench only) turns them off. The VM also got precomputed epsilon closures and
+generation-stamped thread lists (F4a(4) B1).
+
+**Bench (F4a(4)).** 10 runs interleaved with `422e3a9` (end of F3), median. §7.2's T0
+targets are read in the `execAt` table (no allocation, what a host runs):
+
+| Case | Routed to | `execAt` (MB/s) | VM without prefilters | Backtracker | §7.2 target |
+|---|---|---|---|---|---|
+| literal `hello` | VM, literal | 969.0 | 75.2 | 28.4 | ≥ 300 ✓ |
+| `[a-z]+` | VM, class_run | 193.9 | 45.6 | 30.8 | ≥ 500 fast path (adjusted, see below); ≥ 50 plain VM (45.6, adjusted to ≥ 45) |
+| `\d{3}-\d{4}` sparse | VM, first | 490.0 | 70.9 | 29.3 | ≥ 200 ✓ |
+| `\d{3}-\d{4}` dense | VM, first | 37.0 | 36.8 | 16.6 | ≥ 40 (37.0, adjusted to ≥ 35) |
+| email | VM, first | 38.1 | 38.9 | 6.3 | ≥ 30 ✓ |
+
+Overhead per `execAt`, routed against the backtracker: 0.19× (`/abc/`, 5 B), 0.72×
+(`/\d{3}-\d{4}/`, 12 B), 0.09× (`/abc/`, 2 KB), 0.02× (`/[a-z]+@[a-z]+/`, 2 KB); §7.2
+allows 1.5× under 64 B and 1.2× from 1 KB. Compile, dispatcher against the backtracker
+alone: 1.34× (literal), 1.60× (`first`), 1.05× (T0 not eligible), 1.26× (email);
+§7.2 allows 2×. `findAll` against the base: literal 27.8 → 936.3 MB/s, `[a-z]+` 22.5 →
+59.1, sparse 28.1 → 383.2, dense 16.2 → 33.3, email 7.1 → 36.6.
+
+- **`[a-z]+` fast path: 500 MB/s is not reachable on the bench's prose, by the number of
+  matches.** The scan itself runs at ~1.8 GB/s (words of 200-400 letters). The prose has
+  161,000 matches per MiB, one `execAt` each: 500 MB/s would need ≤ 12 ns per match
+  including the scan, and it measures ~23 ns. The two mispredicted branches per word
+  (start and end of a run of random length) and the call already take more than 12 ns.
+  The target is adjusted in §7.2: ≥ 500 MB/s of scan, ≥ 150 MB/s on the bench's prose.
+- **Plain VM, 9% and 7.5% short** (`[a-z]+` 45.6 against 50, dense 37.0 against 40):
+  the Pike VM's per-position cost (2-5 threads per byte, each a dispatch, a set test and
+  the precomputed closure). Lowering it further needs a different architecture (a
+  DFA-like state cache), not F4a's. Targets adjusted in §7.2 to the measured figures.
+
+**Backtracker cases lose 6-19% by code layout, not by an algorithm change.** The T2
+cases of the bench stay on the backtracker, whose code F4a doesn't touch:
+
+| Case (backtracker) | Base `422e3a9` | F4a (`931db48`) | Δ |
+|---|---|---|---|
+| `<(\w+)>.*?<\/\1>` (`findAll`) | 26.73 MB/s | 23.71 MB/s | −11.3% |
+| `(?<=\$)\d+` (`findAll`) | 0.60 MB/s | 0.49 MB/s | −18.6% |
+| `(a+)+b` (to `StepLimitExceeded`) | 32.4 ms | 34.4 ms | +6.2% |
+| `(a\|aa)*c` (to `StepLimitExceeded`) | 29.7 ms | 31.2 ms | +5.1% |
+
+- **The cause is LLVM's code layout.**
+  - **Bisection with the full bench** puts it at `45f70eb`, the F4a(3) dispatcher. The
+    earlier commits `7c67b33` and `d77f702` match the base.
+  - **With a minimal bench** (only these cases) it shows up one commit later, at
+    `e37d1f5`: each binary places it in a different commit.
+  - **Instruction counts are unchanged** (callgrind: `(a+)+b` 267.6 M → 273.0 M, +2%)
+    while the time grows 6-16%.
+  - **Isolating** the VM's side of the dispatcher in a `noinline` function restored
+    these cases in the minimal binary and not in the full one.
+- **The workarounds were not kept.** Neither that `noinline` nor aligning `matchFrom`
+  (not measured) is a fix: they depend on LLVM's layout, which the next compiler update
+  can move again.
+- **F4b/F6a rewrite the backtracker. These numbers are not a target of F4a nor of F4b.**
+  The F6a row of the plan says the same: F4a's bench is not F6a's reference.
+
+**The backtracker keeps its coverage (F4a(5)).** Since F4a(3) T0 patterns run on the VM,
+so the integration tests stopped exercising the backtracker on them. `zig build test`
+now also builds `test-integration-backtracker`: the same `tests/integration_tests.zig`
+over a module graph built with `build_options.force_backtracker = true`, where a pattern
+compiled without an explicit `CompileOptions.force_tier` goes to the backtracker (an
+explicit one still wins). The 7 tests about routing itself skip there
+(`zregex.force_backtracker`); 139 pass, and the 8th skip is the one every run has. It is always
+built in Debug (a coverage run, with every safety check): as ReleaseSafe the second
+module graph took `zig build test` in ReleaseSafe, cold, from 93.3 s to 137.9 s (median
+of 3), 12 s from the 150 s review trigger (F2e); in Debug it is 92.2 s (91.7 / 92.2 /
+113.1).
+
+**What F4a leaves to later phases:**
+
+| Pattern | Where it runs | Recovered by |
+|---|---|---|
+| T0 with captures (19.2% of T0 in the corpus) | backtracker | F4b |
+| T0 with an iterating repeat over a nullable body | backtracker | F4b (empty-iteration rule) |
+| T0 with a raw pattern byte | backtracker | stays there |
+| `u`/`v`, `i` over non-ASCII, `\p`, possessive (opt-in) | backtracker | F5 |
+| lookaround, backreferences | backtracker | F6a |
+
+### F4b: tagged VM, captures on T0 (F4b closed)
+
+F4b runs the rest of T0 on a linear VM: patterns with groups and repeats over nullable
+bodies go to the **tagged VM** (`src/tier0/pikevm_tagged.zig`), with the spec's capture
+semantics (a row of slots per pc and thread, an epsilon closure that undoes `save`/`clear`
+on the way back, dedup by pc; plan §6.5). A search runs in two passes (D5): F4a's VM with
+its prefilters finds `[s, e]`, then the tagged VM runs anchored at `s` and stops at `e`. A
+second pass that ends elsewhere is a VM bug: builds with runtime safety panic, the others
+answer with the backtracker and count it in `zregex.two_pass_fallbacks` (0 in every
+measurement). Patterns `tier0.check` accepts (no groups, no nullable loop) keep F4a's
+program. **What stays on the backtracker from T0:** a raw pattern byte (WTF-8 only), and a
+tagged program over the slot bound (instructions x slots > 2^20).
+
+**The backtracker's iteration bugs, which the tagged VM doesn't have** (V8 sides with the
+VM on every case the arbiter could decide): it keeps a group from an earlier iteration
+instead of resetting it per iteration (`(?:(a)|b)*c` on `"abcd"`: V8 gives group 1
+undefined, the backtracker `"a"`), and it accepts the empty iteration of an optional or
+iterated nullable body (`(a*)*` on `""`: V8 `["", undefined]`, the backtracker `["", ""]`).
+They remain for T1/T2 patterns, which still run on the backtracker (F5, F6a): the 477
+divergences of `diff-F4b.json` are all T1 (7) or T2 (470).
+
+**Gate at F4b's close:** test262 2856 in UTF-16 and WTF-8 (the same status for all 3,996
+tests, 0 regressions); `differential-v8` identical to `diff-F4b.json` (the 59 T0 divergences
+of `diff-F3d.json` gone, 0 new, 0 changed); internal differential with every slot, real
+corpora (12.8 M runs) and the iteration corpus (14.2 M runs): `TwoPassMismatch` 0, two
+passes = one tagged pass, every discrepancy with the backtracker decided by V8 in the VM's
+favor except one pattern (D17, a parser bug); the iteration corpus's frozen V8 results in
+the suite (`tests/corpus/iter_v8.tsv`); fuzz stress in both modes (all slots compared
+where the backtracker is reliable); `zig build test` in Debug and ReleaseSafe (0
+allocations with a warm scratch on the tagged VM included); `check-layers`; conformance,
+examples, shared library (40 symbols, the C API unchanged).
+
+**Compile cost of the tagged program** (F4b(1), both corpora, the 3,924 T0 patterns F4b
+adds: captures and nullable loops). The ratio is (backtracker compile + the dispatcher's
+extra work: classify, `checkTagged`, compile the tagged `Program`) / backtracker compile.
+**Median 1.42** (p90 1.68). The count of patterns over 2x is not a stable figure: it moves
+between runs (34, 35, 43 in three) because those patterns compile in microseconds
+(backtracker 0.8-8.5 us) and their ratio sits on the threshold with timing noise. The
+`too_large` rule is an absolute one: over 1 ms of tagged compile, 0 patterns.
+
+**Worst case:** an IPv6-address pattern (a long alternation of counted groups), 123 us of
+extra compile time, the maximum over the 3,924. It doesn't block; if it grows in F5, this
+is the baseline to compare with.
+
+**Routing (F4b(3)).** Groups and iterated nullable bodies run on the tagged VM (D5's two
+passes); patterns `tier0.check` accepts keep F4a's program. F2c corpus: 10,386 on the VM,
+8,286 with F4a's program (unchanged) and 2,100 tagged. test262 (UTF-16): 837 of 4,299
+unique pattern/mode pairs on the VM, 711 with F4a's program and 126 tagged (F4a reported
+714: see the correction in the F4a section). `differential-v8`: the 59 T0 divergences of
+`diff-F3d.json` are gone, none new (`diff-F4b.json`).
+
+**Bench with captures (F4b(4); median of 10 runs interleaved with `cc97066`, code of
+`090678e`).** `execAt` through the tagged VM against the same pattern without groups:
+`(\d{3})-(\d{4})` sparse 54% (333 / 616 MB/s), dense 73% (30.9 / 42.3), `(\w+)@(\w+)\.com`
+80% (36.8 / 46.0), `(?:(a)|b)*c` 46% (15.5 / 33.4). Overhead against the backtracker:
+1.26x on 12 B, 0.51x on 5 B, 0.16x on 2 KB. Compile: 1.70x, 1.37x, 1.77x (the last with a
+phase product). D5 fallbacks to the backtracker (`two_pass_fallbacks`): 0 in every run.
+
+- **Target for groups in an iterated body with dense matches: >= 40% of the pattern
+  without groups** (50% elsewhere). `(?:(a)|b)*c` matches every run closed by `c`, so the
+  second pass covers most of the input, and a tagged step costs about twice a plain one:
+  a dynamic closure (F4a's precomputed closures don't apply across `save`/`clear`), the
+  `clear` of the group at each iteration with its undo frame, and the copy of the thread's
+  slot row. The per-iteration reset is what the spec requires: the cost is structural.
+- **Layout regression, resolved.** With the tagged VM in `pikevm.zig`, the capture-less
+  path (F4a) lost 7-14% in `execAt` and up to 13% in `findAll` against `cc97066`, while the
+  backtracker's cases didn't move. Bisected to `a63e161`, which changes neither F4a's search
+  nor the literal path, and the literal fast path (`indexOfPos`, no VM) lost 11% too: code
+  layout, not algorithm. Moving `rows` out of `List` and force-inlining `tier0.exec` did
+  nothing. Moving the tagged VM to its own file (`src/tier0/pikevm_tagged.zig`, `090678e`,
+  no function changed) recovered it: `findAll` -4.4%..+1.0% and `execAt` -5.3%..+3.3%
+  against `cc97066`, every F4a target met. **Re-measure in F5: these numbers are not
+  permanent; LLVM changes.**
+- **Systemic note.** This is the third layout case in the project (F4a(4), F4b(4) and
+  F4a(4)A's prefilter). After T0, decide how to measure without depending on LLVM's
+  layout: separate binaries, more runs, or `-fno-llvm` for the bench.
+  **F7-0:** most of this is the environment's noise, not layout; see "Bench noise and the
+  historical layout regressions (F7-0)" below.
+
+### F5a: `u` and `\p{...}` on T0's VM, every UCD property name
+
+**Property names (F5a(1), F5a(2)).** Tables regenerated from UCD 17.0.0 (pinned; the
+Unicode Consortium's `unicodetools` copy of `Public/17.0.0/ucd`), now also from
+`PropertyAliases.txt` and `DerivedNormalizationProps.txt`: binary property short names
+(`\p{Alpha}`, `\p{space}`, ...), every General_Category value alias (`LC`, `cntrl`,
+`digit`, `punct`, `Combining_Mark`, ...), every Script alias (`Qaac`, `Qaai`),
+`Changes_When_NFKC_Casefolded`, `Cn`/`Unassigned`, `C` with Cn, and `Script=Unknown`
+(`sc`/`scx`). test262: the 118 non-passing entries of `property-escapes/generated` pass,
+2856 -> 2974/3017, the same in UTF-16 and WTF-8.
+
+**Routing (F5a(3)).** A T1 pattern whose T1 features are only `u` mode and `\p{...}`
+runs on T0's VM (plain or tagged), in code-point mode; `force_tier = .unicode` asks for
+that route. Still on the backtracker: Unicode case folding (`i` with `u`/`v` or non-ASCII
+content, F5b), `v` (F5c; its 275 test262 entries are still skipped by
+`scripts/test262/features.json`), and large counted repeats. Corpus coverage: 6,716 of
+the 14,061 T1 patterns of the F2c and F0c (npm) corpora move to the VM.
+
+**Differential.** VM against the backtracker on those 6,716 patterns, every slot, every
+index, sticky and not, UTF-16 and WTF-8 (5.5 M runs): 29 patterns differ, in 3,260 runs
+per encoding. V8, as the arbiter, sides with the VM in every case it can judge (2,698
+directly, and the 1,643 runs of `\p` without `u` it can re-judge with `u`; 627 have
+astral subjects or aren't valid with `u`) and never with the
+backtracker: the backtracker's known iteration semantics (captures not reset per
+iteration, empty iterations accepted), as on T0 in F4b. The rest are artifacts of the
+arbitration, identical in both zregex engines: `\p{...}` without `u` (below) and an
+index in the middle of a surrogate pair with `u` (V8 moves it back to the pair's start).
+`differential-v8`: 6 divergences gone (T1 patterns with `u`), none new: `diff-F5a.json`
+(471 + 17 `StepLimitExceeded`: 470 T2, 1 T1).
+
+**Throughput** (10 interleaved rounds of `zregex_xbench` against F5a(2), execAt MB/s):
+`\p{L}+` 29.8 -> 49.6 (+67%), `\p{Script=Greek}+` 31.6 -> 66.8 (+111%),
+`\p{General_Category=Lu}` 26.2 -> 56.7 (+117%), book `\p{L}+` 24.2 -> 48.0 (+98%); ns
+per short exec -28% to -51%. `[\p{L}--[a-z]]` (`v`) stays on the backtracker, unchanged.
+No other case moved more than 5.2% (the worst: the book title pattern, -5.2% execAt).
+
+**Compile time: accepted above 2x.** The VM's `Program` has a fixed cost of ~0.4-0.9 us;
+on a minimal pattern that is more than the backtracker's whole compile. Median of 31 x
+200 compiles against `.expert`: `\p{L}` 0.81 vs 0.37 us (2.2x), `\p{L}+` 1.50 vs 0.58
+(2.6x), `\p{General_Category=Lu}` 0.86 vs 0.41 (2.1x); larger patterns 1.2-1.9x
+(`[\p{L}\p{N}_]+` 1.2x, `\p{Script=Greek}+` 1.6-1.9x). Not the property table: cloning
+a 684-range set costs 0.05 us. Patterns in `u`/`v` mode skip the prefilter analysis (the
+VM uses prefilters in code-unit mode only), which took `\p{L}` from 2.93 to 0.81 us. The
+same excess existed on T0 since F4a, unmeasured by its gate (three cases): `\d` 1.15 vs
+0.42 us (2.72x), `[^a]` 1.85x. Decision: accept the fixed cost for +67-117% execAt; the
+limit in `REGEX_TIERS_PLAN.md` §7.2 is now "<= 2x against `.expert`, or <= +2 us
+absolute". Reducing `tier0.compile`'s fixed cost (closure tables, `follow`) is in F7's
+backlog.
+
+**F7b(6): the fixed cost, measured by phase and reduced.** Callgrind of 1,000 compiles per
+pattern (ReleaseFast, `-Dcpu=x86_64_v3`) found three local costs, all fixed:
+- the `first` prefilter turned its two 256-bit sets into lookup tables a bit at a time
+  (~1.8 k instructions per compile); now eight entries at a time;
+- the backtracker's `emitBitmap` tested membership for each of 256 bytes (a binary search
+  each; 5.5 k for `[^a]`); now built from the set's ranges;
+- `tier0`'s `addSet` compared a set emitted twice (`x+` is `x` then `x*`) range by range
+  (~5.5 k for `\p{L}+`, 684 ranges); the builder now remembers the last `char_set` node's
+  set by its HIR ranges. Only for HIR sets: an `i` literal's two-letter sets are freed at
+  once and the next letter's can get the same address (a first version keyed them too and
+  gave `/(?:ab|cd)+|ef/i` no match on "ab"; the corpus differentials caught it, a test with
+  an allocator that reuses memory keeps it caught).
+
+Instructions per compile, before -> after: `\d` 10,512 -> 7,310 (-30%), `[^a]` 16,832 ->
+11,485 (-32%), `\p{L}+` (`u`) 15,732 -> 9,545 (-39%), `\p{Lu}+` 15,953 -> 10,027 (-37%),
+`(\d{3})-(\d{4})` -14%, `<(\w+)>.*?<\/\1>` -28%, `[\p{L}\p{N}_]+` -10%; `[a-z]+`,
+`hello`, `\p{L}` and the lookahead case within 0.2%. What remains is structural: about a
+fifth is the allocator (the AST is allocated node by node, the `Program` in several
+parts), and the backtracker's bytecode is always generated, even for a pattern the VM runs
+(0.35-1.4 k instructions, 5-15% of these compiles), because `force_tier`, the bytecode
+snapshot and the internal differentials use it. Neither is changed in F7b.
+
+**Bugs found in F5a (pre-existing, both engines):**
+- **Fixed after F5a (bug A):** `\p{...}` without `u`/`v` was read as a property
+  escape. It is now Annex B's IdentityEscape, as in V8: `/\p{L}/` is the text `p{L}`,
+  `/\p{Bogus}/` compiles, `[\p{L}]` holds `p { L }`, and `[\p{L}-z]` is a SyntaxError
+  (the range `}-z` is out of order). Such a `\p` no longer makes a pattern T1.
+- **Fixed after F5a (bug C):** `gc=`/`General_Category=` takes only General_Category
+  values and their aliases (`\p{gc=Cn}`, `\p{gc=LC}`, `\p{gc=punct}`, ...);
+  `\p{gc=Alphabetic}`, `\p{gc=Alpha}`, `\p{gc=ASCII}`, `\p{gc=Any}`,
+  `\p{gc=Assigned}` are SyntaxErrors, as in V8.
+- With `v`, `[\p{L}--a]` (a single character as a subtraction operand) was
+  `InvalidClassSetOperand`; V8 accepts it. Since E0 it is `UnsupportedFeature`; for F5c.
+- `\u{...}` without `u`/`v` is read as a code point escape (`/\u{1F600}/` matches
+  `😀`); ECMA-262 (Annex B) and V8 read `\u` as the letter `u` followed by `{1F600}`
+  as text (and `/\u{2}/` as `uu`). Found while verifying the bug A fix; not fixed.
+
+### F6a: explicit-stack backtracker, capture trail, LookLinear
+
+**Explicit stack (F6a(1)).** T2 patterns without a lookbehind run on
+`src/tier2/executor/backtrack.zig`: the same bytecode, order and step count as the
+recursive matcher, with pending alternatives on a heap stack of choicepoints. The caller's
+stack no longer decides whether a match answers (D14 closed) and `()\1{1000}` gives the
+spec's empty match (D15 closed). Loops whose body isn't a single atom no longer stop at
+~330 iterations (`RecursionLimitExceeded` before; `(x)(?:ab)*\1` over 5,000 `ab` now
+matches). Patterns with a lookbehind stay on the recursive matcher until F6b, with its
+depth limit of 1000 (`RecursionLimitExceeded`).
+
+**Capture trail (F6a(2)).** Capture writes go to a trail, undone to each choicepoint's
+height. Fixed on the way (bug F, docs/F6A_PRECHECK.md): once a positive lookahead
+succeeded, its captures survived a later backtrack past it (`/(?:(?=(a))ab|ac)/` on "ac"
+gave group 1 = "a"; V8: undefined). The capture of a discarded empty iteration was not
+reset: fixed in F7a(4) on this backtracker (see "Fixed in F7a"); patterns with a lookbehind
+keep the recursive matcher's behavior until F6b.
+
+**LookLinear (F6a(3)).** A lookahead whose body has no captures, backreferences or nested
+lookarounds, and that T0's VM takes, is answered by `tier0.existsAnchoredMatch` with a
+2-bit-per-position memo per execution (docs/REGEX_TIERS_PLAN.md §4.4). Not delegated: `v`
+patterns (F5c), lookbehind (F6b); `i` in `u` mode is delegated since F7b(3) (F5b's
+lowering folds its sets). On the F2c and npm
+corpora, 2,463 of the 4,441 patterns with a lookahead have delegated sites; on and off
+give the same slots in all 566,490 runs.
+
+**Limits (`ExecLimits`, D11).**
+- `max_steps` (default 1,000,000): per start position, as before; the VM's steps for a
+  delegated lookahead come out of the same budget.
+- `max_backtrack_stack_bytes` (default 64 MiB): choicepoints, trail, loop guards and star
+  positions together; past it, `error.BacktrackStackExhausted` (C API:
+  `ZREGEXP_ERROR_RECURSION_LIMIT`).
+- `max_memo_bytes` (default 1 MiB): a memo table that doesn't fit isn't an error, that
+  lookahead runs without memo; 0 turns the memo off.
+- `max_recursion_depth` is gone (API change): only the recursive matcher had one.
+- The C API still doesn't take limits per execution (no ABI change). Since F7b,
+  `ZRegexOptions.max_steps` (0 keeps the default) becomes the regex's own `Regex.limits`,
+  used by every execution through the C API and by the Zig facade (`find`, `findAll`,
+  `replace`, ...); before F7b it was accepted and ignored. `max_recursion_depth` is a
+  reserved field with no effect.
+- C API: every function that can fail records the error's name
+  (`zregex_last_error_name`) with its code (`zregex_last_error`): the Zig error's own name
+  when there is one (`UnexpectedToken`, `StepLimitExceeded`, `OutOfMemory`, ...), else the
+  code's (`InvalidGroup` for an index out of range). Until this change `zregex_compile`,
+  `zregex_find*`, `zregex_is_match`, `zregex_replace*`, `zregex_escape`,
+  `zregex_match_slice`/`_group` and `zregex_named_group_*` set only the code;
+  `zregex_named_group_name`/`_index` out of range now also report
+  `ZREGEXP_ERROR_INVALID_GROUP` (before, a bare null / 0).
+
+**Bench** (10 interleaved rounds of `zregex_xbench` against `66a9d60`, median `execAt`
+MB/s; the backtracker cases):
+
+| Case | Before | After | |
+|---|---|---|---|
+| `t2_lookahead` `(?=.*[a-z])(?=.*[A-Z]).{8,}` | 3.78 | 9.77 | x2.58 (LookLinear) |
+| `t2_backref` `<(\w+)>.*?<\/\1>` | 36.18 | 35.36 | -2.3 % |
+| `t2_book_backref` `\b(\w+) \1\b` | 11.01 | 11.25 | +2.1 % |
+| `t2_lookbehind` `(?<=\$)\d+` (recursive matcher) | 0.745 | 0.763 | +2.4 % |
+| `t1_vset` (backtracker) | 25.94 | 22.65 | -12.7 % |
+| `t0_az_bt` `[a-z]+` forced to the backtracker | 37.47 | 36.00 | -3.9 % |
+
+`(a+)+b` and `(a|aa)*c` forced to the backtracker still give `StepLimitExceeded`, in 26.4
+and 22.3 ms (29.0 and 24.8 before). Compiling a pattern with delegated lookaheads costs
+their T0 programs (`t2_lookahead`: 3.5 -> 4.9 us). `Regex.exec` keeps the backtracker's
+side out of line (`noinline`): inlined, its frame cost every T0 call ~25 ns.
+
+**Known costs.** The zero-progress loop guard was a linear search over the active
+iterations, so a long loop whose body isn't a single atom was quadratic. **Fixed in F7a(3):**
+past 64 active guards the backtracker mirrors them in a hash set. `(x)(?:ab)*\1` over 5,000
+iterations: 13.3 -> 0.46 ms, 92.7 M -> 6.8 M instructions (callgrind); 50,000: 882 -> 4.9 ms.
+Loops of up to 64 iterations keep the scan (the set costs more below ~70). The binary
+grows while both executors coexist (until F6b). **F7b(5):** the set is no longer
+`std.AutoHashMapUnmanaged` but `GuardSet`, linear probing without tombstones (its removals
+always undo insertions newest first, so emptying the slot is enough); a full removal
+clears the table only when it is at most 16 times the keys, else removes them one by one.
+A table with no keys has every slot free, so it is reused without clearing. Binary
+-2,784 B (ReleaseFast) / -736 B (ReleaseSmall); the same probe (callgrind), 5,000
+iterations: 6.84 -> 6.12 M instructions; 50,000: 62.8 -> 53.8 M; wall time within noise
+(minimum 0.32 -> 0.30 ms and 4.3 -> 3.5–4.6 ms).
+
+### Bench noise and the historical layout regressions (F7-0)
+
+The bench's precision was measured in F7-0 (`docs/BENCHMARKS.md`, "Precision (F7-0)"): in
+this environment one case moves 20–45% from one process to the next, ASLR off and a 2 MiB
+aligned input don't reduce it, and with 10 rounds the median can't see changes under ~20%
+(the minimum time per case can, to ~4%). The three "layout regressions" below were measured
+with the median of 10 rounds, inside that noise. They are not reopened; they are noted here
+so nobody investigates them again:
+
+- **F4a(4):** the backtracker cases lost 11.3% (`<(\w+)>.*?<\/\1>`) to 18.6%
+  (`(?<=\$)\d+`) in `findAll`, with instruction counts unchanged (callgrind, +2%). Possibly
+  part noise.
+- **F4b(4):** the capture-less path lost 7–14% in `execAt`, "resolved" by moving the tagged
+  VM to its own file (`090678e`). Possibly part noise; the recovery was measured the same
+  way.
+- **F6a:** the regression that led to the `noinline` `execBacktracker` and to
+  `initScratchInto` may have included noise, but the fixes are real: callgrind gives 1,644
+  -> 1,537 instructions per short exec (base 1,435), and `t0_literal`'s short exec went
+  20.6 -> 45.5 -> 20.0 ns (`5c34af3`).
+
+### F5b: full case folding under `i` (F5b closed)
+
+**What folds.** With `i` and without `v`, every set is closed under the spec's
+Canonicalize at compile time (`src/frontend/lower/lower.zig`):
+- **With `u`:** simple case folding (CaseFolding.txt 17.0.0, statuses C and S):
+  1,482 equivalence classes, 2,994 code points. `k` matches `K` (U+212A), `s` matches `ſ`,
+  `ß` matches `ẞ`, `ᾀ` matches `ᾈ`, `σ`/`ς`/`Σ` fold together, and so do Deseret pairs.
+- **Without `u`:** the legacy rule, full `toUppercase` (SpecialCasing unconditional
+  mappings) kept only if it is one code unit and never maps >= 128 to < 128: 1,144
+  classes, 2,313 code points. `ẞ` doesn't match `ß`, `ᾀ` doesn't match `ᾈ`, `K` (U+212A)
+  doesn't match `k`.
+- **Literals, ranges, classes, `\w`/`\W` and `\p{...}`/`\P{...}`** (standalone and in
+  classes; a negated class is the complement of the closure). `[À-Ö]` matches `à`;
+  `\p{Lu}` matches `a` under `iu`; `[\W]` under `iu` doesn't match `ſ` or `K`.
+- **At run time:** backreferences (`checkBackRef`, shared by both backtrackers) and
+  `\b`/`\B`, whose word characters under `i` in code-point mode add U+017F and U+212A
+  (the fold closure of the ASCII word characters; `/a\b/iu` on "aſ" doesn't match).
+- Class tables were checked against V8 (Node 22, ICU 78.2 = Unicode 17.0) on every code
+  point in both modes: 0 mismatches. A per-code-point differential (`^c$`, `^[c]$`,
+  `^[^c]$`, `i` and `iu`, WTF-8 and UTF-16; 117,966 cases over 14,446 code points)
+  also gives 0 mismatches.
+
+**Not covered.** Full case mappings (`ß` ~ `ss`, `ﬁ` ~ `fi`: never, the spec uses simple
+folding), the Turkic mappings (`İ`, `ı`: never), `v` with `i` on sets (F5c: under `v` sets
+fold with the old rule; `\P{Lu}` under `iv` differs from `iu` in V8), `\q{...}` (F5c).
+
+**Routing.** Patterns whose only T1 features are `u`, `\p{...}` and Unicode case
+folding now run on T0's VM (`vmTakesUnicode`). On the F2c corpus 2,757 more patterns
+reach the VM (18,435 -> 21,192), with the same 382 known bound differences against the
+backtracker and identical slots; on the T1 corpora, V8 sides with the VM in all 1,002
+arbitrable runs of the 13 differing patterns (the 2 new ones are the backtracker's known
+empty-iteration issue under `{0,1}`/`?`). A delegated lookahead (LookLinear) is still
+skipped under `i` with `u`, as in F6a.
+
+**test262:** 2974 -> 2978 of 3017 (UTF-16 and WTF-8): `unicode_full_case_folding.js`
+and `u-case-mapping.js`, sloppy and strict. `differential-v8`: 1 divergence gone (a T1
+pattern with `i` and `é`, now on the VM), none new: `diff-F5b.json`.
+
+**Compile cost** (`cprobe`, median of 31 x 200, us):
+
+| Pattern | Flags | Default | `.expert` |
+|---|---|---|---|
+| `\p{L}` | `u` / `iu` | 1.56 / 3.51 | 0.36 / 2.87 |
+| `\p{L}+` | `u` / `iu` | 1.56 / 4.22 | 0.62 / 3.09 |
+| `\p{Lu}` | `u` / `iu` | 0.76 / 4.99 | 0.37 / 4.60 |
+| `\p{Nd}` | `iu` | 0.83 | 0.39 |
+| `[^\p{L}]` | `u` / `iu` | 4.37 / 5.09 | 3.98 / 4.29 |
+| `[^a]` | `u` / `iu` | 1.30 / 1.86 | 0.93 / 1.35 |
+| `[À-Ö]` | none / `i` | 1.65 / 2.24 | 0.75 / 1.23 |
+| `[À-Ö]` | `u` / `iu` | 1.14 / 1.70 | 0.78 / 1.33 |
+| `k` | `u` / `iu` | 0.63 / 0.98 | 0.40 / 0.60 |
+
+Against `.expert` every case is within §7.2 (<= 2x or <= +2 us): `\p{L}` under `iu` at
+3.51 us is 1.22x `.expert`, `\p{Lu}` under `iu` at 4.99 us is 1.08x. Against the same
+property without `i` it goes up by +2 to +4 us (`\p{L}` +1.9, `\p{L}+` +2.7, `\p{Lu}`
++4.2): the folded property is no longer the property opcode but a set of ~700-2,000 ranges
+(union with its precomputed delta, codegen copy, interning). Properties whose delta is
+empty (`\p{Nd}`) keep the property path. The case the F5 plan flagged as pathological,
+`[^\p{L}]` under `iu`, costs +0.7 us over `u`. **Accepted.**
+
+**Binary** (`.so`, stripped), Parts 1, 1b and 2 together: +138 KB, ReleaseFast 974,304 ->
+1,112,272 B (+14.2 %), ReleaseSmall 575,480 -> 708,520 B (+23.1 %), above the plan's
++70 KB. Breakdown: 69 KB of class tables (both modes), 45 KB of property deltas (5,647
+ranges, almost all in the 25 case-related properties: `Lu`, `Ll`, `Uppercase`,
+`Lowercase`, `Changes_When_*`...), 8.5 KB of pointers (the delta slices) and 12 KB of
+code. **Accepted.** If a consumer needs a smaller binary, the folding tables can move to
+a separate module (noted for F7).
+
+### test262 baseline (F0b)
+
+The real test262 measurement that replaces the sample above as the semantic
+verdict (see `docs/REGEX_TIERS_PLAN.md`, phase F0b). Harness:
+`scripts/test262/` (see its README); run with `zig build test262`, which
+fails on any regression against `scripts/test262/baseline.json`.
+
+- **test262 revision** `7ab7fafa0003f73fc85c1b95d88094d33f7eb8bd`
+  (`scripts/test262/TEST262_SHA`), Node v22.22.2, ReleaseSafe build,
+  8 MiB native stack for FFI calls. Measured 2026-09-25.
+- **Scope**: `built-ins/RegExp`, `language/literals/regexp` and their Annex B
+  counterparts. 2189 files, 3996 entries (strict and sloppy run separately).
+  `built-ins/String/prototype/{match,replace,split,...}` is not included yet.
+- **Engine suite** (baseline; the host suite and skipped tests excluded):
+  3017 entries, **2733 pass (90.6 %)**, 117 fail, 152 zregex compile errors,
+  15 unextracted, 0 crashes, 0 timeouts.
+- **Of the 2080 entries that actually exercise zregex, 1811 pass (87.1 %).**
+- **Host suite** (`built-ins/RegExp/prototype/exec`, which tests the harness's
+  own JS `RegExpBuiltinExec`, not zregex): 152/152 pass.
+- **Skipped** (not in the baseline), each with a typed `reason`:
+  513 `skipped_host` -- 497 `host_feature` (features Node 22's V8 lacks:
+  RegExp modifiers, duplicate named groups, `RegExp.escape`, legacy RegExp
+  features), 14 `v8_behind_spec` (tests that also fail in plain V8 without
+  zregex, found by the harness's control run: `flags`/`unicode` handling in
+  `@@match`/`@@replace`), 2 `host_flags` (literal flag validation) -- and
+  314 `skipped_feature` (the `v` flag, until F5; `features.json`).
+- **The baseline assumes an 8 MiB native stack in the caller.** Consumers
+  that call zregex with less stack (FFI layers, threads with small stacks)
+  can crash on patterns with deep recursion (see D14 in
+  `docs/REGEX_TIERS_PLAN.md`); F6a's explicit heap stack removes the
+  dependency.
+- A full run takes ~65 s wall with 4 workers; ~95 % of it is
+  `property-escapes/generated`. The control run re-runs every non-passing
+  entry without zregex, adding ~10 s.
+
+**Read the percentages with care.** 937 of the 3017 engine entries
+(31.1 %) never call into zregex at all (getters, property descriptors,
+species, names): they pass or fail on V8 and on the harness's host code.
+The median number of zregex `exec` calls per entry is 1 (mean 3.5). The
+"Pass (of ran)" column therefore measures the host as much as the engine;
+**"Pass (of exercised)" is the column that describes zregex.** (A 100-file
+sample stratified by directory put the non-exercising share at ~55 % with
+a median of 0; the full suite is dominated by `property-escapes/generated`,
+where every entry exercises zregex.)
+
+| Directory | Ran | Pass (of ran) | Exercise zregex | Pass (of exercised) | Skipped | Time (s) | Non-pass statuses |
+|---|---|---|---|---|---|---|---|
+| annexB/built-ins/RegExp | 20 | 12 (60.0 %) | 12 | 4 (33.3 %) | 0 | 3.4 | fail 6, zregex_compile_error 2 |
+| annexB/built-ins/RegExp/legacy-accessors | 0 | 0 (—) | 0 | 0 (—) | 48 | 0.0 | — |
+| annexB/built-ins/RegExp/named-groups | 4 | 0 (0.0 %) | 4 | 0 (0.0 %) | 0 | 0.0 | zregex_compile_error 4 |
+| annexB/built-ins/RegExp/prototype | 46 | 46 (100.0 %) | 24 | 24 (100.0 %) | 6 | 0.1 | — |
+| annexB/language/literals/regexp | 16 | 8 (50.0 %) | 16 | 8 (50.0 %) | 0 | 0.0 | fail 6, zregex_compile_error 2 |
+| built-ins/RegExp | 820 | 798 (97.3 %) | 520 | 498 (95.8 %) | 156 | 2.3 | fail 12, zregex_compile_error 10 |
+| built-ins/RegExp/Symbol.species | 8 | 8 (100.0 %) | 0 | 0 (—) | 0 | 0.0 | — |
+| built-ins/RegExp/dotall | 8 | 2 (25.0 %) | 8 | 2 (25.0 %) | 0 | 0.0 | fail 6 |
+| built-ins/RegExp/escape | 0 | 0 (—) | 0 | 0 (—) | 40 | 0.0 | — |
+| built-ins/RegExp/lookBehind | 34 | 18 (52.9 %) | 34 | 18 (52.9 %) | 0 | 0.1 | fail 16 |
+| built-ins/RegExp/match-indices | 28 | 24 (85.7 %) | 28 | 24 (85.7 %) | 0 | 0.1 | fail 2, zregex_compile_error 2 |
+| built-ins/RegExp/named-groups | 52 | 38 (73.1 %) | 44 | 30 (68.2 %) | 20 | 0.1 | fail 2, zregex_compile_error 12 |
+| built-ins/RegExp/property-escapes | 146 | 136 (93.2 %) | 144 | 134 (93.1 %) | 0 | 0.0 | zregex_compile_error 2, fail 8 |
+| built-ins/RegExp/prototype | 20 | 20 (100.0 %) | 0 | 0 (—) | 0 | 0.0 | — |
+| built-ins/RegExp/prototype/Symbol.match | 100 | 98 (98.0 %) | 50 | 48 (96.0 %) | 6 | 0.1 | fail 2 |
+| built-ins/RegExp/prototype/Symbol.matchAll | 52 | 52 (100.0 %) | 14 | 14 (100.0 %) | 0 | 0.1 | — |
+| built-ins/RegExp/prototype/Symbol.replace | 130 | 126 (96.9 %) | 58 | 54 (93.1 %) | 8 | 0.2 | fail 2, zregex_compile_error 2 |
+| built-ins/RegExp/prototype/Symbol.search | 46 | 46 (100.0 %) | 10 | 10 (100.0 %) | 0 | 0.0 | — |
+| built-ins/RegExp/prototype/Symbol.split | 88 | 88 (100.0 %) | 36 | 36 (100.0 %) | 0 | 0.1 | — |
+| built-ins/RegExp/prototype/dotAll | 16 | 16 (100.0 %) | 0 | 0 (—) | 0 | 0.0 | — |
+| built-ins/RegExp/prototype/flags | 30 | 30 (100.0 %) | 0 | 0 (—) | 2 | 0.0 | — |
+| built-ins/RegExp/prototype/global | 20 | 20 (100.0 %) | 0 | 0 (—) | 0 | 0.0 | — |
+| built-ins/RegExp/prototype/hasIndices | 16 | 16 (100.0 %) | 0 | 0 (—) | 0 | 0.0 | — |
+| built-ins/RegExp/prototype/ignoreCase | 20 | 20 (100.0 %) | 0 | 0 (—) | 0 | 0.0 | — |
+| built-ins/RegExp/prototype/multiline | 20 | 20 (100.0 %) | 0 | 0 (—) | 0 | 0.0 | — |
+| built-ins/RegExp/prototype/source | 24 | 22 (91.7 %) | 10 | 8 (80.0 %) | 0 | 0.0 | fail 2 |
+| built-ins/RegExp/prototype/sticky | 16 | 16 (100.0 %) | 0 | 0 (—) | 0 | 0.0 | — |
+| built-ins/RegExp/prototype/test | 90 | 90 (100.0 %) | 50 | 50 (100.0 %) | 0 | 0.1 | — |
+| built-ins/RegExp/prototype/toString | 18 | 18 (100.0 %) | 0 | 0 (—) | 0 | 0.0 | — |
+| built-ins/RegExp/prototype/unicode | 16 | 16 (100.0 %) | 0 | 0 (—) | 0 | 0.0 | — |
+| built-ins/RegExp/prototype/unicodeSets | 0 | 0 (—) | 0 | 0 (—) | 47 | 0.0 | — |
+| built-ins/RegExp/regexp-modifiers | 0 | 0 (—) | 0 | 0 (—) | 124 | 0.0 | — |
+| built-ins/RegExp/regexp-modifiers/syntax | 0 | 0 (—) | 0 | 0 (—) | 16 | 0.0 | — |
+| built-ins/RegExp/unicodeSets/generated | 0 | 0 (—) | 0 | 0 (—) | 228 | 0.0 | — |
+| language/literals/regexp | 149 | 99 (66.4 %) | 56 | 21 (37.5 %) | 85 | 6.7 | unextracted 15, fail 35 |
+| language/literals/regexp/named-groups | 58 | 44 (75.9 %) | 56 | 42 (75.0 %) | 0 | 0.0 | zregex_compile_error 2, fail 12 |
+
+Groups with huge subjects (every code point of a property, or loops over
+the code space), which dominate run time:
+
+| Directory | Ran | Pass (of ran) | Exercise zregex | Pass (of exercised) | Skipped | Time (s) | Non-pass statuses |
+|---|---|---|---|---|---|---|---|
+| built-ins/RegExp/CharacterClassEscapes | 24 | 20 (83.3 %) | 24 | 20 (83.3 %) | 0 | 13.5 | fail 4 |
+| built-ins/RegExp/property-escapes/generated | 882 | 766 (86.8 %) | 882 | 766 (86.8 %) | 35 | 225.3 | zregex_compile_error 114, fail 2 |
+
+**Root causes worth knowing before reading the failures:**
+
+- **Fixed in F5a(1): property names.** Short names of the binary properties
+  (`\p{Alpha}`, `\p{AHex}`, `\p{space}`, ...), every General_Category value alias
+  (`LC`/`Cased_Letter`, `cntrl`, `digit`, `punct`, `Combining_Mark`), the extra
+  Script aliases (`Qaac`, `Qaai`) and `Changes_When_NFKC_Casefolded` now resolve
+  (tables regenerated from UCD 17.0.0 with `PropertyAliases.txt` and
+  `DerivedNormalizationProps.txt`): 110 entries of `property-escapes/generated` went
+  from `zregex_compile_error` to pass. The group's run time stayed short (the whole
+  UTF-16 run took 67 s), not the long first run the per-symbol loop suggested.
+- **Fixed in F5a(2): unassigned code points.** `\p{General_Category=Other}` now
+  includes Cn (e.g. U+038B), `\p{Cn}`/`\p{Unassigned}` exist, and
+  `\p{Script=Unknown}`/`Zzzz` (`sc` and `scx`) is every code point no script has;
+  `Katakana_Or_Hiragana` (Hrkt) is a valid, empty Script value. The last 8 entries
+  of `property-escapes/generated` pass.
+- Known ECMA-262 deviations of the parser/matcher show up as expected:
+  non-`u` `.` consuming a whole supplementary character and lone surrogate
+  halves (D6) and lookbehind (D7). The rest of what this baseline showed
+  (Annex B forms, escaped surrogate pairs under `u` (D13), the `u`-mode
+  parse-negative tests, group names, deep nesting) was fixed in F1 (see
+  "F1 closed" above and "Behavior changes in F1" below). See
+  `docs/REGEX_TIERS_PLAN.md` §2.3.
+- The recursive matcher bounds recursion depth, not stack bytes (D14): some
+  patterns (e.g. `/<body.*>((.*\n?)*?)<\/body>/i`) crash on a 1 MiB native
+  stack and pass on 8 MiB. Measured in F0d: the adversarial `(a+)+b` and
+  `(a|aa)*c` on 41 bytes segfault with 1 MiB of stack and return
+  `StepLimitExceeded` in 44-48 ms with 8 MiB. **The caller's stack is the
+  line between answering and crashing.** The harness uses 8 MiB; F6a's
+  explicit stack addresses it. **Re-measured after D9 (F1c)**, whose smaller
+  per-frame match result shrank every frame: in ReleaseSafe the `<body...>`
+  pattern needs ~103 KiB, `(a+)+b` ~159 KiB and `(a|aa)*c` ~503 KiB, so all
+  three answer on 1 MiB (the 1 MiB regression test is enabled); in Debug
+  ~615 KiB, ~983 KiB and ~3.1 MiB. The adversarial cases take 28-35 ms.
+- **The recursion limit doesn't fit any default stack (D15).** The
+  recursion counter (limit 1000) protects depth, not stack bytes, and each
+  level of the matcher's `matchFrom` -> `matchBackRef` chain costs ~25.3 KiB
+  of stack in ReleaseSafe (~75.5 KiB in Debug; measured in F0d as the
+  minimum stack for `()\1{N}`, N = 100/200/400, exactly linear). Reaching
+  the limit takes ~25 MiB (~75 MiB in Debug): with 64 MiB, `()\1{1000}`
+  returns `RecursionLimitExceeded` in ReleaseSafe, so the counter does cover
+  the path, but on an 8 MiB stack it crashes first, from ~320 repetitions
+  (~105 in Debug). Found by the F0d parser fuzzer (reduced from
+  `\2{9007199254740991}\[*`); skipped test in `tests/regression_tests.zig`
+  until F6a's explicit heap stack with a byte limit. **Re-measured after D9
+  (F1c):** ~1.8 KiB per level in ReleaseSafe (~11.2 KiB in Debug); on 8 MiB,
+  ReleaseSafe now reaches the limit (`RecursionLimitExceeded`) instead of
+  crashing, Debug still crashes, and neither gives the spec's empty match.
+- **256 capturing groups overflow the group counter (D16).** The parser's
+  capture counter is a `u8`: a pattern with 256 *sequential* capturing
+  groups (`(a)(a)...`) panics with an integer overflow in ReleaseSafe and
+  Debug, and in ReleaseFast silently wraps to 0, so group 256 overwrites
+  capture 0 (the whole match). 255 groups work. The nesting limit doesn't
+  stop it (the groups aren't nested) and the fuzzer's patterns are too
+  short to reach it. **Fixed in F1c** (D9: u16 indices, an explicit
+  `TooManyCaptures` error past 65535 groups, one capture slot per group).
+- **Nested capturing groups: stack per level (T15).** Before F1c the
+  recursive matcher spent ~49 KiB per nested capturing group in ReleaseSafe
+  (~147 KiB in Debug), so `S15.10.2.8_A3_T15` (200 nested `(`) needed
+  ~9.8 MiB and crashed on 8 MiB. **After D9 (F1c): ~3.4 KiB per level in
+  ReleaseSafe and ~21.7 KiB in Debug** (200 levels ~0.7 MiB / ~4.3 MiB), and
+  T15 passes on 8 MiB. That per-level cost is what F6a's explicit stack has
+  to beat. Sequential groups cost three matcher levels each, so through the
+  public API a pattern with ~330+ groups reaches the recursion limit (1000)
+  and returns `RecursionLimitExceeded` (a defined error) until F6a.
+- **Parser fuzzing coverage (F0d).** Parser and `analyze`: full coverage,
+  no crash or leak (20,000 patterns x 3 flag modes, plus 1.5 M in an
+  uncommitted ReleaseSafe run). Matcher: **partial until F6a**: patterns in
+  the expert tier (T2), and those `analyze` can't classify, are compiled but
+  not executed (1,757 of the 6,537 pattern x mode pairs that compile: 1,159
+  T2, 598 unclassifiable). So T0/T1 patterns have no fuzz crashes; T2 is not
+  covered by the fuzzer until F6a. The corpus part runs in `zig build test`;
+  the stress in `zig build test-fuzz-stress` (by hand or weekly CI).
+- Per-phase breakdown of the non-passing entries:
+  `node scripts/test262/categorize.mjs` (explicit rules, no unclassified
+  entries at this baseline): F1 113 (111 in its target plus the 2 D5
+  entries of `dotall/without-dotall-unicode`), F3 10, F5 122, F6a 2, F6b 18,
+  and 19 host-side: 15 lexer-level tests whose literal can't be extracted and
+  4 (`S7.8.5_A1.5/A2.5`) where `\` + LineTerminator is a JS *literal* error
+  but a valid pattern, on which zregex agrees with V8.
+
+**Blind spots**: a pattern V8 rejects but zregex would accept via
+`new RegExp(...)` isn't measured (V8 throws first); parse-negative tests
+whose literal can't be extracted are `unextracted`; a non-`u` `lastIndex`
+between the halves of a surrogate pair can't be expressed in WTF-8. Details
+in `scripts/test262/README.md`.
+
+### Behavior changes in F1 (for consumers)
+
+F1 (`docs/REGEX_TIERS_PLAN.md`) makes the parser and matcher follow ECMA-262 where
+they didn't, so some patterns now compile or match differently. A consumer pinned to an
+earlier commit sees none of this until it bumps the pin; when it does, it should run its
+own tests. Changes so far (F1a):
+
+- **`u`-mode strictness.** Under `unicode = true`, malformed `\p`/`\P`, `\c`, `\x`,
+  `\u` (and `\u{...}` above U+10FFFF), a `\N` past the last capturing group, a
+  quantified lookahead, and a class escape as a range endpoint (`[\d-a]`) are
+  SyntaxErrors instead of Annex B literals.
+- **In every mode:** a quantified lookbehind (`(?<=a)?`) is a SyntaxError; with any named
+  group in the pattern, `\k` must be a complete `\k<name>`.
+- **`\xHH` above 0x7F** is the code point U+00HH (`/\xFF/` matches "ÿ"), not the raw byte.
+- **Escaped surrogates:** `\uD800` is the WTF-8 lone surrogate (it was a literal "u");
+  under `u`, `\uD834\uDF06` is one code point (D13).
+- **`\s`/`\S`** are ECMA-262 WhiteSpace + LineTerminator (NBSP, Zs, U+2028/9, U+FEFF…),
+  with or without `u` (D4).
+- **Line terminators** are LF, CR, U+2028 and U+2029 for `.` without `s` and for `^`/`$`
+  with `m` (D5); CR alone ends a line now.
+- **Search start positions:** `find`/`findAll` (and the C API search) no longer start a
+  match inside a UTF-8 sequence (part of D12).
+- **A hyphen where a class atom is expected starts a range:** `[--0]` is `-`..`0`.
+
+F1b:
+
+- **Braces and brackets (D1, D2):** `{,5}`, `{}`, a `{` that doesn't start a quantifier,
+  and a lone `}` or `]` are literal text (Annex B); `{,5}` used to mean `{0,5}`. With `u`
+  they are SyntaxErrors.
+- **`[]` (D3)** is valid and never matches (it was `error.EmptyCharClass`).
+- **Annex B escapes:** an invalid `\c` is a literal backslash (`/\c0/` matches "\c0", it
+  used to drop the backslash); `\0<digit>` and a `\N` past the group count are legacy
+  octal (`\1` with no groups is U+0001; it used to be a backreference that matched
+  empty), `\8`/`\9` past it are "8"/"9"; `\10` with ten groups is a backreference; in a
+  class `\1`-`\7` are octal; `\k<a>` with no named group in the pattern is the text
+  "k<a>" (it was `error.UnknownGroupName`).
+- **Possessive quantifiers (D8)** are opt-in (`CompileOptions.possessive`); by default
+  `a*+` is a SyntaxError. **Callers that relied on them must set the option.**
+
+F1c:
+
+- **Capture groups have no fixed cap (D9):** more than 16 groups are
+  captured (they were silently dropped), `\10`+ refer to them, and past
+  65535 groups the pattern is `error.TooManyCaptures`. `MatchResult.captures`
+  has one slot per group of the pattern (it always had 16). 256+ groups no
+  longer panic or overwrite the whole match (D16).
+- **C API:** the C API's group index parameters are `size_t`
+  (they were `uint8_t`), and `zregex_match_group` no longer rejects groups
+  past 9.
+- **A backreference to a group re-entered but not closed yet** matches
+  empty (it overflowed: a panic in safe builds).
+
+Two bugs fixed in F1a were **pre-existing, not covered by the F0d baseline, and found
+by F1a's tests**:
+- **Double free in `parseCharClass` on an allocation failure** (`[a-]`: the `a` node was
+  freed by its own `errdefer` and again by the class that already owned it). Found by
+  `checkAllAllocationFailures` in `tests/syntax_tests.zig`.
+- **`[\D]`/`[\W]`/`[\S]` inside a class missed every code point above U+00FF** (the
+  negated shorthand was complemented within 0-255; the standalone forms were right).
+  Found by the D4 tests.
+
+### Fixed in E0
+
+- **A backreference to a duplicated group name only looked at the first group of that
+  name** *(found in E0, running test262 with Node 24)*: `/^(?:(?<x>a)|(?<x>b))\k<x>$/`
+  didn't match "bb" (V8: it does). The parser resolved `\k<x>` to the first `x` only, so
+  when the other `x` participated it referred to an undefined group and matched empty: a
+  wrong result without an error. Now `\k<name>` refers to every group of that name (the
+  HIR's `Backref.indices`, a list from the start) and the code generator emits one
+  `BACK_REF` per index. Duplicates are allowed only in mutually exclusive branches and
+  RepeatMatcher step 4 clears them each iteration, so at most one participates; a group
+  that didn't matches empty, so the sequence is BackreferenceMatcher's semantics
+  (ES2025). `\1` still refers to group 1 only. `getNamedCapture` and `$<name>` already
+  took the group that participated. test262 with Node 24: `named-groups/duplicate-names-
+  exec.js` and `duplicate-names-match.js` (sloppy and strict, 4 entries) pass in UTF-16
+  and WTF-8; their assertions are ported to `tests/regression_tests.zig`, since the
+  canonical harness (Node 22) skips them. Bytecode snapshot: 3 of 699 outcomes, exactly
+  `(?<a>x)|(?<a>y)\k<a>` under "", `u` and `v`.
+
+### E0: honest errors (0.5.1), measurements
+
+The rule and its table are in `LIMITATIONS.md`.
+
+- **`v` applies `u`'s early errors.** The lexer's strict mode was set from `u` only
+  (`lower.zig`), so under `v` alone zregex accepted what `u` rejects. Over the internal
+  corpora (44,443 unique patterns) 340 changed status: 335 compiled or were
+  `UnsupportedFeature` and are now a SyntaxError, and V8 rejects every one; of the other 5,
+  4 are forms of the table (V8 accepts them) and 1 is the limit case below. The 3,667 `v` patterns that compile before and after give the same
+  matches. The bytecode snapshot changed in 48 of 699 outcomes, each a program before and
+  an error now, V8 rejecting every one; no program changed.
+- **A leak it made reachable:** a lexer error right after a nested class under `v` didn't
+  free that class (`parser.zig`, the two places that re-fetch the token after a nested
+  `]`). Latent before, since that error needed strict mode; the fuzz stress found it with
+  `v` applying it. Fixed; `[[a]\z]` and `[[a]--[b]\z]` with `v` are regression tests. The
+  fuzz checker counts `UnsupportedFeature` as a defined compile error, not as a
+  SyntaxError: it is also raised after the parser (a lookbehind of variable length), where
+  analyze classifies the pattern.
+
+### Fixed in F7a
+
+- **`\u{H+}` without `u`/`v` was read as a code point escape (D17, bug E)** *(found in
+  F4b(2) by the V8 arbiter)*: now, as in Annex B, `\u` is the letter and the `{...}` after it a
+  quantifier when it forms one, text otherwise. `/\u{2}/` matches "uu", `/\u{1F600}/`
+  matches "u{1F600}" and not U+1F600, and `/[\u{1F600}]/` is the members `u { 1 F 6 0 }`.
+  With `u` or `v` it is the code point escape, as before; inside a group name `\u{...}`
+  stays valid without `u` (ES2020). Tests against V8 in `tests/regression_tests.zig`. It
+  removed the 11 runs of the two F2c-corpus patterns `docs/archive/F5A_CLOSING.md` attributed to it.
+
+- **An index inside a surrogate pair with `u`/`v` started at the trail half (bug D)**
+  *(found in F5a, `docs/archive/F5A_CLOSING.md`)*: `execAt` (and everything on it) took the index as
+  a lone trail surrogate. Now it starts at the pair (`Subject.charStart`): UTF-16 between the
+  halves, and WTF-8 at `b+2` of a 4-byte sequence, which is the same place. **The matching
+  follows the spec (RegExpBuiltinExec: "the character that was obtained from element
+  lastIndex"); the reported index matches V8, the pair's start; the spec reports `lastIndex`
+  itself, without moving back.** So `/./gu` with `lastIndex = 1` over "😀x" gives `[0, 2]`
+  (V8: `["😀"]` at 0) and `/\ude00/gu` from there finds nothing (before: `[1, 2]`). Without
+  `u` the index between the halves is a character boundary, as before. No test262 test
+  covers it; tests against V8 in `tests/regression_tests.zig`, both encodings.
+
+- **Quantified groups didn't follow RepeatMatcher steps 4 and 2.b on the backtracker (item
+  13 of `docs/plans/F7.md`)**: each iteration now starts with the captures inside the atom
+  undefined (step 4: `/(?:(a)|b)*/` over "ab" leaves group 1 undefined), and an iteration
+  above the quantifier's minimum that matches empty fails (step 2.b: `/(a*)*/` over "b"
+  leaves group 1 undefined; `/(?:(?=(abc)))?a/` takes the skip). Step 4 is a
+  `CLEAR_CAPTURE` per iteration; step 2.b is `REPEAT_MARK`/`REPEAT_CHECK` around the
+  iterations of a nullable body, emitted only for the explicit-stack backtracker (a
+  pattern with a lookbehind runs on the recursive matcher unchanged until F6b). **The two
+  steps are coupled:** step 4 alone made 5 differential cases worse (an accepted empty
+  iteration cleared the previous iteration's capture), so they shipped together. Results:
+  test262 2978 -> 2980 (`lookahead-quantifier-match-groups.js`); `differential-v8` 470
+  different results -> 0 and 17 `StepLimitExceeded` -> 2 (`diff-F7a.json`); the internal
+  differentials against T0's VM (382 bound and 7,538 slot differences on the T0 corpora,
+  1,050 rows on T1) -> 0.
+
+### The bytecode `Optimizer` doesn't optimize (F7b)
+
+`src/tier2/codegen/optimizer.zig` never did anything but copy the bytecode (its three
+passes are TODO stubs). Since F7b `compile` doesn't run it: the writer hands over a copy of
+its bytecode (`BytecodeWriter.takeBytecode`). What it removes is a step that claimed to
+optimize, not a cost. F7b(2) first handed over the writer's own buffer, shrunk in place:
+callgrind saw no change (-0.5% to +0.5%), but the cross-engine bench did (`\p{L}+` compile
+~1.7 us slower in a process that has run other cases; A/B on the same head: 3.9-5.0 vs
+2.3-2.7 us), so the copy came back at the F7b close. `CompileOptions.opt_level`, `Optimizer`
+and `OptLevel` had no effect since; **F7c-2 removed them** (`optimizer.zig` and its 3 tests,
+the exports, the field and the 2 tests that set it). A caller that still sets `.opt_level`
+gets a compile error: the field is gone, there is nothing to ignore at run time.
+
+### Reserved opcodes (F7c-2)
+
+`CHAR2` (0x02, "one of two characters") and `LOOP` (0x16, a counted loop) were never
+emitted and no executor handled them. F7c-2 removed them from the code generator, the
+executors and the encoder/decoder, and kept their values as `RESERVED_02` and `RESERVED_16`
+so the bytecode format doesn't move and the values are never reused; decoding one is
+`error.UnknownOpcode`. A regression test walks the bytecode of a set of patterns (every
+flag, lookarounds, backreferences, counted repeats) and finds neither. `pending_trail` in
+the lexer is **not** dead code: in `code_units` mode (every pattern without `u`/`v`) an escape
+above U+FFFF returns its lead surrogate and leaves the trail there (F3d). It stays.
+
+### Binary size: one procedure since F7b (the ~26 KB anomaly explained)
+
+After F7a the F5b figure (1,112,272 B, ReleaseFast `.so`, stripped) didn't reproduce: the
+same commit gave 1,138,656 B. The cause is the build target, not the code: the builds used
+`native`, which follows the host's CPU features, and the container had moved to another
+host in between (same Zig 0.16.0, same source; today's builds are deterministic). Built for
+a fixed CPU model, the F5b commit (`41e2a0b`) gives 1,113,232 B, within 1 KB of the
+original figure. Since F7b the size is measured only with `scripts/measure_binary.sh`
+(x86_64-linux, `-Dcpu=x86_64_v3`, stripped `.so`, ReleaseFast and ReleaseSmall); figures
+from before it are not comparable with each other. With it:
+
+| Commit | ReleaseFast | ReleaseSmall |
+|---|---|---|
+| `41e2a0b` (F5b closed) | 1,113,232 B | 708,104 B |
+| `4296517` (before F7a) | 1,113,232 B | 708,104 B |
+| `2c9a321` (F7a closed) | 1,121,408 B (+8,176) | 711,960 B (+3,856) |
+| `5a0b302` (F7b closed) | 1,119,168 B (-2,240) | 711,928 B (-32) |
+
+### F7b closed: performance and size
+
+Six items, one commit each, each through the full gate (test262 2980 in both encodings,
+`differential-v8` identical to `diff-F7a.json`, the internal differentials at 0):
+- **b1** one procedure for the binary size (`scripts/measure_binary.sh`, above);
+- **b2** `compile` no longer runs the no-op `Optimizer` (see its section; the in-place
+  hand-over of the writer's buffer was reverted at the close);
+- **b3** LookLinear delegates lookaheads under `i` in code-point mode (sites 7,234 ->
+  7,264, 0 differences);
+- **b4** the C API applies `ZRegexOptions.max_steps` (`Regex.limits`; see "F6a", limits);
+- **b5** the loop guard's set is `GuardSet` (see "F6a", known costs);
+- **b6** three local compile costs removed (see "F5a", compile time): -30% to -39%
+  instructions per compile on small patterns with a class or a property.
+
+**Close bench** (10 interleaved rounds of `zregex_xbench` against `1a48240`, minimum time
+per case, criterion: none worse than 10%). The first run flagged 16 of 110 metrics; one was
+real: `t1_pL` compile +119%, bisected to b2's in-place hand-over and fixed (`5a0b302`;
+callgrind hadn't shown it, the cost is in the allocator). A second run, with the fix,
+flagged 7, a set disjoint from the first run's (`t1_book_pL` short exec, `t2_book_backref`,
+`t2_lookahead` short exec, `t2_lookbehind` compile, `t0_iter_cap` short exec). Every flagged
+case of both runs executes the same instructions as the base (callgrind on the full corpus
+and on the short exec: -0.73% to +0.73%; `t2_lookbehind` compile +0.7%), so they are the
+process-to-process noise measured in F7-0, which the minimum doesn't fully remove when a
+base round happens to be fast. Improvements in the second run: compile `t0_email` -48.7%,
+`t2_book_backref` -39.8%, `t1_book_pL` -36.7%, `t1_pL` -29.8%.
+
+### F6b step 1 (B′): lookbehind of fixed length, the recursive matcher retired
+
+**What runs.** A lookbehind whose body consumes a fixed number of characters `L`
+(`hir.fixedLength`: literals, sets, assertions, lookarounds, `min == max` repeats,
+alternations of equal branches; code units without `u`/`v`, code points with them) and has
+no capture group inside runs on the explicit-stack backtracker: it steps `L` characters back
+(`Subject.decodeBefore`, which keeps a surrogate pair and WTF-8's `b+2` straight) and
+matches the body forward from there, requiring it to end where the lookbehind stands
+(`LOOKBEHIND_FIXED L`; no reverse code generation). LookLinear delegates such a body to T0's
+VM from `L` characters back. **Anything else is `error.UnsupportedFeature`** at compile time,
+after the parser's SyntaxErrors (C API: `ZREGEXP_ERROR_UNSUPPORTED = 9`; no new symbol):
+variable length (`(?<=a+)`, `(?<=a|bc)`), a capture group or a backreference inside
+(`(?<=(a))`, `(?<=\1)`), and also a variable-length lookbehind in code that never runs
+(inside a `{0}`), which the old code generator dropped. Full F6b (matching backward) lifts
+the error; it is mandatory (lookbehind is ES2018, and it is the only gap older than ES2024).
+
+**The recursive matcher is gone.** Every pattern runs on the explicit-stack backtracker;
+`recursive_matcher.zig` became `core.zig` (the state and the atom checks, without the
+recursive control flow and the 100-character window of D7). Patterns with a lookbehind now
+get RepeatMatcher steps 4 and 2.b (F7a(4)), which the recursive matcher never had.
+
+**Measured.**
+- test262: 2980 -> **2968** in UTF-16 and WTF-8, as predicted: the 12 entries that passed
+  and now fail to compile are `lookBehind/{alternations, back-references, do-not-backtrack,
+  misc, nested-lookaround, sliced-strings}.js` (sloppy and strict), every one with a
+  lookbehind of variable length or with captures (`nested-lookaround`'s first rejected one
+  is `(?<=a(?=([^a]{2})d)\w{3})`: fixed length, with a capture in an inner lookahead). The
+  30 lookbehind entries not passing are all `UnsupportedFeature`; none fails at run time.
+- Against V8 (F2c corpus, 5,580 patterns with a lookbehind, every `lastIndex`, UTF-16):
+  the 1,279 of fixed length without captures had 18 patterns with a difference, now 7 and
+  none new. The 11 whose only difference was a capture outside the lookbehind (steps 4 and
+  2.b) are fixed; the 7 left are 3 not caused by the lookbehind (`v` with `i` folding, F5c;
+  a step limit; V8 inside a pair), 3 V8 matches inside a surrogate pair (below) and 1 `v`
+  with `i` (F5c). *(E1 P3: the 7 were measured with an intermediate build during B′; the B′
+  commit `4f524d8` itself gives 6, as do v0.5.0 and v0.5.1 (`lbdiff-v8`, checked in E1).
+  The one gone is the `iv` pattern whose difference was outside the lookbehind; not E0.)*
+  No fixed-length pattern is `UnsupportedFeature`; 4,298 of the other
+  4,301 are, and the 3 that compile agree with V8. npm: the 29 fixed-length patterns agree
+  with V8 in all 3,262 runs.
+- LookLinear on vs off over the 1,415 corpus patterns with a lookbehind that compile: 1,298
+  with delegated sites (1,912), 0 differences in 298,540 runs. On the lookahead patterns:
+  4,441 -> 4,378 (63 now rejected: a variable-length lookbehind in a `{0}` the old code
+  generator dropped), 0 differences.
+- Binary (`scripts/measure_binary.sh`): ReleaseFast 1,119,168 -> 1,096,112 B (-23,056),
+  ReleaseSmall 711,928 -> 696,504 B (-15,424).
+
+### F6b (0.6.0): measurements
+
+What F6b covers and how it works are in `LIMITATIONS.md`.
+
+**Measured (UTF-16 and WTF-8 alike).**
+
+| | Before F6b (0.5.1) | F6b(1) | F6b(2) | F6b(3) = 0.6.0 |
+|---|---|---|---|---|
+| test262, entries that pass | 2968/3017 | 2972 | 2984 | **2994/3017** |
+| test262 `lookBehind/` | 6/34 | 10/34 | 22/34 | **32/34** |
+| `lbdiff-v8` "other" patterns agreeing with V8 (of 4,301) | 3 | 1,469 | 2,161 | **2,733** |
+| `lbdiff` oracle pairs compared (of 28,910) | 1,496 | 4,919 | 13,142 | 13,142 |
+| Binary ReleaseFast / ReleaseSmall (B) | 1,098,160 / 697,864 | 1,109,728 / 702,664 | 1,109,712 / 702,632 | 1,111,536 / 704,328 |
+
+- test262: the 2 `lookBehind/` entries left are `nested-lookaround` (1.x); the other
+  lookbehind entry not passing is `named-groups/lookbehind.js` (2, under `u`). The 23 that
+  run and don't pass: those 4, 4 host (JS lexer) and 15 not extractable.
+- `lbdiff-v8` (5,580 patterns of the F2c corpus, every `lastIndex`, UTF-16): the 1,279 of
+  fixed length never changed (the same 6 with a difference, none caused by the direction);
+  of the 4,301 others, the 1,568 not agreeing are all `UnsupportedFeature`: 724 under
+  `u`/`v`, 844 with a lookaround inside a backward body. No pattern ever gave a different
+  result.
+- `lbdiff` (the oracle without V8: `(?<=B)` holds at `pos` if and only if `^(?:B)$` matches
+  some slice ending there): 0 discrepancies at every step (856,356 runs at the end). Its
+  domain excludes anchors, `\b`, backreferences and lookarounds; the 15,532 pairs it still
+  leaves out as `UnsupportedFeature` are all `u`/`v` ones.
+- `differential-v8` identical to `diff-F7a.json`; pfdiff, t1diff and lldiff unchanged at
+  every step. Details of the steps: `docs/plans/E1.md`.
+
+### `v` with `i` (F7c-0): measurements
+
+The behavior is in `LIMITATIONS.md`.
+
+**Measured** (`ivdiff`: every pattern with `i` and `v` of the F2c corpus, npm and test262's
+literals that V8 accepts, 1,059; 22 fixed subjects plus the case variants of each
+pattern's literals, every `lastIndex`, UTF-16, all slots):
+
+| | Before | After |
+|---|---|---|
+| Compile | 1,026 | 221 |
+| … same result as V8 | 727 | **221** |
+| … different result, no error | **299** | **0** |
+| `UnsupportedFeature` | 33 | 838 |
+
+Of the 805 newly rejected, 551 agreed with V8 before on these subjects and 254 didn't; 45
+that differed now agree. Without `v`, or with `u` instead, nothing changes.
+
+The lookbehind differentials also hold `iv` patterns:
+- **`lbdiff-v8`:** 6 fixed-length patterns with `iv` are now `UnsupportedFeature`. One of them,
+  `(?<=[^À-Ö\p{Lu}]\p{ASCII}{0})/imv`, was one of the 6 fixed ones with a different result
+  (the `iv` one), so 5 are left. No new different result. The reference is now
+  `tests/differential/reference/lbdiff-v8-f7c0.json` (`lbdiff-v8-v051.json` archived).
+- **`lbdiff` (the oracle):** still 0 discrepancies. Its counts move, cosmetically: the `iv`
+  bodies now rejected fall under "invalid" (it compiles the body alone first) instead of B′:
+  - invalid: 16 -> 672;
+  - B′: 15,532 -> 14,904;
+  - compared: 13,142 -> 13,116.
+
+### Fixed in F2b
+
+- **`v` set operation whose last operand is a bracketed class failed under
+  `unicode = true`** *(found in F2b, introduced in F1b(2) `3c0470a`, fixed before F2c)*:
+
+  ```zig
+  Regex.compileWithOptions(a, "[[a]&&[a]]", .{ .v = true, .unicode = true });     // was error.UnmatchedBracket
+  Regex.compileWithOptions(a, "[\\p{L}&&[a]]", .{ .v = true, .unicode = true }); // was error.UnmatchedBracket
+  Regex.compileWithOptions(a, "[[a]--\\p{Lu}]", .{ .v = true, .unicode = true }); // always worked
+  ```
+
+  After a nested `[...]` operand, the parser fetched the next token outside a class
+  and only then rewound and re-read it in class mode. Since F1b(2), under `unicode` a
+  `]` outside a class is a SyntaxError (D2), so when that token was the outer `]` the
+  lexer failed before the rewind. Now `consumeClassClose` fetches that lookahead
+  token with `unicode_mode` off for a nested class only (the same treatment the `[`
+  already had); a top-level class's next token is still read strictly, so `[a]]` and
+  `[[a]&&[a]]]` stay errors under `u`. Only the Zig API could reach the bug (the C
+  API, the test262 harness and the differential pass `v` without `unicode`).
+  Regression test in `tests/syntax_tests.zig`.
+
+---
+
+### As built in Phases 4-5: `u` (Unicode mode) flag — partial; `v` (Unicode Sets mode) flag — partial
+
+```zig
+regex.Regex.compileWithOptions(allocator, "\\q", .{ .unicode = true }); // error.InvalidEscape
+regex.Regex.compile(allocator, "\\q"); // matches literal "q" -- unicode defaults to false
+regex.Regex.compileWithOptions(allocator, "[\\p{L}--[a]--[b]]", .{ .v = true }); // error.UnsupportedFeature (since E0)
+```
+
+`CompileOptions.unicode` *(added after Phase 4)* exists now. This engine is already
+unconditionally code-point-aware for `.`/negated classes/character-class ranges/
+`\p{...}` (see Phase 1/3 above), and `\p{...}` inside a class (which `u`-mode patterns
+commonly rely on, e.g. `[\p{L}\p{N}_]`) is supported unconditionally too (see above) —
+so most of what `u` mode toggles in real JS was already the only behavior this engine
+has, flag or not. What the flag actually does: reject an escaped character that isn't a
+recognized escape sequence (`d`/`w`/`s`/`p`/`x`/`u`/`c`/`k`/digits/...) or a
+`SyntaxCharacter` (`^ $ \ . * + ? ( ) [ ] { } |`, plus `/`, plus `-` inside a class) with
+`error.InvalidEscape` instead of the Annex-B-style literal-character fallback this
+engine uses everywhere by default (`unicode` defaults to `false`, so nothing about
+existing patterns' behavior changes unless a caller opts in) — e.g. `\q`, `\-` outside a
+class, `\B` inside a class, and `\0` followed by a digit (legacy octal) are all
+`error.InvalidEscape` under `unicode = true`. **Found and fixed a real, independent bug
+while building this**: `\v` (vertical tab) and `\f` (form feed) were never recognized as
+standalone escapes at all — falling through to literal `'v'`/`'f'` even *without* the
+new flag, unlike `\n`/`\r`/`\t` right next to them in the same `switch`. Fixed
+unconditionally (not gated behind `unicode`), since it was simply wrong before, and
+needed anyway so `\v`/`\f` wouldn't become spuriously ungrammatical under the new
+strict check. **Since F1a** `unicode = true` also rejects malformed `\x`/`\u`/`\c`/`\k`/
+`\p`, `\u{...}` above U+10FFFF, a `\N` past the pattern's last capturing group, a
+quantified lookahead, and a class escape used as a range endpoint (`[\d-a]`); see
+"Behavior changes in F1" below.
+
+`CompileOptions.v` *(added later in the session)* exists too, covering exactly one
+piece of real `v`-mode syntax: character-class set operations, difference (`[A--B]`,
+matches `A` but not `B`) and intersection (`[A&&B]`, matches both) — **but only a single
+operation per class, no chaining (`[A--B--C]` is `error.UnsupportedFeature` since E0)
+and no nesting beyond one bracket level**. Each operand (`A`/`B`) is either an ordinary
+class body (`\p{L}`, `a-z\d`, a bare `\p{...}`/`\P{...}` atom, ...) or a nested `[...]`
+class, which may itself be `[^...]`-negated (`[[a-z]&&[^x]]`). Since F2b the operation
+is range-set arithmetic at compile time (`src/ir/charset.zig`), matched with one
+`CHAR_SET` lookup, with no cap on operand size; before F2b a `CHAR_CLASS_SET_OP` opcode
+evaluated both operands at match time, since the fixed range tables couldn't hold an
+operand like `\p{L}` (~700 ranges). `--`/`&&`/`[` (for
+a nested operand) only tokenize specially inside a class when `v_mode` is on (default
+`false`), so existing patterns using literal `-`/`&`/`[` inside a class are unaffected.
+**Four real bugs found and fixed while building this** (all in `src/parser/parser.zig`,
+none in the matcher, which worked correctly from the start once the parser produced a
+correct AST):
+
+1. A double-free: both the caller (`parseCharClass`, for a nested operand1) and the
+   callee (`finishClassSetOp`, which takes ownership of `left`) registered an `errdefer`
+   for the same node — if `finishClassSetOp` failed after its own cleanup ran, the
+   caller's stale `errdefer` fired again on the same freed pointer. Fixed by making
+   ownership-transfer points explicit: a `_owned` boolean flag gates each `errdefer` off
+   the moment ownership actually passes elsewhere (flipped *after* a fallible transfer
+   like `appendChild` succeeds, not before, so a failed transfer still leaves exactly
+   one owner responsible for cleanup).
+2. A lexer-mode timing bug: recursing into `parseCharClass` for a nested operand (e.g.
+   the `[^x]` in `[[a-z]&&[^x]]`) happened while the lexer was still in class mode from
+   the *outer* class — but `parseCharClass`'s own `^`-negation lookahead assumes it's
+   entered from *normal* mode (the same tradeoff its own doc comment already describes
+   for the top-level case). Entering from class mode instead meant `^` never got
+   recognized as `.line_start`, silently losing the nested operand's negation. Fixed by
+   resetting `in_char_class = false` before every such recursive call, matching how the
+   top-level entry point already always starts that way.
+3. A related mode bug on the way *out*: after a nested operand's `parseCharClass` call
+   returns, whatever follows its `]` (an operator, for chaining, or the outer class's
+   own `]`) was fetched during that nested call's own cleanup — but in *normal* mode
+   again, for the same underlying reason as bug 2. Fixed with the same
+   rewind-to-token-start-and-re-fetch-in-class-mode trick `parseCharClass` already used
+   for its own top-level `^` lookahead.
+4. A double-counted outer negation: a *flat* (non-bracketed) operand1's `char_class`
+   node was reusing the *outer* class's `[^...]` flag as if it were operand1's own
+   negation (correct for an ordinary, non-set-op class, where that's the only
+   negation there is) — but for a set operation, the outer `^` belongs solely to the
+   whole operation's result (`[^\p{L}--[aeiou]]`'s `^` negates "letters that aren't
+   vowels" as a whole, not `\p{L}` by itself). Left uncorrected, `[^\p{L}--[aeiou]]`
+   silently computed `NOT(letter) AND NOT(vowel)`, negated again, instead of
+   `NOT(letter AND NOT(vowel))`. Fixed by clearing the flat operand's own `.inverted`
+   back to `false` right before handing it to `finishClassSetOp`.
+
+**Not implemented in `v` mode**: chaining/deeper nesting (by design, see above); `\q{...}`
+multi-string literals; `v`'s own additional reserved-punctuator restrictions inside a
+class (beyond what `u`-mode strictness already covers, itself only partial); and full
+`u`-mode strictness under `v` (since `v` implies all of `u`'s rules, and Phase 5b's
+strictness is itself only the unrecognized-escape slice — see above).

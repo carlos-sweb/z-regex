@@ -8,6 +8,11 @@
 // one process per case, Rust regex, PCRE2 per case, zig-regex without its
 // findAll pass), then the adversarial runs, each in its own process with a
 // 5 s timeout. The engines' order rotates from round to round.
+//
+// A base version of z-regex (another build of zregex_xbench, e.g. the last
+// published one) runs in the same rounds when
+// zig-out/xbench/bin/zregex_base_xbench exists: engine `zregex_base`, the
+// same cases and adversarial runs, so two versions compare on one machine.
 import fs from 'node:fs';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
@@ -43,6 +48,9 @@ const engines = {
   }),
   zigregex: () => run(`${X}/zigregex/zigregex_xbench`, [corpus, 'bench/compare/cases.json', '--no-findall']),
 };
+const BASE = `${X}/bin/zregex_base_xbench`;
+const relabel = (out) => ({ ...out, engine: 'zregex_base', cases: out.cases.map((c) => ({ ...c, engine: 'zregex_base' })) });
+if (fs.existsSync(BASE)) engines.zregex_base = () => relabel(run(BASE, [corpus]));
 
 function adversarial() {
   const out = [];
@@ -50,9 +58,10 @@ function adversarial() {
     for (const n of c.adversarial) {
       const one = (engine, cmd, args) => {
         const r = run(cmd, args, TIMEOUT_MS);
-        out.push(r.timeout ? { engine, id: c.id, n, ms: r.ms, outcome: `timeout (> ${TIMEOUT_MS / 1000} s, killed)` } : r);
+        out.push(r.timeout ? { engine, id: c.id, n, ms: r.ms, outcome: `timeout (> ${TIMEOUT_MS / 1000} s, killed)` } : { ...r, engine });
       };
       one('zregex', 'zig-out/bin/zregex_xbench', [corpus, '--adv', c.id, String(n)]);
+      if (fs.existsSync(BASE)) one('zregex_base', BASE, [corpus, '--adv', c.id, String(n)]);
       one('v8', 'node', ['bench/compare/v8_xbench.mjs', corpus, '--adv', c.id, String(n)]);
       one('pcre2_jit', `${X}/bin/pcre2_xbench`, ['adv', c.id, c.pattern, String(n), 'jit', c.adv_suffix ?? 'c']);
       one('pcre2_interp', `${X}/bin/pcre2_xbench`, ['adv', c.id, c.pattern, String(n), 'interp', c.adv_suffix ?? 'c']);

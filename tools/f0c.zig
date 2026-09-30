@@ -11,7 +11,7 @@
 
 const std = @import("std");
 const zregex = @import("zregex");
-const analysis = zregex.analysis;
+const analysis = zregex.internal.analysis;
 
 const Class = enum { regular, unicode, expert, unclassifiable, invalid_flags };
 
@@ -46,7 +46,7 @@ pub fn main(init: std.process.Init) !void {
         const pattern = try std.fmt.hexToBytes(buf.items, hex);
         const class: Class = blk: {
             const flags = analysis.Flags.parse(flags_text) catch break :blk .invalid_flags;
-            const a = try zregex.analyze(gpa, pattern, flags);
+            const a = try zregex.internal.analyze(gpa, pattern, flags);
             const tier = a.min_tier orelse break :blk .unclassifiable;
             if (tier != .regular) {
                 var it = a.reasons().iterator();

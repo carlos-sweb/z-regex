@@ -772,7 +772,22 @@ pub const Parser = struct {
     /// wrong mode (e.g. `*` would have come back as `.star` instead of a
     /// literal char) and must be re-fetched: rewind the lexer to that
     /// token's start position, switch modes, then advance again.
+    ///
+    /// Under `v`, `--` and `&&` at one level of a class are a SyntaxError
+    /// whatever the operands: a class whose parse stops at something not
+    /// implemented (a bare operand, a chain) is `MixedClassSetOperators`
+    /// when it mixes them (F7c-4b), not `UnsupportedFeature`.
     fn parseCharClass(self: *Self) ParseError!*Node {
+        const body = self.current_token.position + 1; // after the `[`
+        return self.parseCharClassBody() catch |err| {
+            if (err == error.UnsupportedFeature and self.lexer.v_mode and
+                classMixesSetOperators(self.lexer.pattern, body))
+                return error.MixedClassSetOperators;
+            return err;
+        };
+    }
+
+    fn parseCharClassBody(self: *Self) ParseError!*Node {
         try self.enterNesting();
         defer self.nesting_depth -= 1;
 
@@ -864,9 +879,16 @@ pub const Parser = struct {
         errdefer if (class_owned) class.deinit();
         class.inverted = inverted;
 
+        // What the pattern wrote, one per loop turn (a shorthand is one
+        // even when it splices several children), and whether one was a
+        // range: an operand of `--`/`&&` is a single character, `\p{…}` or
+        // shorthand, never a list or a range (F7c-4b).
+        var items: usize = 0;
+        var has_range = false;
         while (!self.check(.rbracket) and !self.check(.eof) and
             !self.check(.class_minus_minus) and !self.check(.class_and_and))
         {
+            items += 1;
             if (self.isShorthandClassToken()) {
                 // A shorthand class as a class member (e.g. `[a-c\d]`):
                 // splice its members directly into the enclosing class. This
@@ -914,6 +936,7 @@ pub const Parser = struct {
                         const range = try Node.createCharRange(self.allocator, first_char, last_char);
                         errdefer range.deinit();
                         try class.appendChild(range);
+                        has_range = true;
                     } else {
                         // Hyphen before ']' (or, in Annex B, before a class
                         // escape like `\d`): literal. Under `u` a class escape
@@ -941,6 +964,7 @@ pub const Parser = struct {
                         const range = try Node.createCharRange(self.allocator, '-', last_char);
                         errdefer range.deinit();
                         try class.appendChild(range);
+                        has_range = true;
                         continue;
                     }
                     if (self.lexer.unicode_mode and !self.check(.rbracket)) return error.InvalidCharRange;
@@ -958,8 +982,10 @@ pub const Parser = struct {
 
         if (self.check(.class_minus_minus) or self.check(.class_and_and)) {
             // `[--a]`: an operator with no left operand is a SyntaxError
-            // (the class's own errdefer frees it).
-            if (class.children.items.len == 0) return error.InvalidClassSetOperand;
+            // (the class's own errdefer frees it), and so is a list or a
+            // range as the left operand (`[ab&&[c]]`, `[a-z--b]`): V8 and
+            // ECMA-262 take a range as an operand only nested, `[[a-z]--b]`.
+            if (items != 1 or has_range) return error.InvalidClassSetOperand;
             // `class.inverted` was set to the *outer* `^` above (correct
             // for an ordinary class), but a flat operand1 (as opposed to a
             // nested `[...]` operand1 with its own independent `^`) is
@@ -1034,7 +1060,9 @@ pub const Parser = struct {
 
         // Exactly one operation. A chain of the same operator
         // (`[A--B--C]`) is valid `v` syntax that isn't implemented (F5c);
-        // mixing `--` and `&&` in one class is a SyntaxError.
+        // mixing `--` and `&&` in one class is a SyntaxError. The mix after
+        // an operand that stops the parse first (a bare `b` in `[a--b&&c]`,
+        // or a chain) is caught by `parseCharClass`.
         if (self.check(.class_minus_minus) or self.check(.class_and_and)) {
             const same = self.check(.class_minus_minus) == (op == .difference);
             return if (same) error.UnsupportedFeature else error.MixedClassSetOperators;
@@ -1590,6 +1618,70 @@ fn parseNestedOnStack(open: []const u8, depth: usize, limit: u32, stack_size: us
     const t = try std.Thread.spawn(.{ .stack_size = stack_size }, Ctx.run, .{&ctx});
     t.join();
     return ctx.result;
+}
+
+/// Whether the class whose body starts at `body` (the byte after its `[`)
+/// has both `--` and `&&` at its own level, read as the `v` lexer reads
+/// them (`nextInClass`): a pair takes 2 bytes, `\` escapes the next
+/// character, `\p{…}`/`\P{…}`/`\q{…}`/`\u{…}` are skipped whole, and a
+/// nested `[…]` is another level. Only asked when the class's parse already
+/// failed, so the pattern is not required to be well formed.
+fn classMixesSetOperators(pattern: []const u8, body: usize) bool {
+    var minus = false;
+    var and_and = false;
+    var depth: usize = 0;
+    var i = body;
+    while (i < pattern.len) {
+        switch (pattern[i]) {
+            '\\' => {
+                i += 2;
+                if (i < pattern.len and pattern[i] == '{' and
+                    std.mem.indexOfScalar(u8, "pPqu", pattern[i - 1]) != null)
+                {
+                    i = if (std.mem.indexOfScalarPos(u8, pattern, i, '}')) |end| end + 1 else pattern.len;
+                }
+                continue;
+            },
+            '[' => depth += 1,
+            ']' => {
+                if (depth == 0) break;
+                depth -= 1;
+            },
+            '-', '&' => |c| if (i + 1 < pattern.len and pattern[i + 1] == c) {
+                if (depth == 0) {
+                    if (c == '-') minus = true else and_and = true;
+                }
+                i += 2;
+                continue;
+            },
+            else => {},
+        }
+        i += 1;
+    }
+    return minus and and_and;
+}
+
+test "classMixesSetOperators reads one level of a v class (F7c-4b)" {
+    const T = struct {
+        fn mixes(class: []const u8) bool {
+            return classMixesSetOperators(class, 1);
+        }
+    };
+    try std.testing.expect(T.mixes("[a--b&&c]"));
+    try std.testing.expect(T.mixes("[a&&b--c]"));
+    try std.testing.expect(T.mixes("[\\w&&\\d--x]"));
+    try std.testing.expect(T.mixes("[[a]--[b]--[c]&&[d]]"));
+    try std.testing.expect(!T.mixes("[a--b--c]"));
+    try std.testing.expect(!T.mixes("[[a]&&[b]]"));
+    // Another level, or escaped, is not this class's operator.
+    try std.testing.expect(!T.mixes("[[a--b]&&c]"));
+    try std.testing.expect(!T.mixes("[a\\-\\-b&&c]"));
+    try std.testing.expect(!T.mixes("[\\p{L}&&\\q{a--b}]"));
+    // The class ends at its `]`: what follows is outside it.
+    try std.testing.expect(!T.mixes("[a--b][c&&d]"));
+    // A pattern cut short doesn't read past its end.
+    try std.testing.expect(!T.mixes("[a--b\\"));
+    try std.testing.expect(!T.mixes("[a&&\\p{"));
 }
 
 test "Parser: nesting limit is enforced for groups and lookarounds (any build mode)" {

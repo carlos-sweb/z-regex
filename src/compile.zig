@@ -1,13 +1,12 @@
 //! Main compiler API
 //!
 //! This module provides the high-level compiler interface,
-//! orchestrating the lexer, parser, code generator, and optimizer.
+//! orchestrating the lexer, parser and code generator.
 
 const std = @import("std");
 const Allocator = std.mem.Allocator;
 
 const generator_mod = @import("tier2").generator;
-const optimizer_mod = @import("tier2").optimizer;
 const bytecode_writer = @import("tier2").writer;
 const format_mod = @import("tier2").format;
 const charset_mod = @import("ir").charset;
@@ -19,7 +18,6 @@ const Tier = classify.Tier;
 const build_options = @import("build_options");
 
 const CodeGenerator = generator_mod.CodeGenerator;
-const OptLevel = optimizer_mod.OptLevel;
 const BytecodeWriter = bytecode_writer.BytecodeWriter;
 pub const NamedGroup = format_mod.NamedGroup;
 pub const CharSet = charset_mod.CharSet;
@@ -32,11 +30,6 @@ const hir = @import("ir").hir;
 
 /// Compiler options
 pub const CompileOptions = struct {
-    /// Optimization level. No effect: the `Optimizer` never optimized, and
-    /// since F7b `compile` doesn't run it (kept for API compatibility until
-    /// the 1.0 API review, F7c).
-    opt_level: OptLevel = .basic,
-
     /// Case insensitive matching
     case_insensitive: bool = false,
 
@@ -51,35 +44,25 @@ pub const CompileOptions = struct {
     /// affect bytecode generation — read by `Regex.find`/`findAll`.
     sticky: bool = false,
 
-    /// Unicode mode (JS `u` flag): this engine is already unconditionally
-    /// code-point-aware (see Phase 1 in the compatibility plan) and already
-    /// supports `\p{...}`/`\P{...}` unconditionally, so this flag's only
-    /// current effect is stricter escape-sequence syntax validation, read by
-    /// the lexer (`Lexer.unicode_mode`, set from this field by `lower.Frontend`):
-    /// a backslash followed by a character that isn't a recognized escape or
-    /// syntax character (e.g. `\q`) is `error.InvalidEscape` instead of
-    /// falling back to a literal character (Annex-B-style leniency, this
-    /// engine's default everywhere else). See `docs/KNOWN_LIMITATIONS.md`
-    /// for what real `u`-mode strictness this does *not* yet cover (e.g.
-    /// malformed `\x`/`\u`/`\c`/`\k`/`\p` still fall back leniently even
-    /// under this flag).
+    /// Unicode mode (JS `u` flag): a character is a code point (a surrogate
+    /// pair is one), and the syntax is ECMA-262's strict one, without Annex B:
+    /// an unknown escape (`\q`), a malformed `\x`, `\u`, `\c`, `\k` or `\p`, a
+    /// `\N` past the last group, a lone `]` or `{`, a quantified lookahead
+    /// and a class escape as a range endpoint are SyntaxErrors (since F1a/F1b).
+    /// Read by the lexer (`Lexer.unicode_mode`, set by `lower.Frontend`).
+    /// What `u` doesn't implement: `docs/LIMITATIONS.md`.
     unicode: bool = false,
 
-    /// Unicode Sets mode (JS `v` flag), partial: inside a character class,
-    /// enables exactly one (non-chained, e.g. `A--B`, not `A--B--C`;
-    /// non-nested beyond one bracket level) class-set operation, `--`
-    /// (difference: matches `A` but not `B`) or `&&` (intersection: matches
-    /// both), where each operand is either an ordinary class body
-    /// (`\p{L}`, `a-z\d`, ...) or a nested `[...]` class (which may itself
-    /// be `[^...]`-negated). Read by the lexer (`Lexer.v_mode`, set by `lower.Frontend` from
-    /// this field) to recognize `--`/`&&`/`[` as their own
-    /// tokens inside a class instead of literal characters -- outside a
-    /// class, or with this flag off, they're unaffected. Does **not**
-    /// (yet) turn on full `u`-mode strictness the way real `v` implies, nor
-    /// `\q{...}` multi-string literals or operator chaining/deep nesting --
-    /// see `docs/KNOWN_LIMITATIONS.md` for the authoritative list of what
-    /// this flag does and doesn't cover. Together with `unicode` it is
-    /// `error.IncompatibleFlags`, a SyntaxError in ECMA-262.
+    /// Unicode Sets mode (JS `v` flag): `u`'s strict syntax (since E0) plus
+    /// class set operations, one per class: `[A--B]` (difference) or `[A&&B]`
+    /// (intersection), each operand one character, shorthand, `\p{...}` or
+    /// nested class. Mixing `--` and `&&`, or a list or range as an operand,
+    /// is a SyntaxError (F7c-4b); a chain of one operator, a bare right
+    /// operand, a union with a nested class, `\q{...}` and properties of
+    /// strings are `error.UnsupportedFeature`. Read by the lexer
+    /// (`Lexer.v_mode`), where `--`, `&&` and `[` inside a class become their
+    /// own tokens. Together with `unicode` it is `error.IncompatibleFlags`, a
+    /// SyntaxError in ECMA-262. The full list: `docs/LIMITATIONS.md`.
     v: bool = false,
 
     /// Opt-in extension, not ECMA-262 (D8, F1b): read `*+`, `++` and `?+` as
@@ -88,7 +71,11 @@ pub const CompileOptions = struct {
     /// always on.
     possessive: bool = false,
 
-    /// Tests and diagnostics only (plan §4.2): which executor runs the
+    // Diagnostic fields: tests and bench only, outside the stable API (F7c-3):
+    // `force_tier`, `tier_diagnostic`, `t0_prefilters`, `t2_look_linear`
+    // may change or go away in any release.
+
+    /// Diagnostic, tests and bench only (plan §4.2): which executor runs the
     /// pattern. Null: the dispatcher decides (T0's VM when the pattern is
     /// eligible, the backtracker otherwise). `.regular`: T0's VM, or
     /// `error.TierUnavailable` when the pattern can't run on it. `.expert`:
@@ -97,15 +84,16 @@ pub const CompileOptions = struct {
     /// `error.TierUnavailable` otherwise.
     force_tier: ?Tier = null,
 
-    /// Where `compile` writes why it failed with `error.TierUnavailable`.
+    /// Diagnostic, tests and bench only: where `compile` writes why it
+    /// failed with `error.TierUnavailable` (`zregex.internal.TierUnavailable`).
     tier_diagnostic: ?*TierUnavailable = null,
 
-    /// Only for tests and the bench: T0's prefilters and fast paths
+    /// Diagnostic, tests and bench only: T0's prefilters and fast paths
     /// (`tier0/prefilter.zig`). Off, the VM runs plain, to measure it and to
     /// compare the two.
     t0_prefilters: bool = true,
 
-    /// Only for tests and the bench: LookLinear (F6a), the backtracker
+    /// Diagnostic, tests and bench only: LookLinear (F6a), the backtracker
     /// handing lookaheads without captures to T0's VM. Off, it evaluates
     /// them itself, to measure it and to compare the two.
     t2_look_linear: bool = true,
@@ -266,8 +254,9 @@ fn generate(allocator: Allocator, fe: *const lower_mod.Frontend, options: Compil
     generator.empty_check = true;
     try generator.generate(fe.root);
 
-    // Phase 5 was a no-op `Optimizer` that copied the bytecode (F7b): the
-    // copy is now the writer's own (`takeBytecode`).
+    // The bytecode is the writer's own (`takeBytecode`); the no-op
+    // `Optimizer` of phase 5 is gone (F7b stopped running it, F7c-2 removed
+    // it).
     const bytecode = try writer.takeBytecode();
     errdefer allocator.free(bytecode);
 
@@ -429,19 +418,6 @@ test "compile: anchors" {
 
 test "compile: complex pattern" {
     const result = try compileSimple(std.testing.allocator, "(a|b)+c*");
-    defer result.deinit();
-
-    try std.testing.expect(result.bytecode.len > 0);
-}
-
-test "compile: with options" {
-    const options = CompileOptions{
-        .opt_level = .aggressive,
-        .case_insensitive = true,
-        .multiline = true,
-    };
-
-    const result = try compile(std.testing.allocator, "test", options);
     defer result.deinit();
 
     try std.testing.expect(result.bytecode.len > 0);

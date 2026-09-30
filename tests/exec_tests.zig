@@ -5,7 +5,7 @@
 const std = @import("std");
 const zregex = @import("zregex");
 const testing = std.testing;
-const subject = zregex.subject;
+const subject = zregex.internal.subject;
 const Subject = zregex.Subject;
 
 fn execBoth(re: zregex.Regex, s8: []const u8, index8: usize) !void {
@@ -82,9 +82,9 @@ test "compile options reach CompileResult.mode (F3c)" {
         .{ .opts = .{ .v = true }, .mode = .code_point },
     };
     // `u` and `v` together are a SyntaxError (F4a(4) prep).
-    try testing.expectError(error.IncompatibleFlags, zregex.compile(testing.allocator, "a", .{ .unicode = true, .v = true }));
+    try testing.expectError(error.IncompatibleFlags, zregex.internal.compile(testing.allocator, "a", .{ .unicode = true, .v = true }));
     for (cases) |c| {
-        const r = try zregex.compile(testing.allocator, "a", c.opts);
+        const r = try zregex.internal.compile(testing.allocator, "a", c.opts);
         defer r.deinit();
         try testing.expectEqual(c.mode, r.mode);
         var re = try zregex.Regex.compileWithOptions(testing.allocator, "a", c.opts);
@@ -194,7 +194,7 @@ test "execAt with a warm scratch doesn't allocate (the bench's cases)" {
     };
     // Each case on the executor the dispatcher picks and on the backtracker
     // (since F4a the T0 cases route to the VM; the backtracker keeps its gate).
-    for (cases) |c| for ([_]?zregex.analysis.Tier{ null, .expert }) |force| {
+    for (cases) |c| for ([_]?zregex.internal.analysis.Tier{ null, .expert }) |force| {
         var opts = c.opts;
         opts.force_tier = force;
         var re = try zregex.Regex.compileWithOptions(testing.allocator, c.pattern, opts);
@@ -262,7 +262,7 @@ test "MatchIterator: the same matches and groups as findAll" {
         .{ .pattern = "a", .opts = .{ .sticky = true }, .input = "baa" },
         .{ .pattern = "x", .input = "" },
     };
-    for (cases) |c| for ([_]?zregex.analysis.Tier{ null, .expert }) |force| {
+    for (cases) |c| for ([_]?zregex.internal.analysis.Tier{ null, .expert }) |force| {
         var opts = c.opts;
         opts.force_tier = force;
         var re = try zregex.Regex.compileWithOptions(testing.allocator, c.pattern, opts);

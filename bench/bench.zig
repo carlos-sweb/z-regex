@@ -606,7 +606,7 @@ pub fn main(init: std.process.Init) !void {
     for (compiles) |r| try w.print("| {s} | {s} | {d:.2} | {d:.2} | {d:.2} |\n", .{ r.name, r.engine, r.us, r.expert_us, r.us / r.expert_us });
     // F4b: executions where the tagged VM's two passes disagreed (a VM bug,
     // answered by the backtracker in unsafe builds); must be 0.
-    const fallbacks = zregex.two_pass_fallbacks.load(.monotonic);
+    const fallbacks = zregex.internal.two_pass_fallbacks.load(.monotonic);
     try w.print("\nTagged VM, D5 two-pass fallbacks to the backtracker (must be 0): {d}\n", .{fallbacks});
     try std.Io.File.stdout().writeStreamingAll(io, buf.written());
 

@@ -459,10 +459,10 @@ test "v + u: a set operation whose last operand is a bracketed class" {
 
 /// Parses `pattern` with the lexer in `unicode_mode` and `v_mode` together.
 fn parseUnicodeSets(pattern: []const u8, accepted: bool) !void {
-    var lexer = zregex.Lexer.init(pattern);
+    var lexer = zregex.internal.Lexer.init(pattern);
     lexer.unicode_mode = true;
     lexer.v_mode = true;
-    var parser = try zregex.Parser.init(testing.allocator, &lexer);
+    var parser = try zregex.internal.Parser.init(testing.allocator, &lexer);
     defer parser.deinit();
     if (parser.parse()) |ast| {
         ast.deinit();

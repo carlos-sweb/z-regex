@@ -18,8 +18,11 @@ An ECMA-262 regular expression engine in Zig, independent of the JavaScript engi
   `Symbol.replace` stay in the host.
 - Engine-agnostic: no dependency on a JS engine's values, objects or garbage collector.
 - A convenience facade for plain Zig use: `find`, `findAll`, `test_`, `replace`,
-  `replaceAll`, and `Regex.iterator` (every match without allocating). A C ABI is exported (`src/c_api.zig`, `zig build shared`) for the project's
-  own FFI tooling; there are no maintained C headers.
+  `replaceAll`, and `Regex.iterator` (every match without allocating).
+- A C ABI (`src/c_api.zig`, `zig build shared`): 40 `zregex_*` symbols, stable for FFI
+  consumers such as the test262 harness ([docs/API.md](docs/API.md)). It is not a
+  documented public C API: there is no C header, and callers declare the functions they use
+  from `src/c_api.zig`.
 
 ## Status
 
@@ -48,14 +51,15 @@ An ECMA-262 regular expression engine in Zig, independent of the JavaScript engi
 | Alternation, prefilters, fast paths | T0 | OK |
 | `u`, `\p{…}` | T1 | OK (T0's linear VM, F5a) |
 | Unicode case folding under `i` (with and without `u`) | T1 | OK (T0's linear VM, F5b) |
-| `v`, `\q{…}`, case folding under `v` | T1 | F5c (runs on the backtracker) |
+| `v`, `\q{…}` | T1 | F5c (runs on the backtracker) |
+| Case folding under `v` (`iv`) | T1 | Literals and classes as `iu` (F7c-0); properties, negated foldable classes and set operations on open operands: `error.UnsupportedFeature` |
 | Backreferences | T2 | OK (backtracker) |
 | Lookahead | T2 | OK (backtracker) |
 | Lookbehind: fixed length without captures (any mode), or variable length, captures and backreferences inside (no `u`/`v`) | T2 | OK (backtracker; backward atoms since v0.6.0, F6b) |
 | Lookbehind with a lookaround inside a backward body, or matched backward under `u`/`v` | T2 | `error.UnsupportedFeature` (lookaround inside: 1.x) |
 
 "OK" means it works and passes the tests. It does **not** mean optimized. Which executor runs a
-pattern is decided at compile time from the pattern (`zregex.analyze`); the results are the
+pattern is decided at compile time from the pattern (`zregex.internal.analyze`); the results are the
 same whichever runs it.
 
 ## Quick start
@@ -63,7 +67,7 @@ same whichever runs it.
 With Zig 0.16. Add the dependency (this writes the hash into `build.zig.zon`):
 
 ```sh
-zig fetch --save https://github.com/carlos-sweb/z-regex/archive/refs/tags/v0.6.0.tar.gz
+zig fetch --save https://github.com/carlos-sweb/z-regex/archive/refs/tags/v0.7.0.tar.gz
 ```
 
 In `build.zig`:
@@ -182,6 +186,20 @@ const found = try re.execAt(.{ .wtf8 = "say\nHELLO" }, 0, &scratch, &out, limits
 
 These examples are compiled and run against the library (`zig build`, Zig 0.16).
 
+## API stability
+
+The root of the `zregex` module and the C API are the stable API; the contract is
+[docs/API.md](docs/API.md): the 19 stable declarations, the errors and their C codes, what
+is a breaking change and how a symbol is deprecated.
+
+- **Not covered:** `zregex.internal` (the engine's pieces, for this repository's tests,
+  tools and bench) and the diagnostic fields of `CompileOptions` (`force_tier`,
+  `tier_diagnostic`, `t0_prefilters`, `t2_look_linear`). They can change in any release.
+- **The error rule (the freeze):** valid syntax that zregex doesn't implement is
+  `error.UnsupportedFeature` (C: `ZREGEXP_ERROR_UNSUPPORTED`, 9), never a wrong result. A
+  later release only removes such cases; it never adds an error to `RegexError` or
+  `ExecError`.
+
 ## Performance
 
 T0 runs in O(n·m), without ReDoS. See [docs/BENCHMARKS.md](docs/BENCHMARKS.md) for numbers
@@ -214,12 +232,13 @@ against V8, Rust regex, PCRE2 and zig-regex.
 ## Architecture
 
 - **Three tiers:** T0 (linear VMs), T1 (Unicode, F5), T2 (backtracker). A pattern's tier comes
-  from `zregex.analyze`.
+  from `zregex.internal.analyze`.
 - **One parser, one HIR, several executors:** every executor runs the same HIR, so a pattern
   means the same thing wherever it runs.
 - **Layers as build modules:** the table in `build.zig` says which module may import which
   (`tier0` never sees Unicode data or the backtracker); `zig build check-layers` enforces it.
-- Design and phases: [docs/REGEX_TIERS_PLAN.md](docs/REGEX_TIERS_PLAN.md).
+- How it works: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md). Design and phases:
+  [docs/REGEX_TIERS_PLAN.md](docs/REGEX_TIERS_PLAN.md).
 
 ## Building and testing
 
@@ -258,13 +277,15 @@ The cross-engine benchmark: `bench/compare/prepare.sh`, then `node bench/compare
   `ZREGEXP_ERROR_UNSUPPORTED`), never a wrong result: a lookbehind matched backward (variable
   length, captures or backreferences inside) under `u`/`v` or with a lookaround inside,
   and under `v` `\q{…}`, chained operations, a bare character as a set operand, a
-  union with a nested class, properties of strings. The table: KNOWN_LIMITATIONS, "E0".
+  union with a nested class, properties of strings. The table: [docs/LIMITATIONS.md](docs/LIMITATIONS.md).
 - **RegExp modifiers (ES2025)**, `(?i:…)`, `(?-m:…)`: not implemented, pending until further
   notice; `(?i:a)` is `error.UnsupportedFeature`.
 - Patterns with a raw, non-UTF-8 byte (WTF-8 only) stay on the backtracker, as does a tagged
   program over the slot bound.
 
-The full list, with measurements: [docs/KNOWN_LIMITATIONS.md](docs/KNOWN_LIMITATIONS.md).
+The full list: [docs/LIMITATIONS.md](docs/LIMITATIONS.md); how each phase got here, with its
+measurements: [docs/HISTORY.md](docs/HISTORY.md). How the engine works:
+[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
 
 ## Roadmap
 
@@ -280,9 +301,13 @@ The full list, with measurements: [docs/KNOWN_LIMITATIONS.md](docs/KNOWN_LIMITAT
 - **v0.6.0 (E1, F6b):** lookbehind matched backward outside `u`/`v`: variable length,
   captures and backreferences inside; test262 2994/3017
   ([release notes](docs/RELEASE_NOTES_v0.6.0.md)).
+- **v0.7.0 (F7c): the API freeze.** The stable API and its contract
+  ([docs/API.md](docs/API.md)), `zregex.internal`, honest errors for `v` with `i` and for
+  invalid `v` set operations, C error codes, documentation and benchmarks re-measured
+  ([release notes](docs/RELEASE_NOTES_v0.7.0.md)).
 - **To 1.0** ([docs/plans/ROADMAP_1.0.md](docs/plans/ROADMAP_1.0.md)): E0 (v0.5.1) → E1, full
-  F6b (v0.6.0) → E3, F7c: API freeze and documentation (v1.0.0). RegExp modifiers: pending
-  until further notice.
+  F6b (v0.6.0) → F7c: API freeze and documentation (v0.7.0, done) → 1–3 months of
+  production use → v1.0.0 with the same API. RegExp modifiers: pending until further notice.
 - **F5, T1 (Unicode):** F5a done (`u` and `\p{…}` on the VM, every UCD property name);
   F5b done (full case folding under `i`); F5c (full `v`) pending.
 - **F6a, T2 without lookbehind: done** (explicit-stack backtracker, capture trail,

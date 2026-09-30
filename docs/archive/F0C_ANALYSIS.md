@@ -4,7 +4,7 @@ Este documento cuenta por qué z-regex está organizado por capas (Tiers) y qué
 medición F0c sobre esa decisión. Es un documento de razonamiento: la hipótesis de partida,
 los datos que la confirman o la corrigen, y las decisiones de plan que salen de ellos. Los
 números vienen de la medición de F0c (commit `636d3e2`, fila F0c de
-[REGEX_TIERS_PLAN.md](REGEX_TIERS_PLAN.md)); lo que es inferencia está marcado como tal.
+[REGEX_TIERS_PLAN.md](../REGEX_TIERS_PLAN.md)); lo que es inferencia está marcado como tal.
 
 **Resumen.** La primera medición de F0c dio T0/T1/T2 = 68,2/30,2/1,6 % ponderado (68,9/27,1/4,0
 por patrón único); el desglose posterior ([F0C_T1_BREAKDOWN.md](F0C_T1_BREAKDOWN.md)) la

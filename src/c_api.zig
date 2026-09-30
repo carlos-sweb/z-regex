@@ -149,6 +149,9 @@ fn clearError() void {
     last_error_name = "";
 }
 
+/// The C code of a Zig error: the table of docs/API.md, section 3. What is
+/// left in UNKNOWN is an implementation limit, an engine invariant or an
+/// error nothing produces, not a SyntaxError of the pattern.
 fn zigErrorToC(err: anytype) ZRegexError {
     return switch (err) {
         error.OutOfMemory => .ZREGEXP_ERROR_OUT_OF_MEMORY,
@@ -156,6 +159,19 @@ fn zigErrorToC(err: anytype) ZRegexError {
         error.StepLimitExceeded => .ZREGEXP_ERROR_STEP_LIMIT,
         error.UnmatchedParen => .ZREGEXP_ERROR_UNMATCHED_PAREN,
         error.InvalidEscape, error.InvalidQuantifier, error.IncompatibleFlags => .ZREGEXP_ERROR_SYNTAX,
+        // F7c-4: UNKNOWN until 0.6.0.
+        error.UnexpectedToken,
+        error.UnexpectedEOF,
+        error.UnmatchedBracket,
+        error.DuplicateGroupName,
+        error.UnknownGroupName,
+        error.InvalidGroupName,
+        error.InvalidRepeat,
+        error.UnterminatedRepeat,
+        error.UnknownUnicodeProperty,
+        error.InvalidClassSetOperand,
+        error.MixedClassSetOperators,
+        => .ZREGEXP_ERROR_SYNTAX,
         error.InvalidCharRange => .ZREGEXP_ERROR_INVALID_RANGE,
         error.UnsupportedFeature => .ZREGEXP_ERROR_UNSUPPORTED,
         else => .ZREGEXP_ERROR_UNKNOWN,
@@ -816,6 +832,84 @@ export fn zregex_is_valid_pattern(pattern: [*:0]const u8) bool {
 // Tests
 // =============================================================================
 
+// F7c-4: the C codes of docs/API.md, section 3, for every RegexError and
+// ExecError: any change fails here until the table changes with it.
+test "the error codes of the API contract (docs/API.md)" {
+    const Code = ZRegexError;
+    const Expected = struct { names: []const []const u8, code: Code };
+    const table = [_]Expected{
+        .{ .names = &.{
+            "InvalidEscape",          "InvalidQuantifier",      "IncompatibleFlags",
+            "UnexpectedToken",        "UnexpectedEOF",          "UnmatchedBracket",
+            "DuplicateGroupName",     "UnknownGroupName",       "InvalidGroupName",
+            "InvalidRepeat",          "UnterminatedRepeat",     "UnknownUnicodeProperty",
+            "InvalidClassSetOperand", "MixedClassSetOperators",
+        }, .code = .ZREGEXP_ERROR_SYNTAX },
+        .{ .names = &.{"OutOfMemory"}, .code = .ZREGEXP_ERROR_OUT_OF_MEMORY },
+        .{ .names = &.{ "RecursionLimitExceeded", "BacktrackStackExhausted" }, .code = .ZREGEXP_ERROR_RECURSION_LIMIT },
+        .{ .names = &.{"StepLimitExceeded"}, .code = .ZREGEXP_ERROR_STEP_LIMIT },
+        .{ .names = &.{"UnmatchedParen"}, .code = .ZREGEXP_ERROR_UNMATCHED_PAREN },
+        .{ .names = &.{"InvalidCharRange"}, .code = .ZREGEXP_ERROR_INVALID_RANGE },
+        .{ .names = &.{"UnsupportedFeature"}, .code = .ZREGEXP_ERROR_UNSUPPORTED },
+    };
+    inline for (.{ regex.RegexError, regex.ExecError }) |E| {
+        inline for (@typeInfo(E).error_set.?) |e| {
+            const want: Code = comptime blk: {
+                @setEvalBranchQuota(100_000);
+                for (table) |row| for (row.names) |n| {
+                    if (std.mem.eql(u8, n, e.name)) break :blk row.code;
+                };
+                break :blk .ZREGEXP_ERROR_UNKNOWN;
+            };
+            try std.testing.expectEqual(want, zigErrorToC(@as(anyerror, @field(anyerror, e.name))));
+        }
+    }
+}
+
+test "a SyntaxError of the pattern is ZREGEXP_ERROR_SYNTAX, a limit stays UNKNOWN (F7c-4)" {
+    const Case = struct { pattern: [:0]const u8, name: []const u8, u: bool = false, v: bool = false };
+    // One pattern per error of the frontend that maps to SYNTAX (each one
+    // checked against the error the engine gives; UnexpectedEOF has no
+    // producer).
+    const syntax = [_]Case{
+        .{ .pattern = "a{2,1}", .name = "InvalidQuantifier" },
+        .{ .pattern = "a)", .name = "UnexpectedToken" },
+        .{ .pattern = "a]", .name = "UnmatchedBracket", .u = true },
+        .{ .pattern = "(?<n>a)(?<n>b)", .name = "DuplicateGroupName" },
+        .{ .pattern = "\\k<x>(?<n>a)", .name = "UnknownGroupName" },
+        .{ .pattern = "(?<1>a)", .name = "InvalidGroupName" },
+        .{ .pattern = "a{,5}", .name = "InvalidRepeat", .u = true },
+        .{ .pattern = "a{2,3", .name = "UnterminatedRepeat", .u = true },
+        .{ .pattern = "\\p{Foo}", .name = "UnknownUnicodeProperty", .u = true },
+        .{ .pattern = "[a&&]", .name = "InvalidClassSetOperand", .v = true },
+        // F7c-4b: a list or a range as an operand.
+        .{ .pattern = "[ab&&[c]]", .name = "InvalidClassSetOperand", .v = true },
+        .{ .pattern = "[a-z--\\p{Lu}]", .name = "InvalidClassSetOperand", .v = true },
+        .{ .pattern = "[[a]&&[b]--[c]]", .name = "MixedClassSetOperators", .v = true },
+        // F7c-4b: with flat operands too.
+        .{ .pattern = "[a--b&&c]", .name = "MixedClassSetOperators", .v = true },
+        .{ .pattern = "[a&&b--c]", .name = "MixedClassSetOperators", .v = true },
+        .{ .pattern = "[\\w&&\\d--x]", .name = "MixedClassSetOperators", .v = true },
+    };
+    for (syntax) |c| {
+        var opts = zregex_default_options();
+        opts.unicode = c.u;
+        opts.v = c.v;
+        try std.testing.expectEqual(@as(?*ZRegex, null), zregex_compile(c.pattern, &opts));
+        try std.testing.expectEqualStrings(c.name, std.mem.span(zregex_last_error_name()));
+        try std.testing.expectEqual(ZRegexError.ZREGEXP_ERROR_SYNTAX, zregex_last_error());
+    }
+
+    // An implementation limit on valid syntax stays UNKNOWN.
+    var deep: [2 * 257 + 1]u8 = undefined;
+    @memset(deep[0..257], '(');
+    @memset(deep[257 .. 2 * 257], ')');
+    deep[2 * 257] = 0;
+    try std.testing.expectEqual(@as(?*ZRegex, null), zregex_compile(deep[0 .. 2 * 257 :0], null));
+    try std.testing.expectEqualStrings("NestingTooDeep", std.mem.span(zregex_last_error_name()));
+    try std.testing.expectEqual(ZRegexError.ZREGEXP_ERROR_UNKNOWN, zregex_last_error());
+}
+
 test "zregex_version is the package version" {
     try std.testing.expectEqualStrings(regex.version, std.mem.span(zregex_version()));
 }
@@ -875,7 +969,7 @@ test "zregex_last_error_name reports the precise compile error" {
 }
 
 test "zregex_compile / zregex_compile_n carry u and v to CompileResult.mode (F3c)" {
-    const Mode = regex.subject.Mode;
+    const Mode = regex.internal.subject.Mode;
     const Case = struct { unicode: bool, v: bool, mode: Mode };
     const cases = [_]Case{
         .{ .unicode = false, .v = false, .mode = .code_unit },

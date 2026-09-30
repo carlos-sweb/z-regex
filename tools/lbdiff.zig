@@ -7,15 +7,15 @@
 //! compiled (B′ today, full F6b later) and the body forward on the slices.
 //! It is exact only where cutting the subject at `k` and `pos` can't change
 //! what the body sees, so the domain is bodies without anchors, word
-//! boundaries, backreferences or lookarounds (`zregex.analyze`); captures
+//! boundaries, backreferences or lookarounds (`zregex.internal.analyze`); captures
 //! are allowed and not compared. Bodies: a fixed-seed generator, the
 //! lookbehind bodies of test262, and the patterns of tests/corpus/iter_v8.tsv,
 //! each under every flag set below. Exits 1 on any discrepancy.
 
 const std = @import("std");
 const zregex = @import("zregex");
-const analysis = zregex.analysis;
-const Mode = zregex.subject.Mode;
+const analysis = zregex.internal.analysis;
+const Mode = zregex.internal.subject.Mode;
 
 const Flag = struct { text: []const u8, i: bool = false, s: bool = false, u: bool = false, v: bool = false };
 const flag_sets = [_]Flag{
@@ -233,7 +233,7 @@ fn options(f: Flag, sticky: bool) zregex.CompileOptions {
 
 fn classify(gpa: std.mem.Allocator, scratch: *zregex.Scratch, body: []const u8, f: Flag, counts: *Counts, w: *std.Io.Writer) !Out {
     const flags: analysis.Flags = .{ .i = f.i, .s = f.s, .u = f.u, .v = f.v };
-    const a = try zregex.analyze(gpa, body, flags);
+    const a = try zregex.internal.analyze(gpa, body, flags);
     inline for (.{ .{ Out.anchor, analysis.Feature.anchor }, .{ Out.word_boundary, analysis.Feature.word_boundary }, .{ Out.backreference, analysis.Feature.backreference }, .{ Out.lookahead, analysis.Feature.lookahead }, .{ Out.lookbehind, analysis.Feature.lookbehind } }) |pair| {
         if (a.features.contains(pair[1])) return pair[0];
     }
