@@ -691,7 +691,6 @@ fn buildCtx(
     const seen = try a.alloc(u32, n);
     @memset(seen, 0);
     var w: Walker = .{ .a = a, .prog = prog, .seen = seen };
-    var list: std.ArrayListUnmanaged(u32) = .empty;
     var next: std.ArrayListUnmanaged(u32) = .empty;
 
     // --- Forward. Key: [matched | seed << 1 | left << 2, targets...].
@@ -701,6 +700,9 @@ fn buildCtx(
     for (0..4) |cx| fstart_old[0][cx] = try fkeys.intern(a, &.{2 | @as(u32, @intCast(cx)) << 2});
     for (0..4) |cx| fstart_old[1][cx] = try fkeys.intern(a, &.{ @as(u32, @intCast(cx)) << 2, 0 });
     var ftrans: std.ArrayListUnmanaged(u32) = .empty;
+    // The closure of a state depends only on the right context, not on the
+    // class: walked once per (state, context), then filtered per class.
+    var lists: [4]std.ArrayListUnmanaged(u32) = @splat(.empty);
     var si: usize = 1;
     while (si < fkeys.list.items.len) : (si += 1) {
         if (fkeys.list.items.len - 1 > max_states or (fkeys.list.items.len - 1) * fcol > max_cells) return null;
@@ -708,12 +710,17 @@ fn buildCtx(
         const matched = key[0] & 1 != 0;
         const seed = key[0] & 2 != 0;
         const left: u8 = @intCast(key[0] >> 2);
+        var walked: [4]bool = @splat(false);
         for (0..fcol) |c| {
             const right: u8 = if (c == nclass) edge else cat[c];
-            w.gen += 1;
-            list.clearRetainingCapacity();
-            for (key[1..]) |t| try w.walk(&list, t, left, right);
-            if (seed and !matched) try w.walk(&list, 0, left, right);
+            const list = &lists[right];
+            if (!walked[right]) {
+                walked[right] = true;
+                w.gen += 1;
+                list.clearRetainingCapacity();
+                for (key[1..]) |t| try w.walk(list, t, left, right);
+                if (seed and !matched) try w.walk(list, 0, left, right);
+            }
             next.clearRetainingCapacity();
             try next.append(a, 0);
             var is_match = false;
@@ -764,6 +771,17 @@ fn buildCtx(
         rstart_old[rc] = try rkeys.intern(a, ends.items);
     }
     var rtrans: std.ArrayListUnmanaged(u32) = .empty;
+    // Which consuming pcs lead into the state depends only on the left
+    // context, not on the class: found once per (state, context), then
+    // filtered per class.
+    var cands: [4]std.ArrayListUnmanaged(u32) = @splat(.empty);
+    // `wanted[left * ncons + i]`: some class in the context `left` accepts
+    // the consuming pc `i` (only those closures are walked).
+    const wanted = try a.alloc(bool, 4 * ncons);
+    @memset(wanted, false);
+    for (0..nclass) |c| for (0..ncons) |i| {
+        if (sigs[c * ncons + i] != 0) wanted[@as(usize, cat[c]) * ncons + i] = true;
+    };
     si = 1;
     while (si < rkeys.list.items.len) : (si += 1) {
         const total = fn_states - 1 + rkeys.list.items.len - 1;
@@ -771,29 +789,41 @@ fn buildCtx(
         const key = rkeys.list.items[si];
         const right: u8 = @intCast(key[0]);
         for (key[1..]) |pc| in_set[pc] = true;
+        var starts: [4]?bool = @splat(null);
+        var found: [4]bool = @splat(false);
         for (0..rcol) |c| {
             const boundary = c >= nclass;
             const left: u8 = if (boundary) @intCast(c - nclass) else cat[c];
-            var starts_here = false;
-            for (try Closure.of(&w, memo, 0, left, right)) |pc| if (in_set[pc]) {
-                starts_here = true;
-                break;
-            };
+            if (starts[left] == null) {
+                starts[left] = false;
+                for (try Closure.of(&w, memo, 0, left, right)) |pc| if (in_set[pc]) {
+                    starts[left] = true;
+                    break;
+                };
+            }
             var nx: u32 = 0;
             if (!boundary) {
+                const cand = &cands[left];
+                if (!found[left]) {
+                    found[left] = true;
+                    cand.clearRetainingCapacity();
+                    for (prog.insts, 0..) |inst, pc| {
+                        if (inst != .char and inst != .set) continue;
+                        if (!wanted[@as(usize, left) * ncons + cons_index[pc]]) continue;
+                        for (try Closure.of(&w, memo, @intCast(pc + 1), left, right)) |q| if (in_set[q]) {
+                            try cand.append(a, @intCast(pc));
+                            break;
+                        };
+                    }
+                }
                 next.clearRetainingCapacity();
                 try next.append(a, cat[c]);
-                for (prog.insts, 0..) |inst, pc| {
-                    if (inst != .char and inst != .set) continue;
-                    if (sigs[c * ncons + cons_index[pc]] == 0) continue;
-                    for (try Closure.of(&w, memo, @intCast(pc + 1), left, right)) |q| if (in_set[q]) {
-                        try next.append(a, @intCast(pc));
-                        break;
-                    };
+                for (cand.items) |pc| {
+                    if (sigs[c * ncons + cons_index[pc]] != 0) try next.append(a, pc);
                 }
                 if (next.items.len > 1) nx = try rkeys.intern(a, next.items);
             }
-            try rtrans.append(a, nx | (if (starts_here) emit else 0));
+            try rtrans.append(a, nx | (if (starts[left].?) emit else 0));
         }
         for (key[1..]) |pc| in_set[pc] = false;
     }

@@ -345,3 +345,52 @@ El tope acota el peor caso: el programa de 385 ms del prototipo queda fuera del 
 - **Mejora posible** (estimación): calcular el cierre una vez por contexto (4 × 4 combinaciones) en vez de una vez por clase.
 
 **Binario** (`measure_binary.sh`, 40 símbolos): ReleaseFast 1.208.080 B (+19.360 frente a la fase 1), ReleaseSmall 749.960 B (+11.024).
+
+## 13. El cierre por contexto en el constructor con asserts
+**La causa,** medida en una copia instrumentada de `0277ae4`:
+- **Ida:** el constructor rehacía el cierre en cada columna (clase), aunque solo depende del contexto derecho.
+- **Inverso:** recorría en cada columna todos los pcs que consumen, aunque el conjunto que llega al estado solo depende del contexto izquierdo.
+
+| Corpus | Recorridos del cierre (ida) | Necesarios: (estado, contexto) | Columnas del inverso / necesarias |
+|---|---|---|---|
+| f2c | 352.271 | 62.856 | 2,3 |
+| f2c-2 | 1.906.769 | 291.328 | 2,3 |
+| npm | 5.782.533 | 754.428 | 2,6 |
+
+- **En npm,** el inverso hacía además 8,5 M de consultas al cierre y 10,8 M de pasos de intersección.
+- **Callgrind** (todo npm compilado una vez):
+  - `dfa.build` es el 89 % de las instrucciones;
+  - `Walker.walk`, el 22 %;
+  - el bucle por columna del inverso, otro ~19 %.
+
+**El arreglo** (solo `buildCtx`):
+- **Ida:** el cierre ordenado se calcula una vez por (estado, contexto derecho). Cada columna solo filtra por la firma de su clase.
+- **Inverso:** se calculan una vez por (estado, contexto izquierdo) dos cosas:
+  - «puede empezar aquí»;
+  - la lista de pcs que consumen cuyo cierre de `pc + 1` corta el conjunto.
+
+  Solo se recorren los pcs que alguna clase de ese contexto acepta. Sin ese filtro, la mediana empeoraba un 2 %.
+- **Verificación:** las tablas salen idénticas a las de `0277ae4` en todos los programas de los tres corpus (8.091 con contexto, 13.210 sin él).
+
+**Coste de `compile()`** (µs, `0277ae4` → ahora; dos rondas intercaladas, la mejor de 20 por patrón):
+
+| Corpus | p50 | p99 | máx. | media |
+|---|---|---|---|---|
+| f2c | 5,48-5,65 → 5,52-5,55 | 160-164 → 141-149 | 2.765-2.786 → 1.425-1.427 | 14,5-15,2 → 13,4-13,5 |
+| f2c-2 | 6,81-6,87 → 6,69-6,82 | 186-188 → 146-153 | 3.765-3.841 → 2.056-2.083 | 17,9-18,1 → 15,6-16,1 |
+| npm | 12,66-13,28 → 12,29-12,39 | 996-1.025 → 658-672 | 11.775-12.041 → 5.293-5.371 | 71,9-73,9 → 50,9-51,2 |
+
+- **Callgrind, todo npm:** 5,18 G → 3,43 G instrucciones (−34 %); `dfa.build`, 4,62 G → 2,44 G.
+- **La mediana de npm apenas baja** (callgrind sobre los patrones entre p40 y p60: 573,7 M → 552,6 M, −3,7 %).
+  - Allí la redundancia del cierre pesaba poco.
+  - El coste es construir la tabla entera: un ~20 % el interning de estados (hash de claves), un ~20 % los recorridos del cierre que sí hacen falta, y un ~13 % la memoria (arena y listas).
+  - Volver a los 3,5-4 µs de la fase 1 pide otra cosa (construcción diferida o interning más barato). Queda fuera de este arreglo.
+
+**Corrección:**
+- **Tests:** pasan en Debug y en ReleaseSafe.
+- **Diferencial propio:** idéntico a `0277ae4` con y sin `sticky` (68,5 M de ejecuciones).
+- **Gate:** GATE-PASS, con test262 2994 en UTF-16 y WTF-8 y los diferenciales sin cambios.
+
+**Bench de los patrones con asserts:** entre 0,96× y 1,02× (las mismas tablas).
+
+**Binario:** ReleaseFast 1.208.800 B (+720), ReleaseSmall 750.456 B (+496).
