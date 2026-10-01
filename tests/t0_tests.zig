@@ -324,8 +324,8 @@ test "execAt on the VM: a warm composite scratch allocates nothing" {
     // Routing to the VM: not in the forced-backtracker run (F4a(5)).
     if (zregex.internal.force_backtracker) return error.SkipZigTest;
     const a = testing.allocator;
-    // `\b`: an assert, so no DFA (T0-A phase 1) and the VM runs.
-    var re = try zregex.Regex.compile(a, "\\ba+b|c");
+    // Without prefilters, so no DFA (T0-A): the VM runs.
+    var re = try zregex.Regex.compileWithOptions(a, "a+b|c", .{ .t0_prefilters = false });
     defer re.deinit();
     try testing.expect(re.t0 != null and re.t0.?.dfa == null);
     var failing: std.testing.FailingAllocator = .init(a, .{});

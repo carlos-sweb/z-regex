@@ -216,7 +216,7 @@ pub fn exec(prog: *const Program, comptime Unit: type, input: []const Unit, mode
     const result = found orelse blk: {
         if (use_pf and (pf.kind == .literal or pf.kind == .class_run or pf.kind == .shift_and)) break :blk null;
         // The DFA (T0-A phase 1): like the fast paths, no `scratch`.
-        if (use_pf) if (prog.dfa) |d| break :blk dfaSearch(prog, d, Unit, input, index, sticky);
+        if (use_pf) if (prog.dfa) |d| break :blk dfaSearch(prog, d, Unit, input, index, sticky or anchored);
         try scratch.ensure(prog.insts.len);
         // One instance of `search` per skip: a pattern without one doesn't
         // test for it at each position.

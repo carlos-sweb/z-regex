@@ -130,11 +130,11 @@ pub fn analyze(gpa: Allocator, root: *const hir.Node, prog: *const Program) Allo
     return pf;
 }
 
-/// Whether a program with this prefilter gets a DFA (T0-A phase 1): not
-/// when a fast path serves it whole (`literal`, `class_run`, `shift_and`
-/// run before the DFA) or when it is anchored (it has an assert).
+/// Whether a program with this prefilter gets a DFA (T0-A): not when a
+/// fast path serves it whole (`literal`, `class_run`, `shift_and` run
+/// before the DFA). An anchored one does (A phase 2): its search is the
+/// forward DFA at index 0.
 pub fn wantsDfa(pf: *const Prefilter) bool {
-    if (pf.anchored) return false;
     return switch (pf.kind) {
         .literal, .class_run, .shift_and => false,
         .first, .inner, .none => true,

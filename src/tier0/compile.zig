@@ -671,7 +671,7 @@ test "C: which programs take the Shift-And fast path" {
     try testing.expectEqual(.first, try kindOf(&anchored, false));
 }
 
-test "A phase 1: which programs get a DFA" {
+test "A: which programs get a DFA" {
     const hasDfa = struct {
         fn f(root: *const hir.Node, options: Options) !bool {
             const p = try compileWith(testing.allocator, root, options);
@@ -689,14 +689,18 @@ test "A phase 1: which programs get a DFA" {
     const grouped: hir.Node = .{ .seq = &.{ &g, &at, &plus } };
     try testing.expect(try hasDfa(&grouped, .{ .tagged = true }));
     // Not without prefilters (u/v, or the diagnostic switch), not on a fast
-    // path, not with an assert.
+    // path.
     try testing.expect(!try hasDfa(&email, .{ .prefilters = false }));
     try testing.expect(!try hasDfa(&plus, .{}));
     const ab = lit("ab");
     try testing.expect(!try hasDfa(&ab, .{}));
+    // With asserts (A phase 2), anchored ones included.
     const wb: hir.Node = .{ .assert = .word_boundary };
     const bounded: hir.Node = .{ .seq = &.{ &wb, &plus, &at } };
-    try testing.expect(!try hasDfa(&bounded, .{}));
+    try testing.expect(try hasDfa(&bounded, .{}));
+    const caret: hir.Node = .{ .assert = .caret };
+    const anchored: hir.Node = .{ .seq = &.{ &caret, &plus, &at } };
+    try testing.expect(try hasDfa(&anchored, .{}));
 }
 
 test "C: compile with a Shift-And table doesn't leak on allocation failure" {

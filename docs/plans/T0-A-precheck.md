@@ -293,3 +293,55 @@ Sube por la construcción diferida y el inverso con asserts, que no estaban sepa
 El tope acota el peor caso: el programa de 385 ms del prototipo queda fuera del DFA.
 
 **Binario** (`measure_binary.sh`, 40 símbolos): ReleaseFast 1.188.720 B (+58.640 frente a 0.7.1), ReleaseSmall 738.936 B (+23.376). Es el constructor más los ejecutores instanciados para `u8`/`u16` y para tres saltos.
+
+## 12. Fase 2 implementada: asserts
+**Diseño** (`src/tier0/dfa.zig`, tablas `Ctx`):
+- **Qué programas las usan:** un programa con `^`, `$`, `\b` o `\B` recibe tablas con contexto.
+- **El contexto:** el estado guarda el contexto de un lado de la posición (el borde del texto, un fin de línea, un carácter de palabra en code unit, u otro). El cierre se resuelve un carácter después, con `addClosure` y los asserts evaluados como `Vm.holds` a partir de los dos contextos.
+- **Ida:** la marca de match va en la transición, y hay una columna para el fin de la entrada. Los inicios dependen del contexto a la izquierda de `index`. Los cuatro inicios sin anclar son los estados especiales del salto: tras saltar, el estado es el inicio del contexto de la nueva posición.
+- **Inverso** (el retraso simétrico):
+  - el estado es el conjunto de pcs más el contexto a la derecha;
+  - el arranque depende del contexto a la derecha del final del match;
+  - «puede empezar aquí» va en la transición;
+  - cuatro columnas de borde dan el contexto real en `index`.
+- **Alfabeto:** con asserts, la firma de clase incluye el contexto, así que una clase nunca mezcla palabra, fin de línea y resto.
+- **Programas anclados** (`^` sin `m` delante): reciben DFA y corren la ida con `sticky` en el índice 0, sin inverso.
+
+**Cobertura** (programas en code unit con DFA, fase 1 → fase 2):
+
+| Corpus | Fase 1 | Fase 2 |
+|---|---|---|
+| f2c | 2.413 | 3.035 (84 %) |
+| f2c-2 | 9.407 | 12.066 (89 %) |
+| npm | 1.390 | **6.200 (87 %)** |
+
+**Corrección:**
+- **Tests:** 907 pasados y 13 omitidos, en Debug y en ReleaseSafe. Los nuevos comparan con la VM en todos los índices: `^`/`$` con y sin `m` (`\n`, `\r`, U+2028/2029), `\b`/`\B` junto a no ASCII y bytes mal formados, matches vacíos, grupos, anclados por `exec`, el tope y los fallos de memoria.
+- **Diferencial propio** frente a la fase 1 (`14612d0`): salida idéntica con y sin `sticky` forzado, en WTF-8 y UTF-16. Son 28.563 programas y 68,5 M de ejecuciones.
+- **Gate:** GATE-PASS; test262 2994 en UTF-16 y WTF-8; los diferenciales sin cambios.
+- **El único bug encontrado:** la firma de clase sin el contexto, que mezclaba `\n` con letras. Lo detectaron los tests de la VM antes del diferencial.
+
+**Bench:**
+- **El harness `xbench`** frente a la fase 1 (sin casos con asserts): todo entre 0,98× y 1,11×.
+- **Patrones con asserts,** con el bucle de `execAt` (la mejor de 10 intercaladas, 1 MiB, MB/s):
+
+  | Patrón | Fase 1 | Fase 2 | Factor |
+  |---|---|---|---|
+  | `\b[\w.+-]+@[\w-]+\.[\w.]+\b` (e-mails) | 145,7 | 713,4 | **4,90×** |
+  | `\d{3}-\d{4}\b` (denso) | 60,4 | 230,1 | 3,81× |
+  | `[a-z]+\.$` (prosa) | 399,1 | 1.249,8 | 3,13× |
+  | `\b[A-Z][a-z]+\b` (libro) | 203,4 | 526,1 | 2,59× |
+  | `\bDarcy\b` (libro) | 4.644,8 | 8.381,3 | 1,80× |
+
+**Coste de `compile()`** (µs, fase 1 → fase 2, la mejor de 20 por patrón):
+
+| Corpus | p50 | p99 | máx. |
+|---|---|---|---|
+| f2c | 4,19 → 5,13 | 94,7 → 151,8 | 662 → 2.482 |
+| f2c-2 | 4,88 → 6,37 | 102,5 → 174,0 | 1.764 → 3.522 |
+| npm | 3,57 → 12,00 | 222 → 911 | 5.492 → 10.870 |
+
+- **npm paga más:** ahora construye DFA para el 87 % de sus programas, y el constructor con contexto rehace el cierre por clase (no puede usar `follow`).
+- **Mejora posible** (estimación): calcular el cierre una vez por contexto (4 × 4 combinaciones) en vez de una vez por clase.
+
+**Binario** (`measure_binary.sh`, 40 símbolos): ReleaseFast 1.208.080 B (+19.360 frente a la fase 1), ReleaseSmall 749.960 B (+11.024).

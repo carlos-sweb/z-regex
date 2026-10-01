@@ -38,6 +38,17 @@
 //! special states come first: forward, the dead state, the match states,
 //! then the unanchored start; reverse, the dead state and the states a
 //! match can start in. One compare per unit tells a special state apart.
+//!
+//! **Assertions (A phase 2).** `^`, `$`, `\b` and `\B` look at the
+//! characters on both sides of a position. A program with any gets `Ctx`
+//! tables instead: the state also holds the context of the character on
+//! one side (the text's edge, a line terminator, a word character or
+//! another), and a closure is resolved one character later, when the other
+//! side is known. So "a match ends here" (forward) and "a match can start
+//! here" (reverse) mark transitions, not states; forward has a column for
+//! the end of the input, reverse four for the context at `index`. The
+//! closure is `addClosure`'s walk with the asserts evaluated as `Vm.holds`
+//! does, from the two contexts.
 
 const std = @import("std");
 const Allocator = std.mem.Allocator;
@@ -45,6 +56,7 @@ const subject_mod = @import("subject");
 const Subject = subject_mod.Subject;
 const Decoded = subject_mod.Decoded;
 const Program = @import("program.zig").Program;
+const word = @import("ir").word;
 
 /// The cap (docs/plans/T0-A-precheck.md §2): forward and reverse states
 /// together, and table cells (states × classes). Above it: no DFA.
@@ -76,8 +88,12 @@ pub const Dfa = struct {
     /// Forward and reverse states (for tests and diagnostics).
     fstates: u32,
     rstates: u32,
+    /// The tables of a program with assertions (then the ones above, but
+    /// the alphabet, are empty).
+    ctx: ?Ctx = null,
 
     pub fn deinit(self: *const Dfa, gpa: Allocator) void {
+        if (self.ctx) |c| c.deinit(gpa);
         gpa.free(self.cuts);
         gpa.free(self.valid);
         gpa.free(self.bad);
@@ -107,6 +123,7 @@ pub const Dfa = struct {
     /// at, used while in the unanchored start state (nothing alive, no
     /// match), as the VM uses it.
     pub fn find(self: *const Dfa, comptime Unit: type, input: []const Unit, index: usize, sticky: bool, skipper: anytype) ?[2]usize {
+        if (self.ctx) |*c| return c.find(self, Unit, input, index, sticky, skipper);
         const end = self.forward(Unit, input, index, sticky, skipper) orelse return null;
         if (sticky) return .{ index, end };
         return .{ self.backward(Unit, input, index, end), end };
@@ -181,11 +198,19 @@ pub const Dfa = struct {
     }
 };
 
-/// Whether `prog` can have a DFA: no asserts (every closure precomputed).
+/// Whether `prog` can have a DFA: every closure precomputed (no asserts),
+/// or asserts (the `Ctx` tables walk the closures themselves). A closure
+/// left dynamic by the size cap of `follow` alone gets none.
 pub fn eligible(prog: *const Program) bool {
+    if (hasAsserts(prog)) return true;
     if (prog.closures.len != prog.insts.len) return false;
     for (prog.closures) |cl| if (cl.isDynamic()) return false;
     return true;
+}
+
+fn hasAsserts(prog: *const Program) bool {
+    for (prog.insts) |inst| if (inst == .assert) return true;
+    return false;
 }
 
 fn followOf(prog: *const Program, pc: usize) []const u32 {
@@ -218,6 +243,10 @@ pub fn build(gpa: Allocator, prog: *const Program) Allocator.Error!?*const Dfa {
         },
         else => {},
     };
+    const asserts = hasAsserts(prog);
+    // With asserts, the word characters and line terminators are cut out
+    // too: the context of a class must be one.
+    if (asserts) try cut_list.appendSlice(a, &.{ '0', '9' + 1, 'A', 'Z' + 1, '_', '_' + 1, 'a', 'z' + 1, '\n', '\n' + 1, '\r', '\r' + 1, 0x2028, 0x202A });
     std.mem.sort(u32, cut_list.items, {}, std.sort.asc(u32));
     var cuts: std.ArrayListUnmanaged(u32) = .empty;
     for (cut_list.items) |c| {
@@ -230,7 +259,10 @@ pub fn build(gpa: Allocator, prog: *const Program) Allocator.Error!?*const Dfa {
     var sig_ids: std.StringHashMapUnmanaged(u32) = .empty;
     const valid = try a.alloc(u32, cuts.items.len);
     const bad = try a.alloc(u32, cuts.items.len);
-    const sig = try a.alloc(u8, ncons);
+    // With asserts the signature ends with the class's context, so a class
+    // never mixes contexts.
+    const sig_full = try a.alloc(u8, ncons + 1);
+    const sig = if (asserts) sig_full else sig_full[0..ncons];
     for (cuts.items, 0..) |v, k| {
         for ([_]bool{ false, true }) |is_bad| {
             for (prog.insts, 0..) |inst, pc| switch (inst) {
@@ -238,16 +270,27 @@ pub fn build(gpa: Allocator, prog: *const Program) Allocator.Error!?*const Dfa {
                 .set => |i| sig[cons_index[pc]] = @intFromBool(prog.sets[i].contains(v)),
                 else => {},
             };
+            if (asserts) sig[ncons] = contextOf(v);
             const g = try sig_ids.getOrPut(a, sig);
             if (!g.found_existing) {
                 g.key_ptr.* = try a.dupe(u8, sig);
                 g.value_ptr.* = @intCast(sig_ids.count() - 1);
-                try sigs.appendSlice(a, sig);
+                try sigs.appendSlice(a, sig[0..ncons]);
             }
             (if (is_bad) bad else valid)[k] = g.value_ptr.*;
         }
     }
     const nclass: u32 = sig_ids.count();
+    if (asserts) {
+        // The context of each class, from a value of it (a class never
+        // mixes contexts: the cuts and the signature above).
+        const cat = try a.alloc(u8, nclass);
+        for (cuts.items, 0..) |v, k| {
+            cat[valid[k]] = contextOf(v);
+            cat[bad[k]] = contextOf(v);
+        }
+        return buildCtx(gpa, a, prog, cuts.items, valid, bad, nclass, sigs.items, cons_index, ncons, cat);
+    }
 
     // --- The forward DFA over the classes.
     const Keys = struct {
@@ -427,6 +470,398 @@ pub fn build(gpa: Allocator, prog: *const Program) Allocator.Error!?*const Dfa {
     return d;
 }
 
+// ------------------------------------------------------------ assertions
+
+/// The context of one side of a position: the text's edge (nothing there),
+/// a line terminator, a word character (code-unit mode: ASCII only), or
+/// another character.
+const edge: u8 = 0;
+const line: u8 = 1;
+const wordc: u8 = 2;
+const other: u8 = 3;
+
+fn contextOf(v: u32) u8 {
+    if (v == '\n' or v == '\r' or v == 0x2028 or v == 0x2029) return line;
+    if (word.isWordChar(v, false)) return wordc;
+    return other;
+}
+
+/// `Vm.holds`, from the contexts on the left and on the right.
+fn holds(a: anytype, left: u8, right: u8) bool {
+    return switch (a) {
+        .text_start => left == edge,
+        .text_end => right == edge,
+        .line_start => left == edge or left == line,
+        .line_end => right == edge or right == line,
+        .word_boundary => (left == wordc) != (right == wordc),
+        .not_word_boundary => (left == wordc) == (right == wordc),
+    };
+}
+
+const emit: u32 = 1 << 31;
+
+pub const Ctx = struct {
+    /// The context of each class.
+    cat: []const u8,
+    /// Forward: `ft[st + class]` (column `nclass`: the end of the input) is
+    /// the next state, `| emit` when a match ends at this position. Ids
+    /// premultiplied by `nclass + 1`; 0 dead, 1 to 4 the unanchored starts
+    /// (the specials, for the skip).
+    ft: []const u32,
+    fcol: u32,
+    /// `[sticky][context on the left of index]`.
+    fstart: [2][4]u32,
+    fspecial_max: u32,
+    /// Reverse: `rt[st + class]` (columns `nclass + k`: the context `k` on
+    /// the left of `index`) is the next state, `| emit` when a match can
+    /// start at this position. Ids premultiplied by `nclass + 4`; 0 dead.
+    rt: []const u32,
+    rcol: u32,
+    /// By the context on the right of the match's end.
+    rstart: [4]u32,
+
+    fn deinit(self: Ctx, gpa: Allocator) void {
+        gpa.free(self.cat);
+        gpa.free(self.ft);
+        gpa.free(self.rt);
+    }
+
+    fn contextBefore(self: *const Ctx, d: *const Dfa, comptime Unit: type, input: []const Unit, i: usize) u8 {
+        if (i == 0) return edge;
+        const u = input[i - 1];
+        if (u < 0x80) return self.cat[d.ascii[u]];
+        return self.cat[d.classOf(Dfa.subjectOf(Unit, input).decodeBefore(.code_unit, i).?)];
+    }
+
+    fn contextAt(self: *const Ctx, d: *const Dfa, comptime Unit: type, input: []const Unit, i: usize) u8 {
+        if (i >= input.len) return edge;
+        const u = input[i];
+        if (u < 0x80) return self.cat[d.ascii[u]];
+        return self.cat[d.classOf(Dfa.subjectOf(Unit, input).decodeAt(.code_unit, i).?)];
+    }
+
+    fn find(self: *const Ctx, d: *const Dfa, comptime Unit: type, input: []const Unit, index: usize, sticky: bool, skipper: anytype) ?[2]usize {
+        const end = self.forward(d, Unit, input, index, sticky, skipper) orelse return null;
+        if (sticky) return .{ index, end };
+        return .{ self.backward(d, Unit, input, index, end), end };
+    }
+
+    fn forward(self: *const Ctx, d: *const Dfa, comptime Unit: type, input: []const Unit, index: usize, sticky: bool, skipper: anytype) ?usize {
+        const skips = @TypeOf(skipper) != void;
+        var sk = skipper;
+        const ft = self.ft;
+        var st = self.fstart[@intFromBool(sticky)][self.contextBefore(d, Unit, input, index)];
+        var pos = index;
+        var end: ?usize = null;
+        while (true) {
+            if (skips and st <= self.fspecial_max) {
+                // An unanchored start: nothing alive, no match.
+                const to = sk.next(Unit, input, pos) orelse break;
+                if (to != pos) {
+                    pos = to;
+                    st = self.fstart[0][self.contextBefore(d, Unit, input, pos)];
+                }
+            }
+            if (pos >= input.len) {
+                if (ft[st + d.nclass] & emit != 0) end = pos;
+                break;
+            }
+            const u = input[pos];
+            var e: u32 = undefined;
+            var to: usize = undefined;
+            if (u < 0x80) {
+                e = ft[st + d.ascii[u]];
+                to = pos + 1;
+            } else {
+                const x = Dfa.subjectOf(Unit, input).decodeAt(.code_unit, pos).?;
+                e = ft[st + d.classOf(x)];
+                to = x.pos;
+            }
+            // The mark is for this position, before the character.
+            if (e & emit != 0) end = pos;
+            st = e & ~emit;
+            if (st == 0) break;
+            pos = to;
+        }
+        return end;
+    }
+
+    fn backward(self: *const Ctx, d: *const Dfa, comptime Unit: type, input: []const Unit, index: usize, e: usize) usize {
+        const rt = self.rt;
+        var st = self.rstart[self.contextAt(d, Unit, input, e)];
+        var s: ?usize = null;
+        var pos = e;
+        while (pos > index) {
+            const u = input[pos - 1];
+            var t: u32 = undefined;
+            var to: usize = undefined;
+            if (u < 0x80) {
+                t = rt[st + d.ascii[u]];
+                to = pos - 1;
+            } else {
+                const subj = Dfa.subjectOf(Unit, input);
+                var x = subj.decodeBefore(.code_unit, pos).?;
+                if (x.pos < index) {
+                    const f = subj.decodeAt(.code_unit, index).?;
+                    x = .{ .value = f.value, .pos = index, .invalid = f.invalid };
+                }
+                t = rt[st + d.classOf(x)];
+                to = x.pos;
+            }
+            if (t & emit != 0) s = pos;
+            st = t & ~emit;
+            pos = to;
+            if (st == 0) break;
+        }
+        if (st != 0 and pos == index) {
+            if (rt[st + d.nclass + self.contextBefore(d, Unit, input, index)] & emit != 0) s = index;
+        }
+        return s.?;
+    }
+};
+
+/// `addClosure`'s walk from `pc0` with the asserts evaluated from `left`
+/// and `right`: appends the `char`, `set` and `match` pcs in priority order
+/// to `out`, skipping (and marking) those already `seen[pc] == gen`.
+const Walker = struct {
+    a: Allocator,
+    prog: *const Program,
+    seen: []u32,
+    gen: u32 = 0,
+    stack: std.ArrayListUnmanaged(u32) = .empty,
+
+    fn walk(self: *Walker, out: *std.ArrayListUnmanaged(u32), pc0: u32, left: u8, right: u8) Allocator.Error!void {
+        self.stack.clearRetainingCapacity();
+        try self.stack.append(self.a, pc0);
+        while (self.stack.pop()) |start| {
+            var pc = start;
+            while (self.seen[pc] != self.gen) {
+                self.seen[pc] = self.gen;
+                switch (self.prog.insts[pc]) {
+                    .jmp => |t| pc = t,
+                    .split => |sp| {
+                        try self.stack.append(self.a, sp.y);
+                        pc = sp.x;
+                    },
+                    .assert => |as| {
+                        if (!holds(as, left, right)) break;
+                        pc += 1;
+                    },
+                    .save, .clear => pc += 1,
+                    .char, .set, .match => {
+                        try out.append(self.a, pc);
+                        break;
+                    },
+                    .fail => break,
+                }
+            }
+        }
+    }
+};
+
+fn buildCtx(
+    gpa: Allocator,
+    a: Allocator,
+    prog: *const Program,
+    cuts: []const u32,
+    valid: []const u32,
+    bad: []const u32,
+    nclass: u32,
+    sigs: []const u8,
+    cons_index: []const u32,
+    ncons: u32,
+    cat: []const u8,
+) Allocator.Error!?*const Dfa {
+    const n = prog.insts.len;
+    const fcol = nclass + 1;
+    const rcol = nclass + 4;
+    const Keys = struct {
+        map: std.StringHashMapUnmanaged(u32) = .empty,
+        list: std.ArrayListUnmanaged([]const u32) = .empty,
+
+        fn intern(self: *@This(), al: Allocator, key: []const u32) Allocator.Error!u32 {
+            if (self.map.get(std.mem.sliceAsBytes(key))) |id| return id;
+            const k = try al.dupe(u32, key);
+            const id: u32 = @intCast(self.list.items.len);
+            try self.map.put(al, std.mem.sliceAsBytes(k), id);
+            try self.list.append(al, k);
+            return id;
+        }
+    };
+    const seen = try a.alloc(u32, n);
+    @memset(seen, 0);
+    var w: Walker = .{ .a = a, .prog = prog, .seen = seen };
+    var list: std.ArrayListUnmanaged(u32) = .empty;
+    var next: std.ArrayListUnmanaged(u32) = .empty;
+
+    // --- Forward. Key: [matched | seed << 1 | left << 2, targets...].
+    var fkeys: Keys = .{};
+    try fkeys.list.append(a, &.{});
+    var fstart_old: [2][4]u32 = undefined;
+    for (0..4) |cx| fstart_old[0][cx] = try fkeys.intern(a, &.{2 | @as(u32, @intCast(cx)) << 2});
+    for (0..4) |cx| fstart_old[1][cx] = try fkeys.intern(a, &.{ @as(u32, @intCast(cx)) << 2, 0 });
+    var ftrans: std.ArrayListUnmanaged(u32) = .empty;
+    var si: usize = 1;
+    while (si < fkeys.list.items.len) : (si += 1) {
+        if (fkeys.list.items.len - 1 > max_states or (fkeys.list.items.len - 1) * fcol > max_cells) return null;
+        const key = fkeys.list.items[si];
+        const matched = key[0] & 1 != 0;
+        const seed = key[0] & 2 != 0;
+        const left: u8 = @intCast(key[0] >> 2);
+        for (0..fcol) |c| {
+            const right: u8 = if (c == nclass) edge else cat[c];
+            w.gen += 1;
+            list.clearRetainingCapacity();
+            for (key[1..]) |t| try w.walk(&list, t, left, right);
+            if (seed and !matched) try w.walk(&list, 0, left, right);
+            next.clearRetainingCapacity();
+            try next.append(a, 0);
+            var is_match = false;
+            for (list.items) |pc| {
+                if (prog.insts[pc] == .match) {
+                    is_match = true;
+                    break;
+                }
+                if (c != nclass and sigs[c * ncons + cons_index[pc]] != 0) try next.append(a, @intCast(pc + 1));
+            }
+            const m2 = matched or is_match;
+            var nx: u32 = 0;
+            if (c != nclass and !(next.items.len == 1 and (m2 or !seed))) {
+                next.items[0] = @as(u32, @intFromBool(m2)) | (@as(u32, @intFromBool(seed)) << 1) | (@as(u32, cat[c]) << 2);
+                nx = try fkeys.intern(a, next.items);
+            }
+            try ftrans.append(a, nx | (if (is_match) emit else 0));
+        }
+    }
+    const fn_states: u32 = @intCast(fkeys.list.items.len);
+
+    // --- Reverse. Key: [right, pcs...]: the consuming pcs (or `match`) from
+    // which the text up to the end leads to `match`, sorted.
+    // Closures of `pc + 1` for each (left, right), computed on demand.
+    const memo = try a.alloc(?[]const u32, n * 16);
+    @memset(memo, null);
+    const Closure = struct {
+        fn of(wk: *Walker, mm: []?[]const u32, pc: u32, left: u8, right: u8) Allocator.Error![]const u32 {
+            const slot = &mm[@as(usize, pc) * 16 + @as(usize, left) * 4 + right];
+            if (slot.*) |got| return got;
+            var out: std.ArrayListUnmanaged(u32) = .empty;
+            wk.gen += 1;
+            try wk.walk(&out, pc, left, right);
+            slot.* = out.items;
+            return out.items;
+        }
+    };
+    const in_set = try a.alloc(bool, n);
+    @memset(in_set, false);
+    var rkeys: Keys = .{};
+    try rkeys.list.append(a, &.{});
+    var ends: std.ArrayListUnmanaged(u32) = .empty;
+    try ends.append(a, 0);
+    for (prog.insts, 0..) |inst, pc| if (inst == .match) try ends.append(a, @intCast(pc));
+    var rstart_old: [4]u32 = undefined;
+    for (0..4) |rc| {
+        ends.items[0] = @intCast(rc);
+        rstart_old[rc] = try rkeys.intern(a, ends.items);
+    }
+    var rtrans: std.ArrayListUnmanaged(u32) = .empty;
+    si = 1;
+    while (si < rkeys.list.items.len) : (si += 1) {
+        const total = fn_states - 1 + rkeys.list.items.len - 1;
+        if (total > max_states or (fn_states - 1) * fcol + (rkeys.list.items.len - 1) * rcol > max_cells) return null;
+        const key = rkeys.list.items[si];
+        const right: u8 = @intCast(key[0]);
+        for (key[1..]) |pc| in_set[pc] = true;
+        for (0..rcol) |c| {
+            const boundary = c >= nclass;
+            const left: u8 = if (boundary) @intCast(c - nclass) else cat[c];
+            var starts_here = false;
+            for (try Closure.of(&w, memo, 0, left, right)) |pc| if (in_set[pc]) {
+                starts_here = true;
+                break;
+            };
+            var nx: u32 = 0;
+            if (!boundary) {
+                next.clearRetainingCapacity();
+                try next.append(a, cat[c]);
+                for (prog.insts, 0..) |inst, pc| {
+                    if (inst != .char and inst != .set) continue;
+                    if (sigs[c * ncons + cons_index[pc]] == 0) continue;
+                    for (try Closure.of(&w, memo, @intCast(pc + 1), left, right)) |q| if (in_set[q]) {
+                        try next.append(a, @intCast(pc));
+                        break;
+                    };
+                }
+                if (next.items.len > 1) nx = try rkeys.intern(a, next.items);
+            }
+            try rtrans.append(a, nx | (if (starts_here) emit else 0));
+        }
+        for (key[1..]) |pc| in_set[pc] = false;
+    }
+    const rn_states: u32 = @intCast(rkeys.list.items.len);
+
+    // --- Tables: forward specials (the unanchored starts) first.
+    const d = try gpa.create(Dfa);
+    errdefer gpa.destroy(d);
+    const out_cuts = try gpa.dupe(u32, cuts);
+    errdefer gpa.free(out_cuts);
+    const out_valid = try gpa.dupe(u32, valid);
+    errdefer gpa.free(out_valid);
+    const out_bad = try gpa.dupe(u32, bad);
+    errdefer gpa.free(out_bad);
+    const out_cat = try gpa.dupe(u8, cat);
+    errdefer gpa.free(out_cat);
+    const ft = try gpa.alloc(u32, fn_states * fcol);
+    errdefer gpa.free(ft);
+    const rt = try gpa.alloc(u32, rn_states * rcol);
+    errdefer gpa.free(rt);
+
+    // The four unanchored starts were interned first: ids 1 to 4 already.
+    @memset(ft[0..fcol], 0);
+    for (1..fn_states) |id| for (0..fcol) |c| {
+        const t = ftrans.items[(id - 1) * fcol + c];
+        ft[id * fcol + c] = (t & ~emit) * fcol | (t & emit);
+    };
+    @memset(rt[0..rcol], 0);
+    for (1..rn_states) |id| for (0..rcol) |c| {
+        const t = rtrans.items[(id - 1) * rcol + c];
+        rt[id * rcol + c] = (t & ~emit) * rcol | (t & emit);
+    };
+    var fstart: [2][4]u32 = undefined;
+    for (0..2) |sk| for (0..4) |cx| {
+        fstart[sk][cx] = fstart_old[sk][cx] * fcol;
+    };
+    var rstart: [4]u32 = undefined;
+    for (0..4) |rc| rstart[rc] = rstart_old[rc] * rcol;
+    d.* = .{
+        .cuts = out_cuts,
+        .valid = out_valid,
+        .bad = out_bad,
+        .ascii = undefined,
+        .nclass = nclass,
+        .ft = &.{},
+        .fstart = .{ 0, 0 },
+        .fmatch_max = 0,
+        .fspecial_max = 0,
+        .rt = &.{},
+        .rstart = 0,
+        .rok_max = 0,
+        .fstates = fn_states - 1,
+        .rstates = rn_states - 1,
+        .ctx = .{
+            .cat = out_cat,
+            .ft = ft,
+            .fcol = fcol,
+            .fstart = fstart,
+            .fspecial_max = 4 * fcol,
+            .rt = rt,
+            .rcol = rcol,
+            .rstart = rstart,
+        },
+    };
+    for (0..128) |v| d.ascii[v] = d.classOfSlow(@intCast(v), false);
+    return d;
+}
+
 // ------------------------------------------------------------------ tests
 
 const testing = std.testing;
@@ -591,13 +1026,128 @@ test "the cap: a program above it gets no DFA" {
     try expectSameAsVm(&ok, "abababbbaaabab babba");
 }
 
-test "eligible: no asserts" {
+test "eligible: asserts too (A phase 2)" {
     const wb: hir.Node = .{ .assert = .word_boundary };
     const a = lit("a");
     const seq: hir.Node = .{ .seq = &.{ &wb, &a } };
     const p = try compile_mod.compileWith(testing.allocator, &seq, .{ .prefilters = false });
     defer p.deinit(testing.allocator);
-    try testing.expect(!eligible(&p));
+    try testing.expect(eligible(&p));
+}
+
+fn scopeOf(flags: hir.Flags, body: *const hir.Node) hir.Node {
+    return .{ .modifier_scope = .{ .flags = flags, .body = body } };
+}
+
+test "asserts: ^ and $, with and without m, against the VM" {
+    const caret: hir.Node = .{ .assert = .caret };
+    const dollar: hir.Node = .{ .assert = .dollar };
+    const abc = lit("abc");
+    const a = lit("a");
+    const b_ = lit("b");
+    const lower = setNode(&.{.{ .lo = 'a', .hi = 'z' }});
+    const wrd = rep(&lower, 1, null);
+    const caret_abc: hir.Node = .{ .seq = &.{ &caret, &abc } };
+    const abc_dollar: hir.Node = .{ .seq = &.{ &abc, &dollar } };
+    const caret_a: hir.Node = .{ .seq = &.{ &caret, &a } };
+    const b_dollar: hir.Node = .{ .seq = &.{ &b_, &dollar } };
+    const either: hir.Node = .{ .alt = &.{ &caret_a, &b_dollar } };
+    const whole: hir.Node = .{ .seq = &.{ &caret, &wrd, &dollar } };
+    const empty_line: hir.Node = .{ .seq = &.{ &caret, &dollar } };
+    const mid: hir.Node = .{ .seq = &.{ &a, &dollar, &b_ } };
+    const texts = [_][]const u8{
+        "abc\nabc\r\nxabc abc",
+        "a\nb\na b\n\nab",
+        "abc\xE2\x80\xA8abc\xE2\x80\xA9b",
+        "",
+        "\n\n",
+    };
+    for ([_]*const hir.Node{ &caret_abc, &abc_dollar, &either, &whole, &empty_line, &mid }) |root| {
+        for ([_]bool{ false, true }) |multiline| {
+            const scoped = scopeOf(.{ .multiline = multiline }, root);
+            const built = try Built.init(&scoped);
+            defer built.deinit();
+            try testing.expect(built.dfa.?.ctx != null);
+            for (texts) |t| try expectSameAsVm(&built, t);
+        }
+    }
+}
+
+test "asserts: \\b and \\B, next to non-ASCII and ill-formed bytes, against the VM" {
+    const wb: hir.Node = .{ .assert = .word_boundary };
+    const nwb: hir.Node = .{ .assert = .not_word_boundary };
+    const foo = lit("foo");
+    const o = lit("o");
+    const a = lit("a");
+    const lower = setNode(&.{.{ .lo = 'a', .hi = 'z' }});
+    const wrd = rep(&lower, 1, null);
+    const wfoo: hir.Node = .{ .seq = &.{ &wb, &foo, &wb } };
+    const nwo: hir.Node = .{ .seq = &.{ &nwb, &o, &nwb } };
+    const a_wb: hir.Node = .{ .seq = &.{ &a, &wb } };
+    const wword: hir.Node = .{ .seq = &.{ &wb, &wrd, &wb } };
+    const only_wb: hir.Node = .{ .seq = &.{&wb} };
+    const star = rep(&lower, 0, null);
+    const wstar: hir.Node = .{ .seq = &.{ &wb, &star } };
+    const texts = [_][]const u8{
+        "foo foofoo _foo foo_ (foo) foo",
+        "zoo ooo o oo a ab ba a_",
+        "caf\xC3\xA9foo foo\xC3\xA9 \xE9foo foo\xFF",
+        "",
+        " ",
+    };
+    for ([_]*const hir.Node{ &wfoo, &nwo, &a_wb, &wword, &only_wb, &wstar }) |root| {
+        const built = try Built.init(root);
+        defer built.deinit();
+        try testing.expect(built.dfa.?.ctx != null);
+        for (texts) |t| try expectSameAsVm(&built, t);
+    }
+}
+
+test "asserts: groups, anchored programs through exec, the cap, and allocation failure" {
+    const wb: hir.Node = .{ .assert = .word_boundary };
+    const digit = setNode(&.{.{ .lo = '0', .hi = '9' }});
+    const three = rep(&digit, 3, 3);
+    const g1: hir.Node = .{ .capture = .{ .index = 1, .name = null, .body = &three } };
+    const dash = lit("-");
+    const plus = rep(&digit, 1, null);
+    const seq: hir.Node = .{ .seq = &.{ &wb, &g1, &dash, &plus, &wb } };
+    const p = try compile_mod.compileWith(testing.allocator, &seq, .{ .prefilters = false, .tagged = true });
+    defer p.deinit(testing.allocator);
+    const d = (try build(testing.allocator, &p)).?;
+    defer d.deinit(testing.allocator);
+    const built: Built = .{ .prog = p, .dfa = d };
+    try expectSameAsVm(&built, "12-3 555-1234 x555-1234 55-5 666-7-");
+    // An anchored program through `exec` (its own DFA, with prefilters):
+    // the forward DFA at index 0 only.
+    const caret: hir.Node = .{ .assert = .caret };
+    const anchored: hir.Node = .{ .seq = &.{ &caret, &three, &dash } };
+    const ap = try compile_mod.compile(testing.allocator, &anchored);
+    defer ap.deinit(testing.allocator);
+    try testing.expect(ap.dfa != null and ap.prefilter.anchored);
+    var scratch: pikevm.VmScratch = .init(testing.allocator);
+    defer scratch.deinit();
+    var slots: [2]?usize = undefined;
+    try testing.expect(try pikevm.exec(&ap, u8, "555-1234", .code_unit, 0, false, &scratch, &slots));
+    try testing.expectEqual(@as(?usize, 4), slots[1]);
+    try testing.expect(!try pikevm.exec(&ap, u8, "x555-1234", .code_unit, 0, false, &scratch, &slots));
+    try testing.expect(!try pikevm.exec(&ap, u8, "555-1234", .code_unit, 1, false, &scratch, &slots));
+    // The cap applies with asserts too.
+    const a = lit("a");
+    const b_ = lit("b");
+    const ab: hir.Node = .{ .alt = &.{ &a, &b_ } };
+    const star = rep(&ab, 0, null);
+    const tail = rep(&ab, 11, 11);
+    const big: hir.Node = .{ .seq = &.{ &star, &a, &tail, &wb } };
+    const over = try Built.init(&big);
+    defer over.deinit();
+    try testing.expectEqual(@as(?*const Dfa, null), over.dfa);
+    // No leak on allocation failure.
+    try testing.checkAllAllocationFailures(testing.allocator, struct {
+        fn f(gpa: Allocator, prog: *const Program) !void {
+            const dd = (try build(gpa, prog)).?;
+            dd.deinit(gpa);
+        }
+    }.f, .{&p});
 }
 
 test "build doesn't leak on allocation failure" {
