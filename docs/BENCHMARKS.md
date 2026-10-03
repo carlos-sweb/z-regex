@@ -1,28 +1,30 @@
 # Benchmarks: z-regex against V8, Rust regex, PCRE2 and zig-regex
 
-What this measures: z-regex 0.7.0 (the end of F7c; measured on commit `e242987`, whose
-code is 0.7.0's) against the engines people would use instead, **tier by tier**
+**v0.8.0, after T0-A (DFA).** What this measures: z-regex 0.8.0 (measured on commit
+`c9274bc`, whose code is 0.8.0's) against the engines people would use instead, **tier by tier**
 (docs/REGEX_TIERS_PLAN.md): a T0 case is compared only with engines that run it as a regular
 expression, a T2 case (backreferences, lookaround) only with backtracking engines that
-support it. Tiers are never mixed in one table. z-regex 0.3.2, the version of the previous
-publication, runs in the same rounds as a base (see "Against 0.3.2").
+support it. Tiers are never mixed in one table. z-regex 0.7.0, the version of the previous
+publication, runs in the same rounds as a base (see "Against 0.7.0").
 
 ## Setup
 
 | | |
 |---|---|
-| Machine | Intel(R) Xeon(R) Processor @ 2.80GHz, 4 cores (no SMT), KVM guest, 15Gi RAM, Linux 6.18.44-fc-v50 |
+| Machine | Intel(R) Xeon(R) Processor @ 2.80GHz, 4 cores (no SMT), KVM guest, 15Gi RAM, Linux 6.18.44-fc-v64 |
 | Environment | **shared container**: a case moves by ±20% from one process to the next; read the band, not only the best round |
-| z-regex | 0.7.0 (commit `e242987`: the same code, before the version bump), and 0.3.2 as the base. Zig 0.16.0, ReleaseFast, **`-Dcpu=x86_64_v3`** (AVX2, no AVX-512), the CPU model of `scripts/measure_binary.sh` |
+| z-regex | 0.8.0 (commit `c9274bc`: the same code, before the version bump), and 0.7.0 as the base. Zig 0.16.0, ReleaseFast, **`-Dcpu=x86_64_v3`** (AVX2, no AVX-512), the CPU model of `scripts/measure_binary.sh` |
 | V8 | 12.4.254.21-node.39 (Node v22.22.2) |
 | Rust regex | 1.13.1 (rustc 1.94.1 (e408947bf 2026-03-25)), release, LTO |
 | PCRE2 | 10.42, 8-bit library, JIT and interpreter |
 | zig-regex | 0.1.1 (zig-utils/zig-regex, 173b298), the last release that builds with Zig 0.16 (v0.2.x needs 0.17-dev); built `native` by `setup_zigregex.sh` |
 
-**Not comparable with the previous publication's numbers.** Those (0.3.0, literals on
-0.3.1) were measured on another host (a Xeon at 2.10 GHz) with a `native` build (AVX-512).
-What changed in z-regex since then is measured here against 0.3.2 in the same rounds, same
-machine and same CPU model: see "Against 0.3.2".
+**The previous publication** (0.7.0) was measured on the same kind of host and the same CPU
+model; what changed in z-regex since then is measured here against 0.7.0 in the same rounds:
+see "Against 0.7.0". The route of each case (`<sub>(z-regex: …)</sub>`) now says when T0's DFA
+runs it: "DFA" (the forward and reverse DFAs give the match), "DFA, tagged VM" (the DFA gives
+the bounds and the tagged VM fills the groups over the span); "VM" covers the fast paths
+(literal, class run, Shift-And) that run before the DFA.
 
 **Method.** 10 interleaved rounds: each round runs every engine once over all its cases, and
 the engines' order rotates from round to round. Within a round, a throughput number is the
@@ -113,312 +115,316 @@ feature it lacks). "unsupported": the engine rejects the pattern.
 
 | Case | z-regex | V8 (warm) | V8 (cold) | Rust regex | zig-regex |
 |---|---|---|---|---|---|
-| literal hello <sub>(z-regex: VM)</sub> | 12479.3 (7152.2–12479.3) | 1793.9 (1369.8–1793.9) | 1505.2 (1002.8–1505.2) | 19530.5 (12528.8–19530.5) | — |
-| [a-z]+ <sub>(z-regex: VM)</sub> | 53.1 (42.1–53.1) | 73.5 (50.5–73.5) | 51.4 (44.9–51.4) | 55.6 (31.2–55.6) | — |
-| [a-z]+ (z-regex: generic VM, no fast path) <sub>(z-regex: VM)</sub> | 25.7 (22.7–25.7) | n/a | n/a | n/a | n/a |
-| [a-z]+ (z-regex: backtracker) <sub>(z-regex: backtracker)</sub> | 20.2 (15.5–20.2) | n/a | n/a | n/a | n/a |
-| \d{3}-\d{4} (sparse) <sub>(z-regex: VM)</sub> | 373.8 (221.5–373.8) | 1177.7 (867.6–1177.7) | 371.1 (267.1–371.1) | 1728.0 (1027.5–1728.0) | — |
-| \d{3}-\d{4} (dense) <sub>(z-regex: VM)</sub> | 29.2 (25.7–29.2) | 165.7 (146.2–165.7) | 96.1 (60.8–96.1) | 81.6 (72.1–81.6) | — |
-| email <sub>(z-regex: VM)</sub> | 34.9 (19.7–34.9) | 79.3 (70.0–79.3) | 66.6 (40.7–66.6) | 687.7 (450.9–687.7) | unsupported |
-| (\d{3})-(\d{4}) (sparse) <sub>(z-regex: tagged VM)</sub> | 210.2 (195.3–210.2) | 955.3 (534.1–955.3) | 357.7 (205.6–357.7) | 833.8 (569.4–833.8) | — |
-| (\d{3})-(\d{4}) (dense) <sub>(z-regex: tagged VM)</sub> | 22.0 (19.1–22.0) | 126.1 (89.8–126.1) | 91.9 (69.9–91.9) | 60.0 (55.1–60.0) | — |
-| (?:(a)\|b)*c <sub>(z-regex: tagged VM)</sub> | 12.0 (10.1–12.0) | 29.1 (23.8–29.1) | 24.8 (19.4–24.8) | 39.0 (35.5–39.0) | — |
-| book: Darcy <sub>(z-regex: VM)</sub> | 6964.1 (4306.9–6964.1) | 8379.8 (4805.2–8379.8) | 2534.8 (1508.8–2534.8) | 17967.9 (16669.9–17967.9) | — |
-| book: [A-Z][a-z]+ <sub>(z-regex: VM)</sub> | 222.8 (164.4–222.8) | 478.1 (258.5–478.1) | 139.4 (111.6–139.4) | 292.3 (273.0–292.3) | — |
-| book: (Mr\|Mrs\|Miss)\.? ([A-Z][a-z]+) <sub>(z-regex: tagged VM)</sub> | 459.8 (275.4–459.8) | 455.7 (327.6–455.7) | 348.0 (178.1–348.0) | 1641.4 (1480.7–1641.4) | — |
+| literal hello <sub>(z-regex: VM)</sub> | 11559.9 (4668.3–11559.9) | 1803.0 (1313.1–1803.0) | 1567.3 (1174.5–1567.3) | 19676.5 (9943.1–19676.5) | — |
+| [a-z]+ <sub>(z-regex: VM)</sub> | 56.4 (43.2–56.4) | 75.8 (69.8–75.8) | 54.0 (39.6–54.0) | 55.7 (49.1–55.7) | — |
+| [a-z]+ (z-regex: generic VM, no fast path) <sub>(z-regex: VM)</sub> | 27.0 (24.3–27.0) | n/a | n/a | n/a | n/a |
+| [a-z]+ (z-regex: backtracker) <sub>(z-regex: backtracker)</sub> | 20.3 (19.3–20.3) | n/a | n/a | n/a | n/a |
+| \d{3}-\d{4} (sparse) <sub>(z-regex: VM)</sub> | 442.6 (258.9–442.6) | 1212.5 (804.7–1212.5) | 382.0 (225.1–382.0) | 1722.6 (1538.4–1722.6) | — |
+| \d{3}-\d{4} (dense) <sub>(z-regex: VM)</sub> | 223.1 (194.6–223.1) | 165.2 (139.9–165.2) | 104.2 (60.0–104.2) | 82.1 (54.6–82.1) | — |
+| email <sub>(z-regex: DFA)</sub> | 505.6 (470.1–505.6) | 79.7 (47.4–79.7) | 67.3 (43.7–67.3) | 702.8 (656.2–702.8) | unsupported |
+| (\d{3})-(\d{4}) (sparse) <sub>(z-regex: tagged VM)</sub> | 235.1 (216.4–235.1) | 973.5 (898.1–973.5) | 343.8 (286.3–343.8) | 820.6 (483.4–820.6) | — |
+| (\d{3})-(\d{4}) (dense) <sub>(z-regex: tagged VM)</sub> | 58.3 (51.3–58.3) | 129.3 (111.3–129.3) | 94.0 (54.9–94.0) | 60.9 (38.6–60.9) | — |
+| (?:(a)\|b)*c <sub>(z-regex: DFA, tagged VM)</sub> | 18.5 (17.6–18.5) | 29.1 (21.6–29.1) | 25.6 (23.8–25.6) | 39.1 (37.5–39.1) | — |
+| book: Darcy <sub>(z-regex: VM)</sub> | 7172.4 (5554.5–7172.4) | 8029.0 (6958.1–8029.0) | 2686.1 (1153.5–2686.1) | 17762.8 (16263.2–17762.8) | — |
+| book: [A-Z][a-z]+ <sub>(z-regex: DFA)</sub> | 335.5 (267.8–335.5) | 493.7 (287.0–493.7) | 145.1 (114.0–145.1) | 296.9 (278.5–296.9) | — |
+| book: (Mr\|Mrs\|Miss)\.? ([A-Z][a-z]+) <sub>(z-regex: DFA, tagged VM)</sub> | 622.4 (559.6–622.4) | 458.3 (341.2–458.3) | 350.3 (258.9–350.3) | 1620.2 (1144.5–1620.2) | — |
 
 #### T0: execAt MB/s (engine loop, no per-match allocation where the API allows)
 
 | Case | z-regex | V8 (warm) | Rust regex | zig-regex |
 |---|---|---|---|---|
-| literal hello <sub>(z-regex: VM)</sub> | 13668.9 (11496.0–13668.9) | 1809.3 (1421.3–1809.3) | 19916.7 (12089.3–19916.7) | — |
-| [a-z]+ <sub>(z-regex: VM)</sub> | 195.3 (100.0–195.3) | 77.9 (65.4–77.9) | 59.0 (35.4–59.0) | — |
-| [a-z]+ (z-regex: generic VM, no fast path) <sub>(z-regex: VM)</sub> | 40.2 (22.8–40.2) | n/a | n/a | n/a |
-| [a-z]+ (z-regex: backtracker) <sub>(z-regex: backtracker)</sub> | 29.5 (28.1–29.5) | n/a | n/a | n/a |
-| \d{3}-\d{4} (sparse) <sub>(z-regex: VM)</sub> | 473.4 (411.1–473.4) | 909.5 (847.9–909.5) | 1819.2 (1110.2–1819.2) | — |
-| \d{3}-\d{4} (dense) <sub>(z-regex: VM)</sub> | 34.0 (26.5–34.0) | 172.8 (155.4–172.8) | 84.3 (56.1–84.3) | — |
-| email <sub>(z-regex: VM)</sub> | 36.2 (25.3–36.2) | 79.4 (48.0–79.4) | 705.0 (544.5–705.0) | unsupported |
-| (\d{3})-(\d{4}) (sparse) <sub>(z-regex: tagged VM)</sub> | 244.3 (211.7–244.3) | 1002.5 (341.0–1002.5) | 1155.5 (972.4–1155.5) | — |
-| (\d{3})-(\d{4}) (dense) <sub>(z-regex: tagged VM)</sub> | 24.8 (19.1–24.8) | 143.7 (98.5–143.7) | 71.5 (49.8–71.5) | — |
-| (?:(a)\|b)*c <sub>(z-regex: tagged VM)</sub> | 13.6 (12.5–13.6) | 29.5 (28.0–29.5) | 51.3 (38.1–51.3) | — |
-| book: Darcy <sub>(z-regex: VM)</sub> | 13284.0 (8603.8–13284.0) | 8759.7 (4906.5–8759.7) | 19276.8 (17366.1–19276.8) | — |
-| book: [A-Z][a-z]+ <sub>(z-regex: VM)</sub> | 322.4 (255.5–322.4) | 506.5 (283.1–506.5) | 301.0 (287.0–301.0) | — |
-| book: (Mr\|Mrs\|Miss)\.? ([A-Z][a-z]+) <sub>(z-regex: tagged VM)</sub> | 527.7 (314.4–527.7) | 460.8 (353.1–460.8) | 2116.5 (1725.2–2116.5) | — |
+| literal hello <sub>(z-regex: VM)</sub> | 13623.6 (5970.3–13623.6) | 1822.0 (1332.0–1822.0) | 20135.7 (11788.1–20135.7) | — |
+| [a-z]+ <sub>(z-regex: VM)</sub> | 185.8 (178.5–185.8) | 79.2 (65.0–79.2) | 58.4 (51.2–58.4) | — |
+| [a-z]+ (z-regex: generic VM, no fast path) <sub>(z-regex: VM)</sub> | 42.1 (38.6–42.1) | n/a | n/a | n/a |
+| [a-z]+ (z-regex: backtracker) <sub>(z-regex: backtracker)</sub> | 30.1 (17.6–30.1) | n/a | n/a | n/a |
+| \d{3}-\d{4} (sparse) <sub>(z-regex: VM)</sub> | 572.8 (518.4–572.8) | 955.4 (846.9–955.4) | 1772.2 (1226.3–1772.2) | — |
+| \d{3}-\d{4} (dense) <sub>(z-regex: VM)</sub> | 409.5 (333.6–409.5) | 173.6 (151.2–173.6) | 84.5 (64.4–84.5) | — |
+| email <sub>(z-regex: DFA)</sub> | 758.7 (725.3–758.7) | 80.0 (56.1–80.0) | 717.1 (663.2–717.1) | unsupported |
+| (\d{3})-(\d{4}) (sparse) <sub>(z-regex: tagged VM)</sub> | 283.3 (270.5–283.3) | 1052.6 (967.8–1052.6) | 1160.0 (554.0–1160.0) | — |
+| (\d{3})-(\d{4}) (dense) <sub>(z-regex: tagged VM)</sub> | 74.5 (68.7–74.5) | 146.0 (140.4–146.0) | 71.5 (58.6–71.5) | — |
+| (?:(a)\|b)*c <sub>(z-regex: DFA, tagged VM)</sub> | 22.1 (18.5–22.1) | 29.7 (26.4–29.7) | 51.2 (45.5–51.2) | — |
+| book: Darcy <sub>(z-regex: VM)</sub> | 13532.6 (12870.1–13532.6) | 8677.4 (8148.8–8677.4) | 19334.0 (16933.4–19334.0) | — |
+| book: [A-Z][a-z]+ <sub>(z-regex: DFA)</sub> | 599.3 (398.2–599.3) | 504.4 (320.4–504.4) | 302.6 (185.7–302.6) | — |
+| book: (Mr\|Mrs\|Miss)\.? ([A-Z][a-z]+) <sub>(z-regex: DFA, tagged VM)</sub> | 725.5 (655.5–725.5) | 466.6 (345.0–466.6) | 2090.4 (1897.1–2090.4) | — |
 
 #### T0: z-regex iterator MB/s (Regex.iterator: every match, warm Scratch, no allocation)
 
 | Case | z-regex |
 |---|---|
-| literal hello <sub>(z-regex: VM)</sub> | 13682.9 (12573.1–13682.9) |
-| [a-z]+ <sub>(z-regex: VM)</sub> | 192.3 (100.7–192.3) |
-| [a-z]+ (z-regex: generic VM, no fast path) <sub>(z-regex: VM)</sub> | 40.2 (32.5–40.2) |
-| [a-z]+ (z-regex: backtracker) <sub>(z-regex: backtracker)</sub> | 29.6 (24.9–29.6) |
-| \d{3}-\d{4} (sparse) <sub>(z-regex: VM)</sub> | 473.7 (422.4–473.7) |
-| \d{3}-\d{4} (dense) <sub>(z-regex: VM)</sub> | 33.6 (29.4–33.6) |
-| email <sub>(z-regex: VM)</sub> | 36.0 (30.4–36.0) |
-| (\d{3})-(\d{4}) (sparse) <sub>(z-regex: tagged VM)</sub> | 244.5 (201.2–244.5) |
-| (\d{3})-(\d{4}) (dense) <sub>(z-regex: tagged VM)</sub> | 24.4 (21.5–24.4) |
-| (?:(a)\|b)*c <sub>(z-regex: tagged VM)</sub> | 13.3 (12.1–13.3) |
-| book: Darcy <sub>(z-regex: VM)</sub> | 13197.7 (8405.2–13197.7) |
-| book: [A-Z][a-z]+ <sub>(z-regex: VM)</sub> | 321.6 (203.7–321.6) |
-| book: (Mr\|Mrs\|Miss)\.? ([A-Z][a-z]+) <sub>(z-regex: tagged VM)</sub> | 525.2 (316.0–525.2) |
+| literal hello <sub>(z-regex: VM)</sub> | 13712.7 (3419.0–13712.7) |
+| [a-z]+ <sub>(z-regex: VM)</sub> | 178.5 (171.4–178.5) |
+| [a-z]+ (z-regex: generic VM, no fast path) <sub>(z-regex: VM)</sub> | 42.3 (34.5–42.3) |
+| [a-z]+ (z-regex: backtracker) <sub>(z-regex: backtracker)</sub> | 30.2 (21.8–30.2) |
+| \d{3}-\d{4} (sparse) <sub>(z-regex: VM)</sub> | 575.9 (538.5–575.9) |
+| \d{3}-\d{4} (dense) <sub>(z-regex: VM)</sub> | 406.7 (382.7–406.7) |
+| email <sub>(z-regex: DFA)</sub> | 756.6 (575.3–756.6) |
+| (\d{3})-(\d{4}) (sparse) <sub>(z-regex: tagged VM)</sub> | 281.8 (276.1–281.8) |
+| (\d{3})-(\d{4}) (dense) <sub>(z-regex: tagged VM)</sub> | 74.2 (61.6–74.2) |
+| (?:(a)\|b)*c <sub>(z-regex: DFA, tagged VM)</sub> | 22.1 (19.6–22.1) |
+| book: Darcy <sub>(z-regex: VM)</sub> | 13429.5 (9776.0–13429.5) |
+| book: [A-Z][a-z]+ <sub>(z-regex: DFA)</sub> | 595.8 (379.8–595.8) |
+| book: (Mr\|Mrs\|Miss)\.? ([A-Z][a-z]+) <sub>(z-regex: DFA, tagged VM)</sub> | 729.5 (520.3–729.5) |
 
 #### T0: ns per exec on a short input (< 64 B)
 
 | Case | z-regex | V8 (warm) | Rust regex | zig-regex |
 |---|---|---|---|---|
-| literal hello <sub>(z-regex: VM)</sub> | 28 (28–30) | 67 (67–107) | 22 (22–38) | 417 (417–597) |
-| [a-z]+ <sub>(z-regex: VM)</sub> | 19 (19–35) | 65 (65–83) | 83 (83–101) | 602 (602–672) |
-| [a-z]+ (z-regex: generic VM, no fast path) <sub>(z-regex: VM)</sub> | 121 (121–156) | n/a | n/a | n/a |
-| [a-z]+ (z-regex: backtracker) <sub>(z-regex: backtracker)</sub> | 162 (162–303) | n/a | n/a | n/a |
-| \d{3}-\d{4} (sparse) <sub>(z-regex: VM)</sub> | 284 (284–338) | 86 (86–95) | 76 (76–81) | 1501 (1501–1874) |
-| \d{3}-\d{4} (dense) <sub>(z-regex: VM)</sub> | 284 (284–322) | 84 (84–100) | 75 (75–125) | 1453 (1453–1829) |
-| email <sub>(z-regex: VM)</sub> | 482 (482–547) | 137 (137–154) | 86 (86–93) | unsupported |
-| (\d{3})-(\d{4}) (sparse) <sub>(z-regex: tagged VM)</sub> | 618 (618–671) | 114 (114–151) | 137 (137–147) | 3526 (3526–3715) |
-| (\d{3})-(\d{4}) (dense) <sub>(z-regex: tagged VM)</sub> | 621 (621–652) | 116 (116–153) | 137 (137–143) | 3470 (3470–4044) |
-| (?:(a)\|b)*c <sub>(z-regex: tagged VM)</sub> | 566 (566–618) | 77 (77–97) | 141 (141–145) | 3401 (3401–4046) |
-| book: Darcy <sub>(z-regex: VM)</sub> | 28 (28–29) | 71 (71–82) | 21 (21–22) | 405 (405–470) |
-| book: [A-Z][a-z]+ <sub>(z-regex: VM)</sub> | 182 (182–259) | 80 (80–103) | 86 (86–89) | 1788 (1788–1958) |
-| book: (Mr\|Mrs\|Miss)\.? ([A-Z][a-z]+) <sub>(z-regex: tagged VM)</sub> | 856 (856–952) | 110 (110–124) | 173 (173–179) | 8653 (8653–9528) |
+| literal hello <sub>(z-regex: VM)</sub> | 25 (25–51) | 66 (66–75) | 21 (21–37) | 407 (407–733) |
+| [a-z]+ <sub>(z-regex: VM)</sub> | 20 (20–22) | 64 (64–91) | 83 (83–96) | 601 (601–892) |
+| [a-z]+ (z-regex: generic VM, no fast path) <sub>(z-regex: VM)</sub> | 112 (112–145) | n/a | n/a | n/a |
+| [a-z]+ (z-regex: backtracker) <sub>(z-regex: backtracker)</sub> | 158 (158–220) | n/a | n/a | n/a |
+| \d{3}-\d{4} (sparse) <sub>(z-regex: VM)</sub> | 33 (33–61) | 81 (81–97) | 75 (75–79) | 1447 (1447–1570) |
+| \d{3}-\d{4} (dense) <sub>(z-regex: VM)</sub> | 33 (33–35) | 79 (79–93) | 75 (75–86) | 1450 (1450–1765) |
+| email <sub>(z-regex: DFA)</sub> | 74 (74–78) | 135 (135–154) | 85 (85–103) | unsupported |
+| (\d{3})-(\d{4}) (sparse) <sub>(z-regex: tagged VM)</sub> | 365 (365–384) | 108 (108–121) | 136 (136–142) | 3484 (3484–3718) |
+| (\d{3})-(\d{4}) (dense) <sub>(z-regex: tagged VM)</sub> | 393 (393–414) | 115 (115–137) | 136 (136–145) | 3508 (3508–3681) |
+| (?:(a)\|b)*c <sub>(z-regex: DFA, tagged VM)</sub> | 458 (458–494) | 75 (75–84) | 141 (141–146) | 3371 (3371–3619) |
+| book: Darcy <sub>(z-regex: VM)</sub> | 25 (25–34) | 69 (69–76) | 21 (21–22) | 405 (405–425) |
+| book: [A-Z][a-z]+ <sub>(z-regex: DFA)</sub> | 57 (57–67) | 79 (79–89) | 86 (86–91) | 1782 (1782–2066) |
+| book: (Mr\|Mrs\|Miss)\.? ([A-Z][a-z]+) <sub>(z-regex: DFA, tagged VM)</sub> | 604 (604–641) | 105 (105–120) | 173 (173–197) | 8432 (8432–8844) |
 
 #### T0: µs per compile
 
 | Case | z-regex | Rust regex | zig-regex |
 |---|---|---|---|
-| literal hello <sub>(z-regex: VM)</sub> | 1.53 (1.53–1.58) | 2.66 (2.66–5.13) | 0.96 (0.96–1.86) |
-| [a-z]+ <sub>(z-regex: VM)</sub> | 1.28 (1.28–1.65) | 8.37 (8.37–15.06) | 0.63 (0.63–0.93) |
-| [a-z]+ (z-regex: generic VM, no fast path) <sub>(z-regex: VM)</sub> | 1.25 (1.25–2.08) | n/a | n/a |
-| [a-z]+ (z-regex: backtracker) <sub>(z-regex: backtracker)</sub> | 0.83 (0.83–1.01) | n/a | n/a |
-| \d{3}-\d{4} (sparse) <sub>(z-regex: VM)</sub> | 2.12 (2.12–3.59) | 194.45 (194.45–328.74) | 1.26 (1.26–2.86) |
-| \d{3}-\d{4} (dense) <sub>(z-regex: VM)</sub> | 2.09 (2.09–2.47) | 191.81 (191.81–199.77) | 1.30 (1.30–2.28) |
-| email <sub>(z-regex: VM)</sub> | 4.42 (4.42–5.54) | 21.41 (21.41–24.95) | unsupported |
-| (\d{3})-(\d{4}) (sparse) <sub>(z-regex: tagged VM)</sub> | 2.77 (2.77–2.80) | 197.84 (197.84–244.50) | 1.65 (1.65–1.98) |
-| (\d{3})-(\d{4}) (dense) <sub>(z-regex: tagged VM)</sub> | 2.76 (2.76–2.97) | 197.25 (197.25–225.96) | 1.67 (1.67–3.90) |
-| (?:(a)\|b)*c <sub>(z-regex: tagged VM)</sub> | 2.95 (2.95–3.02) | 13.07 (13.07–16.95) | 1.16 (1.16–2.08) |
-| book: Darcy <sub>(z-regex: VM)</sub> | 1.52 (1.52–2.43) | 2.60 (2.60–2.95) | 0.97 (0.97–1.78) |
-| book: [A-Z][a-z]+ <sub>(z-regex: VM)</sub> | 1.84 (1.84–1.87) | 10.13 (10.13–11.17) | 0.86 (0.86–1.47) |
-| book: (Mr\|Mrs\|Miss)\.? ([A-Z][a-z]+) <sub>(z-regex: tagged VM)</sub> | 6.04 (6.04–9.90) | 29.50 (29.50–31.34) | 3.32 (3.32–3.95) |
+| literal hello <sub>(z-regex: VM)</sub> | 1.76 (1.76–2.85) | 2.68 (2.68–4.95) | 0.97 (0.97–1.63) |
+| [a-z]+ <sub>(z-regex: VM)</sub> | 1.43 (1.43–1.99) | 8.41 (8.41–12.73) | 0.62 (0.62–0.94) |
+| [a-z]+ (z-regex: generic VM, no fast path) <sub>(z-regex: VM)</sub> | 1.34 (1.34–2.16) | n/a | n/a |
+| [a-z]+ (z-regex: backtracker) <sub>(z-regex: backtracker)</sub> | 0.83 (0.83–1.08) | n/a | n/a |
+| \d{3}-\d{4} (sparse) <sub>(z-regex: VM)</sub> | 2.61 (2.61–2.65) | 192.68 (192.68–235.62) | 1.30 (1.30–2.27) |
+| \d{3}-\d{4} (dense) <sub>(z-regex: VM)</sub> | 2.60 (2.60–3.77) | 192.38 (192.38–309.96) | 1.28 (1.28–2.31) |
+| email <sub>(z-regex: DFA)</sub> | 12.36 (12.36–17.86) | 21.59 (21.59–23.39) | unsupported |
+| (\d{3})-(\d{4}) (sparse) <sub>(z-regex: tagged VM)</sub> | 3.27 (3.27–3.45) | 197.72 (197.72–301.68) | 3.99 (3.99–6.65) |
+| (\d{3})-(\d{4}) (dense) <sub>(z-regex: tagged VM)</sub> | 3.26 (3.26–3.34) | 197.00 (197.00–201.19) | 4.20 (4.20–5.60) |
+| (?:(a)\|b)*c <sub>(z-regex: DFA, tagged VM)</sub> | 7.24 (7.24–12.73) | 13.30 (13.30–15.15) | 3.54 (3.54–4.28) |
+| book: Darcy <sub>(z-regex: VM)</sub> | 1.71 (1.71–1.99) | 2.60 (2.60–2.98) | 0.96 (0.96–1.15) |
+| book: [A-Z][a-z]+ <sub>(z-regex: DFA)</sub> | 4.87 (4.87–8.08) | 10.31 (10.31–14.81) | 0.87 (0.87–1.36) |
+| book: (Mr\|Mrs\|Miss)\.? ([A-Z][a-z]+) <sub>(z-regex: DFA, tagged VM)</sub> | 25.29 (25.29–26.63) | 29.89 (29.89–33.82) | 6.00 (6.00–7.84) |
 
 #### T0: bytes per compiled pattern
 
 | Case | z-regex | zig-regex |
 |---|---|---|
 | literal hello <sub>(z-regex: VM)</sub> | 185 (185–185) | 2322 (2322–2322) |
-| [a-z]+ <sub>(z-regex: VM)</sub> | 187 (187–187) | 1016 (1016–1016) |
-| [a-z]+ (z-regex: generic VM, no fast path) <sub>(z-regex: VM)</sub> | 187 (187–187) | n/a |
+| [a-z]+ <sub>(z-regex: VM)</sub> | 135 (135–135) | 1016 (1016–1016) |
+| [a-z]+ (z-regex: generic VM, no fast path) <sub>(z-regex: VM)</sub> | 135 (135–135) | n/a |
 | [a-z]+ (z-regex: backtracker) <sub>(z-regex: backtracker)</sub> | 19 (19–19) | n/a |
-| \d{3}-\d{4} (sparse) <sub>(z-regex: VM)</sub> | 325 (325–325) | 3817 (3817–3817) |
-| \d{3}-\d{4} (dense) <sub>(z-regex: VM)</sub> | 325 (325–325) | 3817 (3817–3817) |
-| email <sub>(z-regex: VM)</sub> | 745 (745–745) | unsupported |
-| (\d{3})-(\d{4}) (sparse) <sub>(z-regex: tagged VM)</sub> | 433 (433–433) | 5365 (5365–5365) |
-| (\d{3})-(\d{4}) (dense) <sub>(z-regex: tagged VM)</sub> | 433 (433–433) | 5365 (5365–5365) |
-| (?:(a)\|b)*c <sub>(z-regex: tagged VM)</sub> | 357 (357–357) | 3227 (3227–3227) |
+| \d{3}-\d{4} (sparse) <sub>(z-regex: VM)</sub> | 1349 (1349–1349) | 3817 (3817–3817) |
+| \d{3}-\d{4} (dense) <sub>(z-regex: VM)</sub> | 1349 (1349–1349) | 3817 (3817–3817) |
+| email <sub>(z-regex: DFA)</sub> | 2165 (2165–2165) | unsupported |
+| (\d{3})-(\d{4}) (sparse) <sub>(z-regex: tagged VM)</sub> | 1457 (1457–1457) | 5365 (5365–5365) |
+| (\d{3})-(\d{4}) (dense) <sub>(z-regex: tagged VM)</sub> | 1457 (1457–1457) | 5365 (5365–5365) |
+| (?:(a)\|b)*c <sub>(z-regex: DFA, tagged VM)</sub> | 1393 (1393–1393) | 3227 (3227–3227) |
 | book: Darcy <sub>(z-regex: VM)</sub> | 185 (185–185) | 2322 (2322–2322) |
-| book: [A-Z][a-z]+ <sub>(z-regex: VM)</sub> | 260 (260–260) | 1751 (1751–1751) |
-| book: (Mr\|Mrs\|Miss)\.? ([A-Z][a-z]+) <sub>(z-regex: tagged VM)</sub> | 880 (880–880) | 9370 (9370–9370) |
+| book: [A-Z][a-z]+ <sub>(z-regex: DFA)</sub> | 1176 (1176–1176) | 1751 (1751–1751) |
+| book: (Mr\|Mrs\|Miss)\.? ([A-Z][a-z]+) <sub>(z-regex: DFA, tagged VM)</sub> | 3284 (3284–3284) | 9370 (9370–9370) |
 
 #### T1: findAll MB/s (allocating wrapper; V8 cold: new RegExp + first pass)
 
 | Case | z-regex | V8 (warm) | V8 (cold) | Rust regex |
 |---|---|---|---|---|
-| \p{L}+ /u <sub>(z-regex: VM)</sub> | 27.0 (24.3–27.0) | 36.9 (35.2–36.9) | 30.7 (18.8–30.7) | 63.1 (55.0–63.1) |
-| \p{Script=Greek}+ /u <sub>(z-regex: VM)</sub> | 48.7 (39.1–48.7) | 96.0 (81.4–96.0) | 65.6 (54.6–65.6) | 220.9 (205.4–220.9) |
-| \p{General_Category=Lu} /u <sub>(z-regex: VM)</sub> | 36.8 (30.6–36.8) | 51.4 (46.8–51.4) | 40.0 (24.9–40.0) | 172.1 (163.8–172.1) |
-| [\p{L}--[a-z]] /v <sub>(z-regex: backtracker)</sub> | 12.4 (9.1–12.4) | 25.9 (23.1–25.9) | 21.9 (12.3–21.9) | n/a |
-| book: \p{L}+ /u <sub>(z-regex: VM)</sub> | 23.2 (18.3–23.2) | 25.5 (22.5–25.5) | 20.5 (12.9–20.5) | 50.6 (30.9–50.6) |
+| \p{L}+ /u <sub>(z-regex: DFA)</sub> | 41.5 (37.9–41.5) | 36.9 (29.1–36.9) | 30.1 (18.2–30.1) | 64.2 (54.2–64.2) |
+| \p{Script=Greek}+ /u <sub>(z-regex: DFA)</sub> | 132.8 (107.5–132.8) | 98.2 (84.1–98.2) | 65.9 (57.9–65.9) | 223.5 (134.4–223.5) |
+| \p{General_Category=Lu} /u <sub>(z-regex: DFA)</sub> | 81.2 (73.5–81.2) | 52.2 (47.8–52.2) | 40.0 (35.4–40.0) | 173.7 (149.8–173.7) |
+| [\p{L}--[a-z]] /v <sub>(z-regex: backtracker)</sub> | 12.6 (10.2–12.6) | 25.8 (24.0–25.8) | 22.2 (15.1–22.2) | n/a |
+| book: \p{L}+ /u <sub>(z-regex: DFA)</sub> | 39.5 (30.0–39.5) | 25.8 (23.1–25.8) | 20.9 (16.0–20.9) | 49.9 (28.3–49.9) |
 
 #### T1: execAt MB/s (engine loop, no per-match allocation where the API allows)
 
 | Case | z-regex | V8 (warm) | Rust regex |
 |---|---|---|---|
-| \p{L}+ /u <sub>(z-regex: VM)</sub> | 40.3 (31.5–40.3) | 38.0 (34.4–38.0) | 67.6 (62.7–67.6) |
-| \p{Script=Greek}+ /u <sub>(z-regex: VM)</sub> | 55.6 (48.8–55.6) | 94.2 (82.3–94.2) | 228.9 (216.1–228.9) |
-| \p{General_Category=Lu} /u <sub>(z-regex: VM)</sub> | 47.7 (25.9–47.7) | 53.2 (43.9–53.2) | 186.8 (175.2–186.8) |
-| [\p{L}--[a-z]] /v <sub>(z-regex: backtracker)</sub> | 20.1 (18.6–20.1) | 27.1 (22.6–27.1) | n/a |
-| book: \p{L}+ /u <sub>(z-regex: VM)</sub> | 38.8 (34.5–38.8) | 26.2 (22.5–26.2) | 53.1 (49.9–53.1) |
+| \p{L}+ /u <sub>(z-regex: DFA)</sub> | 76.7 (69.8–76.7) | 38.2 (36.0–38.2) | 67.4 (62.2–67.4) |
+| \p{Script=Greek}+ /u <sub>(z-regex: DFA)</sub> | 169.8 (150.6–169.8) | 94.3 (85.2–94.3) | 230.4 (136.7–230.4) |
+| \p{General_Category=Lu} /u <sub>(z-regex: DFA)</sub> | 134.5 (127.1–134.5) | 53.9 (51.0–53.9) | 188.9 (137.1–188.9) |
+| [\p{L}--[a-z]] /v <sub>(z-regex: backtracker)</sub> | 20.1 (17.0–20.1) | 27.2 (17.8–27.2) | n/a |
+| book: \p{L}+ /u <sub>(z-regex: DFA)</sub> | 90.2 (78.2–90.2) | 26.3 (18.7–26.3) | 53.3 (51.0–53.3) |
 
 #### T1: z-regex iterator MB/s (Regex.iterator: every match, warm Scratch, no allocation)
 
 | Case | z-regex |
 |---|---|
-| \p{L}+ /u <sub>(z-regex: VM)</sub> | 40.3 (36.1–40.3) |
-| \p{Script=Greek}+ /u <sub>(z-regex: VM)</sub> | 55.7 (35.6–55.7) |
-| \p{General_Category=Lu} /u <sub>(z-regex: VM)</sub> | 47.9 (40.4–47.9) |
-| [\p{L}--[a-z]] /v <sub>(z-regex: backtracker)</sub> | 20.1 (16.9–20.1) |
-| book: \p{L}+ /u <sub>(z-regex: VM)</sub> | 38.7 (22.8–38.7) |
+| \p{L}+ /u <sub>(z-regex: DFA)</sub> | 75.8 (55.6–75.8) |
+| \p{Script=Greek}+ /u <sub>(z-regex: DFA)</sub> | 169.1 (115.3–169.1) |
+| \p{General_Category=Lu} /u <sub>(z-regex: DFA)</sub> | 134.4 (129.6–134.4) |
+| [\p{L}--[a-z]] /v <sub>(z-regex: backtracker)</sub> | 20.0 (17.7–20.0) |
+| book: \p{L}+ /u <sub>(z-regex: DFA)</sub> | 88.6 (60.9–88.6) |
 
 #### T1: ns per exec on a short input (< 64 B)
 
 | Case | z-regex | V8 (warm) | Rust regex |
 |---|---|---|---|
-| \p{L}+ /u <sub>(z-regex: VM)</sub> | 255 (255–281) | 176 (176–188) | 112 (112–123) |
-| \p{Script=Greek}+ /u <sub>(z-regex: VM)</sub> | 273 (273–291) | 176 (176–195) | 114 (114–120) |
-| \p{General_Category=Lu} /u <sub>(z-regex: VM)</sub> | 141 (141–175) | 155 (155–168) | 54 (54–63) |
-| [\p{L}--[a-z]] /v <sub>(z-regex: backtracker)</sub> | 276 (276–328) | 188 (188–221) | n/a |
-| book: \p{L}+ /u <sub>(z-regex: VM)</sub> | 95 (95–106) | 73 (73–81) | 74 (74–84) |
+| \p{L}+ /u <sub>(z-regex: DFA)</sub> | 135 (135–157) | 176 (176–187) | 111 (111–121) |
+| \p{Script=Greek}+ /u <sub>(z-regex: DFA)</sub> | 107 (107–140) | 170 (170–180) | 114 (114–120) |
+| \p{General_Category=Lu} /u <sub>(z-regex: DFA)</sub> | 62 (62–67) | 154 (154–170) | 54 (54–58) |
+| [\p{L}--[a-z]] /v <sub>(z-regex: backtracker)</sub> | 275 (275–297) | 185 (185–199) | n/a |
+| book: \p{L}+ /u <sub>(z-regex: DFA)</sub> | 37 (37–41) | 71 (71–83) | 74 (74–81) |
 
 #### T1: µs per compile
 
 | Case | z-regex | Rust regex |
 |---|---|---|
-| \p{L}+ /u <sub>(z-regex: VM)</sub> | 7.02 (7.02–10.53) | 321.39 (321.39–347.46) |
-| \p{Script=Greek}+ /u <sub>(z-regex: VM)</sub> | 1.22 (1.22–1.75) | 55.63 (55.63–60.30) |
-| \p{General_Category=Lu} /u <sub>(z-regex: VM)</sub> | 0.99 (0.99–1.94) | 191.42 (191.42–209.48) |
-| [\p{L}--[a-z]] /v <sub>(z-regex: backtracker)</sub> | 5.26 (5.26–5.34) | n/a |
-| book: \p{L}+ /u <sub>(z-regex: VM)</sub> | 1.24 (1.24–1.83) | 323.04 (323.04–483.11) |
+| \p{L}+ /u <sub>(z-regex: DFA)</sub> | 42.11 (42.11–42.82) | 321.92 (321.92–517.56) |
+| \p{Script=Greek}+ /u <sub>(z-regex: DFA)</sub> | 5.96 (5.96–12.05) | 55.66 (55.66–90.93) |
+| \p{General_Category=Lu} /u <sub>(z-regex: DFA)</sub> | 40.24 (40.24–41.04) | 191.34 (191.34–198.76) |
+| [\p{L}--[a-z]] /v <sub>(z-regex: backtracker)</sub> | 5.74 (5.74–9.09) | n/a |
+| book: \p{L}+ /u <sub>(z-regex: DFA)</sub> | 41.78 (41.78–53.13) | 325.23 (325.23–343.23) |
 
 #### T1: bytes per compiled pattern
 
 | Case | z-regex |
 |---|---|
-| \p{L}+ /u <sub>(z-regex: VM)</sub> | 5644 (5644–5644) |
-| \p{Script=Greek}+ /u <sub>(z-regex: VM)</sub> | 460 (460–460) |
-| \p{General_Category=Lu} /u <sub>(z-regex: VM)</sub> | 5323 (5323–5323) |
+| \p{L}+ /u <sub>(z-regex: DFA)</sub> | 22852 (22852–22852) |
+| \p{Script=Greek}+ /u <sub>(z-regex: DFA)</sub> | 2116 (2116–2116) |
+| \p{General_Category=Lu} /u <sub>(z-regex: DFA)</sub> | 21871 (21871–21871) |
 | [\p{L}--[a-z]] /v <sub>(z-regex: backtracker)</sub> | 5486 (5486–5486) |
-| book: \p{L}+ /u <sub>(z-regex: VM)</sub> | 5644 (5644–5644) |
+| book: \p{L}+ /u <sub>(z-regex: DFA)</sub> | 22852 (22852–22852) |
 
 #### T2: findAll MB/s (allocating wrapper; V8 cold: new RegExp + first pass)
 
 | Case | z-regex | V8 (warm) | V8 (cold) | PCRE2 (JIT) | PCRE2 (interp.) |
 |---|---|---|---|---|---|
-| <(\w+)>.*?<\/\1> <sub>(z-regex: backtracker)</sub> | 24.5 (22.8–24.5) | 166.6 (140.2–166.6) | 88.6 (45.5–88.6) | 192.6 (120.6–192.6) | 63.0 (37.3–63.0) |
-| (?=.*[a-z])(?=.*[A-Z]).{8,} <sub>(z-regex: backtracker)</sub> | 7.2 (6.4–7.2) | 41.2 (35.6–41.2) | 32.9 (23.3–32.9) | 56.5 (42.0–56.5) | 9.0 (7.5–9.0) |
-| (?<=\$)\d+ <sub>(z-regex: backtracker)</sub> | 14.3 (11.8–14.3) | 195.8 (90.8–195.8) | 116.3 (104.4–116.3) | 833.8 (452.9–833.8) | 427.8 (224.8–427.8) |
-| book: \b(\w+) \1\b <sub>(z-regex: backtracker)</sub> | 8.8 (7.7–8.8) | 123.2 (93.7–123.2) | 117.3 (86.1–117.3) | 87.5 (54.6–87.5) | 21.5 (17.7–21.5) |
+| <(\w+)>.*?<\/\1> <sub>(z-regex: backtracker)</sub> | 23.9 (22.0–23.9) | 168.3 (127.5–168.3) | 89.2 (62.3–89.2) | 199.5 (112.2–199.5) | 64.6 (56.7–64.6) |
+| (?=.*[a-z])(?=.*[A-Z]).{8,} <sub>(z-regex: backtracker)</sub> | 7.4 (6.6–7.4) | 41.2 (27.0–41.2) | 33.5 (23.1–33.5) | 57.1 (44.1–57.1) | 9.0 (7.6–9.0) |
+| (?<=\$)\d+ <sub>(z-regex: backtracker)</sub> | 14.1 (12.2–14.1) | 198.4 (176.1–198.4) | 119.9 (81.3–119.9) | 858.6 (554.2–858.6) | 429.4 (341.7–429.4) |
+| book: \b(\w+) \1\b <sub>(z-regex: backtracker)</sub> | 9.1 (8.7–9.1) | 124.2 (105.5–124.2) | 118.6 (75.5–118.6) | 87.8 (61.2–87.8) | 21.5 (20.2–21.5) |
 
 #### T2: execAt MB/s (engine loop, no per-match allocation where the API allows)
 
 | Case | z-regex | V8 (warm) | PCRE2 (JIT) | PCRE2 (interp.) |
 |---|---|---|---|---|
-| <(\w+)>.*?<\/\1> <sub>(z-regex: backtracker)</sub> | 28.5 (22.4–28.5) | 176.6 (147.4–176.6) | 207.9 (121.6–207.9) | 65.4 (54.1–65.4) |
-| (?=.*[a-z])(?=.*[A-Z]).{8,} <sub>(z-regex: backtracker)</sub> | 7.5 (6.5–7.5) | 42.0 (32.7–42.0) | 57.6 (39.6–57.6) | 9.1 (7.2–9.1) |
-| (?<=\$)\d+ <sub>(z-regex: backtracker)</sub> | 15.1 (9.8–15.1) | 200.5 (92.5–200.5) | 872.8 (478.4–872.8) | 440.3 (245.3–440.3) |
-| book: \b(\w+) \1\b <sub>(z-regex: backtracker)</sub> | 8.9 (7.7–8.9) | 123.6 (93.9–123.6) | 88.7 (54.6–88.7) | 21.6 (18.7–21.6) |
+| <(\w+)>.*?<\/\1> <sub>(z-regex: backtracker)</sub> | 27.3 (25.7–27.3) | 178.8 (101.0–178.8) | 210.0 (126.8–210.0) | 66.2 (37.1–66.2) |
+| (?=.*[a-z])(?=.*[A-Z]).{8,} <sub>(z-regex: backtracker)</sub> | 7.7 (6.9–7.7) | 41.7 (33.7–41.7) | 58.1 (41.0–58.1) | 9.1 (8.0–9.1) |
+| (?<=\$)\d+ <sub>(z-regex: backtracker)</sub> | 14.5 (13.7–14.5) | 201.6 (181.0–201.6) | 881.4 (556.8–881.4) | 442.2 (393.9–442.2) |
+| book: \b(\w+) \1\b <sub>(z-regex: backtracker)</sub> | 9.1 (8.7–9.1) | 124.7 (83.5–124.7) | 88.7 (67.8–88.7) | 21.5 (20.3–21.5) |
 
 #### T2: z-regex iterator MB/s (Regex.iterator: every match, warm Scratch, no allocation)
 
 | Case | z-regex |
 |---|---|
-| <(\w+)>.*?<\/\1> <sub>(z-regex: backtracker)</sub> | 28.3 (26.7–28.3) |
-| (?=.*[a-z])(?=.*[A-Z]).{8,} <sub>(z-regex: backtracker)</sub> | 7.5 (6.6–7.5) |
-| (?<=\$)\d+ <sub>(z-regex: backtracker)</sub> | 15.1 (12.3–15.1) |
-| book: \b(\w+) \1\b <sub>(z-regex: backtracker)</sub> | 8.9 (7.9–8.9) |
+| <(\w+)>.*?<\/\1> <sub>(z-regex: backtracker)</sub> | 27.5 (25.3–27.5) |
+| (?=.*[a-z])(?=.*[A-Z]).{8,} <sub>(z-regex: backtracker)</sub> | 7.7 (7.4–7.7) |
+| (?<=\$)\d+ <sub>(z-regex: backtracker)</sub> | 14.5 (13.4–14.5) |
+| book: \b(\w+) \1\b <sub>(z-regex: backtracker)</sub> | 9.1 (8.8–9.1) |
 
 #### T2: ns per exec on a short input (< 64 B)
 
 | Case | z-regex | V8 (warm) | PCRE2 (JIT) | PCRE2 (interp.) |
 |---|---|---|---|---|
-| <(\w+)>.*?<\/\1> <sub>(z-regex: backtracker)</sub> | 426 (426–469) | 80 (80–89) | 58 (58–92) | 189 (189–215) |
-| (?=.*[a-z])(?=.*[A-Z]).{8,} <sub>(z-regex: backtracker)</sub> | 402 (402–504) | 129 (129–146) | 76 (76–109) | 351 (351–411) |
-| (?<=\$)\d+ <sub>(z-regex: backtracker)</sub> | 564 (564–614) | 96 (96–143) | 44 (44–78) | 109 (109–214) |
-| book: \b(\w+) \1\b <sub>(z-regex: backtracker)</sub> | 335 (335–360) | 95 (95–108) | 57 (57–76) | 127 (127–133) |
+| <(\w+)>.*?<\/\1> <sub>(z-regex: backtracker)</sub> | 444 (444–470) | 79 (79–87) | 57 (57–63) | 187 (187–223) |
+| (?=.*[a-z])(?=.*[A-Z]).{8,} <sub>(z-regex: backtracker)</sub> | 423 (423–448) | 128 (128–139) | 75 (75–77) | 346 (346–369) |
+| (?<=\$)\d+ <sub>(z-regex: backtracker)</sub> | 570 (570–602) | 93 (93–103) | 44 (44–48) | 107 (107–116) |
+| book: \b(\w+) \1\b <sub>(z-regex: backtracker)</sub> | 333 (333–371) | 93 (93–100) | 58 (58–61) | 125 (125–133) |
 
 #### T2: µs per compile
 
 | Case | z-regex | PCRE2 (JIT) | PCRE2 (interp.) |
 |---|---|---|---|
-| <(\w+)>.*?<\/\1> <sub>(z-regex: backtracker)</sub> | 2.89 (2.89–2.93) | 7.78 (7.78–19.99) | 0.79 (0.79–1.47) |
-| (?=.*[a-z])(?=.*[A-Z]).{8,} <sub>(z-regex: backtracker)</sub> | 4.10 (4.10–4.66) | 6.53 (6.53–12.91) | 1.01 (1.01–1.43) |
-| (?<=\$)\d+ <sub>(z-regex: backtracker)</sub> | 1.66 (1.66–2.02) | 4.34 (4.34–8.78) | 0.52 (0.52–0.98) |
-| book: \b(\w+) \1\b <sub>(z-regex: backtracker)</sub> | 1.98 (1.98–2.94) | 7.28 (7.28–14.93) | 0.67 (0.67–1.25) |
+| <(\w+)>.*?<\/\1> <sub>(z-regex: backtracker)</sub> | 2.91 (2.91–3.97) | 7.85 (7.85–12.62) | 0.78 (0.78–1.24) |
+| (?=.*[a-z])(?=.*[A-Z]).{8,} <sub>(z-regex: backtracker)</sub> | 4.43 (4.43–4.53) | 6.57 (6.57–13.04) | 1.01 (1.01–1.02) |
+| (?<=\$)\d+ <sub>(z-regex: backtracker)</sub> | 1.80 (1.80–1.84) | 4.38 (4.38–8.24) | 0.53 (0.53–0.54) |
+| book: \b(\w+) \1\b <sub>(z-regex: backtracker)</sub> | 1.99 (1.99–2.83) | 7.32 (7.32–13.26) | 0.67 (0.67–0.86) |
 
 #### T2: bytes per compiled pattern
 
 | Case | z-regex | PCRE2 (JIT) | PCRE2 (interp.) |
 |---|---|---|---|
 | <(\w+)>.*?<\/\1> <sub>(z-regex: backtracker)</sub> | 92 (92–92) | 1287 (1287–1287) | 168 (168–168) |
-| (?=.*[a-z])(?=.*[A-Z]).{8,} <sub>(z-regex: backtracker)</sub> | 1788 (1788–1788) | 963 (963–963) | 231 (231–231) |
-| (?<=\$)\d+ <sub>(z-regex: backtracker)</sub> | 698 (698–698) | 687 (687–687) | 156 (156–156) |
+| (?=.*[a-z])(?=.*[A-Z]).{8,} <sub>(z-regex: backtracker)</sub> | 1820 (1820–1820) | 963 (963–963) | 231 (231–231) |
+| (?<=\$)\d+ <sub>(z-regex: backtracker)</sub> | 714 (714–714) | 687 (687–687) | 156 (156–156) |
 | book: \b(\w+) \1\b <sub>(z-regex: backtracker)</sub> | 59 (59–59) | 1226 (1226–1226) | 160 (160–160) |
 
 #### Adversarial: ms until the engine answers or gives up (best round; outcome)
 
 | Case | n | z-regex | V8 (warm) | PCRE2 (JIT) | PCRE2 (interp.) |
 |---|---|---|---|---|---|
-| (a+)+b on a^n c | 20 | 0.003 (no match) | 107.816 (no match) | 0.006 (no match) | 0.006 (no match) |
-| (a+)+b on a^n c | 25 | 0.003 (no match) | 3642.182 (no match) | 0.005 (no match) | 0.006 (no match) |
-| (a+)+b on a^n c | 30 | 0.004 (no match) | 5004.000 (timeout (> 5 s, killed)) | 0.006 (no match) | 0.006 (no match) |
-| (a+)+b on a^n c | 40 | 0.004 (no match) | 5003.000 (timeout (> 5 s, killed)) | 0.005 (no match) | 0.006 (no match) |
-| (a+)+b on a^n cb | 20 | 0.003 (no match) | 110.650 (no match) | 12.296 (no match) | 101.084 (no match) |
-| (a+)+b on a^n cb | 25 | 0.003 (no match) | 3614.159 (no match) | 29.482 (match limit) | 193.418 (match limit) |
-| (a+)+b on a^n cb | 30 | 0.004 (no match) | 5003.000 (timeout (> 5 s, killed)) | 28.984 (match limit) | 189.699 (match limit) |
-| (a+)+b on a^n cb | 40 | 0.004 (no match) | 5003.000 (timeout (> 5 s, killed)) | 29.111 (match limit) | 191.562 (match limit) |
-| (?=(a+)+b) on a^n c | 20 | 31.530 (StepLimitExceeded) | 109.244 (no match) | 0.005 (no match) | 0.006 (no match) |
-| (?=(a+)+b) on a^n c | 25 | 32.366 (StepLimitExceeded) | 3590.587 (no match) | 0.006 (no match) | 0.007 (no match) |
-| (?=(a+)+b) on a^n c | 30 | 31.592 (StepLimitExceeded) | 5007.000 (timeout (> 5 s, killed)) | 0.006 (no match) | 0.006 (no match) |
-| (?=(a+)+b) on a^n c | 40 | 31.672 (StepLimitExceeded) | 5006.000 (timeout (> 5 s, killed)) | 0.006 (no match) | 0.006 (no match) |
+| (a+)+b on a^n c | 20 | 0.001 (no match) | 107.907 (no match) | 0.005 (no match) | 0.006 (no match) |
+| (a+)+b on a^n c | 25 | 0.002 (no match) | 3443.980 (no match) | 0.006 (no match) | 0.006 (no match) |
+| (a+)+b on a^n c | 30 | 0.002 (no match) | 5003.000 (timeout (> 5 s, killed)) | 0.005 (no match) | 0.005 (no match) |
+| (a+)+b on a^n c | 40 | 0.002 (no match) | 5004.000 (timeout (> 5 s, killed)) | 0.006 (no match) | 0.006 (no match) |
+| (a+)+b on a^n cb | 20 | 0.001 (no match) | 108.223 (no match) | 12.262 (no match) | 100.420 (no match) |
+| (a+)+b on a^n cb | 25 | 0.002 (no match) | 3535.186 (no match) | 29.096 (match limit) | 193.212 (match limit) |
+| (a+)+b on a^n cb | 30 | 0.002 (no match) | 5003.000 (timeout (> 5 s, killed)) | 29.045 (match limit) | 191.977 (match limit) |
+| (a+)+b on a^n cb | 40 | 0.001 (no match) | 5003.000 (timeout (> 5 s, killed)) | 29.224 (match limit) | 188.643 (match limit) |
+| (?=(a+)+b) on a^n c | 20 | 31.951 (StepLimitExceeded) | 108.776 (no match) | 0.005 (no match) | 0.006 (no match) |
+| (?=(a+)+b) on a^n c | 25 | 32.102 (StepLimitExceeded) | 3478.381 (no match) | 0.006 (no match) | 0.007 (no match) |
+| (?=(a+)+b) on a^n c | 30 | 32.367 (StepLimitExceeded) | 5005.000 (timeout (> 5 s, killed)) | 0.005 (no match) | 0.006 (no match) |
+| (?=(a+)+b) on a^n c | 40 | 32.127 (StepLimitExceeded) | 5007.000 (timeout (> 5 s, killed)) | 0.005 (no match) | 0.006 (no match) |
 
-Match counts: identical across every engine that runs a case.
-
-**`(a|aa)*c` on `a^n b`** (a separate run: 10 processes per engine and n, best; not in
-`cases.json`, so the published case set stays the one of 0.3.0):
-
-| n | z-regex | z-regex 0.3.2 | V8 (warm) | PCRE2 (JIT) | PCRE2 (interp.) |
-|---|---|---|---|---|---|
-| 20 | 0.003 (no match) | 0.003 (no match) | 2.774 (no match) | 0.006 (no match) | 0.007 (no match) |
-| 25 | 0.003 (no match) | 0.003 (no match) | 30.718 (no match) | 0.007 (no match) | 0.006 (no match) |
-| 30 | 0.003 (no match) | 0.004 (no match) | 338.865 (no match) | 0.006 (no match) | 0.006 (no match) |
-| 40 | 0.003 (no match) | 0.004 (no match) | > 6000 (killed) | 0.006 (no match) | 0.006 (no match) |
-
-z-regex runs it on T0's VM (linear). V8 grows by ~11× every 5 `a`s. PCRE2 answers at once
+z-regex runs `(a+)+b` on T0's DFA (linear; the tagged VM fills the group over the span).
+V8 grows by ~11× every 5 `a`s. PCRE2 answers at once
 because the required character `c` is absent (its start-up shortcut, as for `(a+)+b` on
 `a^n c`).
 
-### Against 0.3.2
+### Against 0.7.0
 
-z-regex 0.7.0 and z-regex 0.3.2 in the same 10 rounds (the same harness: `bench/compare/` is
-unchanged since 0.3.2), both built with `-Dcpu=x86_64_v3`.
+z-regex 0.8.0 and z-regex 0.7.0, the previous publication, in the same 10 rounds (the same
+harness), both built with `-Dcpu=x86_64_v3`. 0.8.0's harness was built from `c9274bc`,
+the code of 0.8.0 before the version bump, so its JSON still says 0.7.1.
 
 #### Best round; ratio > 1: better now
 
-| Case | Tier | execAt MB/s now | 0.3.2 | ratio | findAll MB/s now | 0.3.2 | ratio | ns short now | 0.3.2 | ratio |
+| Case | Tier | execAt MB/s now | 0.7.0 | ratio | findAll MB/s now | 0.7.0 | ratio | ns short now | 0.7.0 | ratio |
 |---|---|---|---|---|---|---|---|---|---|---|
-| literal hello | T0 | 13668.9 | 13546.5 | 1.01 | 12479.3 | 12163.2 | 1.03 | 28 | 26 | 0.92 |
-| [a-z]+ | T0 | 195.3 | 196.6 | 0.99 | 53.1 | 55.0 | 0.97 | 19 | 19 | 1.01 |
-| [a-z]+ (z-regex: generic VM, no fast path) | T0 | 40.2 | 39.5 | 1.02 | 25.7 | 25.2 | 1.02 | 121 | 121 | 1.00 |
-| [a-z]+ (z-regex: backtracker) | T0 | 29.5 | 31.4 | 0.94 | 20.2 | 20.6 | 0.98 | 162 | 145 | 0.90 |
-| \d{3}-\d{4} (sparse) | T0 | 473.4 | 412.6 | 1.15 | 373.8 | 334.1 | 1.12 | 284 | 336 | 1.18 |
-| \d{3}-\d{4} (dense) | T0 | 34.0 | 29.6 | 1.15 | 29.2 | 27.2 | 1.07 | 284 | 323 | 1.14 |
-| email | T0 | 36.2 | 33.2 | 1.09 | 34.9 | 32.1 | 1.09 | 482 | 539 | 1.12 |
-| (\d{3})-(\d{4}) (sparse) | T0 | 244.3 | 239.6 | 1.02 | 210.2 | 204.0 | 1.03 | 618 | 692 | 1.12 |
-| (\d{3})-(\d{4}) (dense) | T0 | 24.8 | 23.4 | 1.06 | 22.0 | 21.3 | 1.03 | 621 | 681 | 1.10 |
-| (?:(a)\|b)*c | T0 | 13.6 | 12.6 | 1.07 | 12.0 | 11.9 | 1.01 | 566 | 630 | 1.11 |
-| book: Darcy | T0 | 13284.0 | 13348.6 | 1.00 | 6964.1 | 6714.2 | 1.04 | 28 | 26 | 0.93 |
-| book: [A-Z][a-z]+ | T0 | 322.4 | 320.6 | 1.01 | 222.8 | 223.1 | 1.00 | 182 | 193 | 1.06 |
-| book: (Mr\|Mrs\|Miss)\.? ([A-Z][a-z]+) | T0 | 527.7 | 507.4 | 1.04 | 459.8 | 446.6 | 1.03 | 856 | 872 | 1.02 |
-| \p{L}+ /u | T1 | 40.3 | 24.7 | 1.63 | 27.0 | 18.8 | 1.44 | 255 | 332 | 1.30 |
-| \p{Script=Greek}+ /u | T1 | 55.6 | 26.0 | 2.14 | 48.7 | 24.4 | 2.00 | 273 | 420 | 1.54 |
-| \p{General_Category=Lu} /u | T1 | 47.7 | 21.8 | 2.19 | 36.8 | 19.1 | 1.93 | 141 | 274 | 1.94 |
-| [\p{L}--[a-z]] /v | T1 | 20.1 | 21.7 | 0.92 | 12.4 | 13.2 | 0.94 | 276 | 272 | 0.99 |
-| book: \p{L}+ /u | T1 | 38.8 | 19.4 | 2.00 | 23.2 | 14.4 | 1.61 | 95 | 197 | 2.07 |
-| <(\w+)>.*?<\/\1> | T2 | 28.5 | 30.4 | 0.94 | 24.5 | 26.4 | 0.93 | 426 | 434 | 1.02 |
-| (?=.*[a-z])(?=.*[A-Z]).{8,} | T2 | 7.5 | 3.2 | 2.37 | 7.2 | 3.1 | 2.30 | 402 | 1080 | 2.68 |
-| (?<=\$)\d+ | T2 | 15.1 | 0.6 | 24.34 | 14.3 | 0.6 | 23.14 | 564 | 846 | 1.50 |
-| book: \b(\w+) \1\b | T2 | 8.9 | 9.0 | 0.99 | 8.8 | 9.1 | 0.97 | 335 | 340 | 1.02 |
+| literal hello | T0 | 13623.6 | 13574.6 | 1.00 | 11559.9 | 11279.7 | 1.02 | 25 | 28 | 1.10 |
+| [a-z]+ | T0 | 185.8 | 196.5 | 0.95 | 56.4 | 56.4 | 1.00 | 20 | 18 | 0.93 |
+| [a-z]+ (z-regex: generic VM, no fast path) | T0 | 42.1 | 41.7 | 1.01 | 27.0 | 26.0 | 1.04 | 112 | 110 | 0.98 |
+| [a-z]+ (z-regex: backtracker) | T0 | 30.1 | 29.6 | 1.02 | 20.3 | 20.2 | 1.00 | 158 | 164 | 1.04 |
+| \d{3}-\d{4} (sparse) | T0 | 572.8 | 461.9 | 1.24 | 442.6 | 365.9 | 1.21 | 33 | 285 | 8.65 |
+| \d{3}-\d{4} (dense) | T0 | 409.5 | 34.1 | 12.02 | 223.1 | 29.3 | 7.62 | 33 | 276 | 8.34 |
+| email | T0 | 758.7 | 36.4 | 20.82 | 505.6 | 35.1 | 14.40 | 74 | 480 | 6.52 |
+| (\d{3})-(\d{4}) (sparse) | T0 | 283.3 | 250.5 | 1.13 | 235.1 | 217.2 | 1.08 | 365 | 609 | 1.67 |
+| (\d{3})-(\d{4}) (dense) | T0 | 74.5 | 25.0 | 2.98 | 58.3 | 22.7 | 2.57 | 393 | 617 | 1.57 |
+| (?:(a)\|b)*c | T0 | 22.1 | 13.5 | 1.63 | 18.5 | 12.1 | 1.53 | 458 | 563 | 1.23 |
+| book: Darcy | T0 | 13532.6 | 13355.8 | 1.01 | 7172.4 | 5759.5 | 1.25 | 25 | 28 | 1.10 |
+| book: [A-Z][a-z]+ | T0 | 599.3 | 324.6 | 1.85 | 335.5 | 228.3 | 1.47 | 57 | 181 | 3.16 |
+| book: (Mr\|Mrs\|Miss)\.? ([A-Z][a-z]+) | T0 | 725.5 | 534.6 | 1.36 | 622.4 | 478.9 | 1.30 | 604 | 828 | 1.37 |
+| \p{L}+ /u | T1 | 76.7 | 40.7 | 1.88 | 41.5 | 27.8 | 1.49 | 135 | 251 | 1.87 |
+| \p{Script=Greek}+ /u | T1 | 169.8 | 56.1 | 3.03 | 132.8 | 49.9 | 2.66 | 107 | 268 | 2.51 |
+| \p{General_Category=Lu} /u | T1 | 134.5 | 47.8 | 2.81 | 81.2 | 37.8 | 2.15 | 62 | 141 | 2.28 |
+| [\p{L}--[a-z]] /v | T1 | 20.1 | 20.2 | 1.00 | 12.6 | 12.7 | 0.99 | 275 | 275 | 1.00 |
+| book: \p{L}+ /u | T1 | 90.2 | 38.7 | 2.33 | 39.5 | 24.0 | 1.64 | 37 | 95 | 2.59 |
+| <(\w+)>.*?<\/\1> | T2 | 27.3 | 28.6 | 0.95 | 23.9 | 25.1 | 0.95 | 444 | 427 | 0.96 |
+| (?=.*[a-z])(?=.*[A-Z]).{8,} | T2 | 7.7 | 7.6 | 1.01 | 7.4 | 7.2 | 1.02 | 423 | 402 | 0.95 |
+| (?<=\$)\d+ | T2 | 14.5 | 15.2 | 0.96 | 14.1 | 14.4 | 0.98 | 570 | 560 | 0.98 |
+| book: \b(\w+) \1\b | T2 | 9.1 | 9.0 | 1.01 | 9.1 | 9.0 | 1.01 | 333 | 335 | 1.01 |
 
-| Adversarial | n | now | 0.3.2 |
+| Adversarial | n | now | 0.7.0 |
 |---|---|---|---|
-| (a+)+b on a^n c | 20 | 0.003 (no match) | 0.004 (no match) |
-| (a+)+b on a^n c | 25 | 0.003 (no match) | 0.004 (no match) |
-| (a+)+b on a^n c | 30 | 0.004 (no match) | 0.004 (no match) |
-| (a+)+b on a^n c | 40 | 0.004 (no match) | 0.004 (no match) |
-| (a+)+b on a^n cb | 20 | 0.003 (no match) | 0.003 (no match) |
-| (a+)+b on a^n cb | 25 | 0.003 (no match) | 0.003 (no match) |
-| (a+)+b on a^n cb | 30 | 0.004 (no match) | 0.003 (no match) |
-| (a+)+b on a^n cb | 40 | 0.004 (no match) | 0.004 (no match) |
-| (?=(a+)+b) on a^n c | 20 | 31.530 (StepLimitExceeded) | 33.451 (StepLimitExceeded) |
-| (?=(a+)+b) on a^n c | 25 | 32.366 (StepLimitExceeded) | 33.359 (StepLimitExceeded) |
-| (?=(a+)+b) on a^n c | 30 | 31.592 (StepLimitExceeded) | 32.908 (StepLimitExceeded) |
-| (?=(a+)+b) on a^n c | 40 | 31.672 (StepLimitExceeded) | 32.988 (StepLimitExceeded) |
+| (a+)+b on a^n c | 20 | 0.001 (no match) | 0.003 (no match) |
+| (a+)+b on a^n c | 25 | 0.002 (no match) | 0.004 (no match) |
+| (a+)+b on a^n c | 30 | 0.002 (no match) | 0.004 (no match) |
+| (a+)+b on a^n c | 40 | 0.002 (no match) | 0.004 (no match) |
+| (a+)+b on a^n cb | 20 | 0.001 (no match) | 0.004 (no match) |
+| (a+)+b on a^n cb | 25 | 0.002 (no match) | 0.004 (no match) |
+| (a+)+b on a^n cb | 30 | 0.002 (no match) | 0.004 (no match) |
+| (a+)+b on a^n cb | 40 | 0.001 (no match) | 0.004 (no match) |
+| (?=(a+)+b) on a^n c | 20 | 31.951 (StepLimitExceeded) | 31.363 (StepLimitExceeded) |
+| (?=(a+)+b) on a^n c | 25 | 32.102 (StepLimitExceeded) | 31.180 (StepLimitExceeded) |
+| (?=(a+)+b) on a^n c | 30 | 32.367 (StepLimitExceeded) | 31.293 (StepLimitExceeded) |
+| (?=(a+)+b) on a^n c | 40 | 32.127 (StepLimitExceeded) | 31.528 (StepLimitExceeded) |
 
-- **Better:** T1 (F5a: `u` and `\p{…}` moved from the backtracker to T0's VM) 1.4–2.2×; the
-  lookbehind `(?<=\$)\d+` ~24× (F6b: matched backward instead of trying up to 100 lengths
-  at every position); the double lookahead 2.4× (F6a: LookLinear); `\d{3}-\d{4}` 1.15×.
-- **Within ±10%:** every other case, T0 included.
-- **Worse by more than 10%:** one cell, a z-regex-only variant: `[a-z]+` forced onto the
-  backtracker, ns per short exec, 162 against 145 (+12%). Its execAt is 0.94×. Under F7b's
-  criterion a bench flag needs callgrind to confirm it; not investigated here.
-- `[\p{L}--[a-z]] /v` (0.92×) still runs on the backtracker: `v` isn't routed to the VM.
+- **Better:** every case that runs on T0's DFA or a T0 fast path: the e-mail 20.8× (J and B
+  in 0.7.1, then the DFA), `\d{3}-\d{4}` dense 12.0× (C, Shift-And), `(\d{3})-(\d{4})`
+  dense 2.98×, the book's `[A-Z][a-z]+` 1.85× and title pattern 1.36×, `(?:(a)|b)*c` 1.63×,
+  T1 1.9–3.0× (the DFA in code-point mode). Short inputs: `\d{3}-\d{4}` 276 → 33 ns, the
+  e-mail 480 → 74 ns.
+- **Within ±10%:** the literals, `[a-z]+` (0.95×), the backtracker cases (T2, `v`), and
+  the adversarial runs.
+- **Worse by more than 10%:** none.
+
+### `u`/`v` on the DFA: four patterns of T0-A's phase 3
+
+Not in the harness: a separate probe (the `execAt` loop over the whole input, the best of 10
+interleaved rounds, MB/s, the same matches) of z-regex alone, before (`fbdac3a`: `u`/`v` on
+T0's VM, as in 0.7.1) and after (0.8.0's code), on this machine. The corpora: the book; a
+deterministic Greek text of 1 MiB; the `.zig` files of `src/` concatenated (1.1 MB).
+
+| Pattern | Before (VM) | 0.8.0 (DFA) | Factor |
+|---|---|---|---|
+| `\p{L}+` (book) | 45.2 | 96.8 | 2.14× |
+| `\p{Script=Greek}+` (Greek) | 46.4 | 88.7 | 1.91× |
+| `[\p{L}\p{N}_]+` (code) | 51.0 | 123.4 | 2.42× |
+| `\b\p{L}+\b` (book) | 17.4 | 82.6 | 4.75× |
 
 ### zig-regex: findAll growth (characterization, not a performance number)
 
@@ -437,7 +443,7 @@ so the e-mail pattern doesn't compile.
 `Regex.iterator` gives every match `findAll` gives, one at a time, over the caller's
 `Scratch` and `MatchSlots`: no allocation once the scratch is warm. Its column is in the
 tables above ("iterator MB/s"): on every case it is within the band of the execAt loop, and
-1.0–3.6× findAll (the most where matches are many: `[a-z]+` 192 against 53 MB/s).
+1.0–3.2× findAll (the most where matches are many: `[a-z]+` 179 against 56 MB/s).
 
 Where findAll's time goes (a separate probe on 0.3.1, on the previous host, µs per call, `smp_allocator` as in the bench):
 findAll allocates one `captures` slice per match and grows its list of 72-byte `MatchResult`s.
@@ -456,79 +462,85 @@ is ~1.05×.
 Reference: V8 warm and Rust regex, `execAt` column, best round; "×" is a ratio of best
 rounds. Even: within ±10%.
 
-**T0 (z-regex: T0's VMs and their fast paths)**
+**T0 (z-regex: T0's DFA, its fast paths, and the tagged VM for groups)**
+
+| Case | Route | vs V8 | vs Rust regex |
+|---|---|---|---|
+| literal `hello` | literal | **7.5× ahead** | 1.48× behind |
+| `[a-z]+` | class run | **2.35× ahead** | **3.2× ahead** |
+| `\d{3}-\d{4}` sparse | Shift-And | 1.67× behind | 3.1× behind |
+| `\d{3}-\d{4}` dense | Shift-And | **2.36× ahead** | **4.85× ahead** |
+| e-mail | DFA | **9.5× ahead** | even (1.06× ahead) |
+| `(\d{3})-(\d{4})` sparse | Shift-And, tagged VM | 3.7× behind | 4.1× behind |
+| `(\d{3})-(\d{4})` dense | Shift-And, tagged VM | 1.96× behind | even (1.04×) |
+| `(?:(a)\|b)*c` | DFA, tagged VM | 1.35× behind | 2.3× behind |
+| book: `Darcy` | literal | **1.56× ahead** | 1.43× behind |
+| book: `[A-Z][a-z]+` | DFA | **1.19× ahead** | **1.98× ahead** |
+| book: `(Mr\|Mrs\|Miss)\.? ([A-Z][a-z]+)` | DFA, tagged VM | **1.55× ahead** | 2.9× behind |
+
+**T1 (`u`/`v`: T0's DFA in code-point mode; `v` on the backtracker)**
 
 | Case | vs V8 | vs Rust regex |
 |---|---|---|
-| literal `hello` | **7.6× ahead** | 1.45× behind |
-| `[a-z]+` | **2.5× ahead** | **3.3× ahead** |
-| `\d{3}-\d{4}` sparse | 1.9× behind | 3.8× behind |
-| `\d{3}-\d{4}` dense | 5.1× behind | 2.5× behind |
-| e-mail | 2.2× behind | 19× behind |
-| `(\d{3})-(\d{4})` sparse | 4.1× behind | 4.7× behind |
-| `(\d{3})-(\d{4})` dense | 5.8× behind | 2.9× behind |
-| `(?:(a)\|b)*c` | 2.2× behind | 3.8× behind |
-| book: `Darcy` | **1.5× ahead** | 1.45× behind |
-| book: `[A-Z][a-z]+` | 1.6× behind | even (1.07×) |
-| book: `(Mr\|Mrs\|Miss)\.? ([A-Z][a-z]+)` | **1.15× ahead** | 4.0× behind |
-
-**T1 (`u`/`v`: T0's VM in code-point mode; `v` on the backtracker)**
-
-| Case | vs V8 | vs Rust regex |
-|---|---|---|
-| `\p{L}+ /u` | even (1.06×) | 1.7× behind |
-| `\p{Script=Greek}+ /u` | 1.7× behind | 4.1× behind |
-| `\p{General_Category=Lu} /u` | even (0.90×) | 3.9× behind |
+| `\p{L}+ /u` | **2.0× ahead** | **1.14× ahead** |
+| `\p{Script=Greek}+ /u` | **1.8× ahead** | 1.36× behind |
+| `\p{General_Category=Lu} /u` | **2.5× ahead** | 1.40× behind |
 | `[\p{L}--[a-z]] /v` | 1.35× behind | n/a |
-| book: `\p{L}+ /u` | **1.5× ahead** | 1.4× behind |
+| book: `\p{L}+ /u` | **3.4× ahead** | **1.69× ahead** |
 
 **T2 (the explicit-stack backtracker; Rust regex has no backreferences or lookaround)**
 
 | Case | vs V8 | vs PCRE2 JIT | vs PCRE2 interp. |
 |---|---|---|---|
-| `<(\w+)>.*?<\/\1>` | 6.2× behind | 7.3× behind | 2.3× behind |
-| `(?=.*[a-z])(?=.*[A-Z]).{8,}` | 5.6× behind | 7.7× behind | 1.2× behind |
-| `(?<=\$)\d+` | 13× behind | 58× behind | 29× behind |
-| book: `\b(\w+) \1\b` | 14× behind | 10× behind | 2.4× behind |
+| `<(\w+)>.*?<\/\1>` | 6.5× behind | 7.7× behind | 2.4× behind |
+| `(?=.*[a-z])(?=.*[A-Z]).{8,}` | 5.4× behind | 7.5× behind | 1.18× behind |
+| `(?<=\$)\d+` | 14× behind | 61× behind | 30× behind |
+| book: `\b(\w+) \1\b` | 14× behind | 9.7× behind | 2.4× behind |
 
 **Where z-regex is ahead**
-- Fast paths: `[a-z]+` (class run) 2.5× V8 and 3.3× Rust; the literal `hello` 7.6× V8; short
-  inputs where a fast path applies: literal 28 ns (V8 67), `[a-z]+` 19 ns (V8 65, Rust 83).
-- The book's title pattern (tagged VM) 1.15× V8; `\p{L}+` on the book 1.5× V8.
-- Compile time: 1.7–92× less than Rust regex on T0 and 46–260× less on T1 (Rust builds its
-  automata and Unicode classes eagerly).
-- Memory per compiled pattern: 185–880 bytes on T0, against 1–9 KB for zig-regex.
-- Adversarial: `(a+)+b` and `(a|aa)*c` run on T0's VM, a few µs at any n. V8 is exponential
-  (seconds at n = 25–30, killed after 5–6 s). PCRE2 answers at once when a required
-  character is absent, and on `(a+)+b` over `a^n cb` stops at its match limit (~29 ms JIT,
-  ~190 ms interpreter) with an error instead of an answer.
+- **T0's DFA** (0.8.0): the e-mail 9.5× V8, the book's `[A-Z][a-z]+` 1.19× V8 and 1.98× Rust,
+  the book's title pattern 1.55× V8. On T1 every `u` case is ahead of V8 (1.8–3.4×), and
+  `\p{L}+` is ahead of Rust (1.14× on the mixed corpus, 1.69× on the book).
+- **Fast paths:** `[a-z]+` (class run) 2.35× V8 and 3.2× Rust; `\d{3}-\d{4}` on dense digits
+  (Shift-And) 2.36× V8 and 4.85× Rust; the literal `hello` 7.5× V8.
+- **Short inputs** without groups: 20–74 ns on T0, ahead of V8 on every such case (1.4–3.2×)
+  and of Rust on most (`[a-z]+` 20 ns against 83, the e-mail 74 against 85).
+- **Compile time:** 1.4–25 µs on T0 (the e-mail 12.4 µs, the DFA included) against 2.6–198 µs
+  for Rust regex; 6–42 µs on T1 against Rust's 56–325.
+- **Adversarial:** `(a+)+b` runs on T0 (the DFA gives the bounds), a few µs at any n. V8 is exponential (seconds at n = 25–30, killed after 5 s). PCRE2 answers at once when
+  a required character is absent, and on `(a+)+b` over `a^n cb` stops at its match limit
+  (~29 ms JIT, ~190 ms interpreter) with an error instead of an answer.
 
-**Even (±10%):** `\p{L}+` and `\p{General_Category=Lu}` against V8; `[A-Z][a-z]+` on the
-book against Rust; `[a-z]+` findAll against Rust (0.95×).
+**Even (±10%):** the e-mail and `(\d{3})-(\d{4})` dense against Rust regex; `[a-z]+` findAll
+against Rust (1.01×).
 
-**The e-mail case.** Email validation is z-regex's worst T0 case against Rust regex: 19× slower (2.2× slower than V8). The Pike VM pays per-position overhead that a JIT or a lazy DFA avoids. No fix is planned for 0.7.0; a lazy DFA over T0's Thompson program is the candidate for 1.x. Against V8 the worst T0 case is `(\d{3})-(\d{4})` on dense
-digits, 5.8× behind (the tagged VM's two passes on top of the same per-position cost); the
-worst case of the whole benchmark is T2's lookbehind `(?<=\$)\d+`, 13× behind V8 and 58×
-behind PCRE2 JIT.
+**The e-mail case.** No longer the worst T0 case: on the DFA (with J and B of 0.7.1 before
+it) the e-mail runs at 758.7 MB/s, 1.06× Rust regex (within the ±10% band, so even) and 9.5×
+V8; it was 19× behind Rust in 0.7.0. Against V8 the worst T0 case is now
+`(\d{3})-(\d{4})` on sparse digits, 3.7× behind (the tagged VM over each match, after
+Shift-And); the worst case of the whole benchmark is T2's lookbehind `(?<=\$)\d+`, 14× behind
+V8 and 61× behind PCRE2 JIT.
 
 **Where it's behind, and why**
-- **Classes and groups on T0** (`\d{3}-\d{4}`, e-mail, captures): 1.9–5.8× behind V8. V8
-  compiles the regexp to machine code; z-regex interprets a Pike VM that steps every live
-  thread at every input position, with no DFA. Rust regex's lazy DFA (and on the e-mail its
-  literal prefilter on `@`) is 2.5–19× ahead. Groups pay the tagged VM's two passes.
-  Email validation is z-regex's worst T0 case against Rust regex: 19× slower (2.2× slower than V8). The Pike VM pays per-position overhead that a JIT or a lazy DFA avoids. No fix is planned for 0.7.0; a lazy DFA over T0's Thompson program is the candidate for 1.x.
-- **Literals against Rust:** 1.45× behind (`hello`, `Darcy`). Rust's `memchr` picks the
+- **Groups on T0** (`(\d{3})-(\d{4})`, `(?:(a)|b)*c`, the title pattern against Rust):
+  1.35–3.7× behind V8, 2.3–4.1× behind Rust. The DFA (or Shift-And) gives the match bounds, and
+  the tagged VM then fills the groups over the span: a second pass, on the Pike VM.
+- **Literals against Rust:** 1.43–1.48× behind (`hello`, `Darcy`). Rust's `memchr` picks the
   rarest bytes of each needle and the vector width at run time; z-regex searches the first
   and last bytes in pairs of vectors of a width fixed at build time (AVX2 here).
-- **Short inputs with classes or groups:** 2.3–7.8× behind V8 (e.g. `\d{3}-\d{4}` 284 ns against
-  84). The Pike VM has a fixed cost per search (thread lists, closure).
+- **Sparse `\d{3}-\d{4}`:** 1.67× behind V8 and 3.1× behind Rust: Shift-And steps every
+  byte, where Rust's prefilter skips to the digits.
+- **Short inputs with groups:** 3.4–6.1× behind V8 (e.g. `(\d{3})-(\d{4})` 365 ns against
+  108): the tagged VM's fixed cost per search.
+- **T1 against Rust:** `\p{Script=Greek}+` and `\p{General_Category=Lu}` 1.36–1.40× behind.
+  The DFA decodes UTF-8 one character at a time and looks non-ASCII classes up by binary
+  search over the cuts; Rust's DFA steps bytes. `v` (`[\p{L}--[a-z]]`) still runs on the
+  backtracker.
 - **findAll:** z-regex's facade allocates per match; on dense cases it gives up most of the
-  execAt speed (`[a-z]+` 195 → 53 MB/s). `Regex.iterator` doesn't.
-- **T1:** 1.7–4.1× behind Rust regex, whose DFA handles Unicode classes; `\p{Script=Greek}+`
-  1.7× behind V8. `v` (`[\p{L}--[a-z]]`) still runs on the backtracker.
-- **T2:** 5.6–14× behind V8 and 7–58× behind PCRE2 JIT, 1.2–29× behind PCRE2's interpreter.
-  The lookbehind case improved ~24× since 0.3.2 and is still the worst (13× behind V8): the
-  backward body runs at every position with no prefilter on `$`.
+  execAt speed (`[a-z]+` 186 → 56 MB/s, the e-mail 759 → 506). `Regex.iterator` doesn't.
+- **T2:** 5.4–14× behind V8 and 7.5–61× behind PCRE2 JIT, 1.18–30× behind PCRE2's interpreter;
+  unchanged since 0.7.0. The lookbehind case is the worst (14× behind V8): the backward body
+  runs at every position with no prefilter on `$`.
 - **`(?=(a+)+b)`** (a genuine T2 adversarial): z-regex stops at its step budget after ~32 ms
   with `StepLimitExceeded`: bounded, but not an answer. V8 is exponential; PCRE2 answers at
   once (required-character shortcut).
@@ -539,6 +551,6 @@ behind PCRE2 JIT.
 - Rust regex doesn't support backreferences; the T2 cases are not compared against it.
 - Absolute numbers vary with LLVM's code layout between builds; the best of 10 rounds is
   within ~4% (p90) between two series (F7-0).
-- Match counts are identical across every engine, z-regex 0.3.2 included, on every case.
+- Match counts are identical across every engine, z-regex 0.7.0 included, on every case.
 - Everything here is one machine, a shared container: compare engines within a table, not
   numbers across machines.
