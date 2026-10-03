@@ -6,13 +6,12 @@ what a release promises is in [API.md](API.md).
 
 ## Status
 
-- **test262:** 3087 of the 3110 entries that run pass (99.3 %), in UTF-16 and in WTF-8;
-  728 are skipped: 509 by the harness (its runner, or a feature its Node lacks, such as
-  the 377 of RegExp modifiers) and 219 of the `v` flag (`scripts/test262/features.json`).
-  Of the `v` flag's 314 entries, the 93 of the engine suite that pass run
-  (`v-subset.json`); the rest: 192 `UnsupportedFeature` (F5c), 26 the laxity under `v`
-  (below), 1 host, and 2 of the host suite
-  (they pass; that suite isn't in the count). Of the 23 that run and don't pass: 4 are lookbehinds
+- **test262:** 3113 of the 3136 entries that run pass (99.3 %), in UTF-16 and in WTF-8;
+  702 are skipped: 509 by the harness (its runner, or a feature its Node lacks, such as
+  the 377 of RegExp modifiers) and 193 of the `v` flag (`scripts/test262/features.json`).
+  Of the `v` flag's 314 entries, the 119 of the engine suite that pass run
+  (`v-subset.json`); the rest: 192 `UnsupportedFeature` (F5c), 1 host, and 2 of the host
+  suite (they pass; that suite isn't in the count). Of the 23 that run and don't pass: 4 are lookbehinds
   zregex rejects as `UnsupportedFeature` (2 `nested-lookaround`, 2 under `u` in
   `named-groups/lookbehind`), 4 fail in the JS lexer (host), 15 can't be extracted.
 - **Against V8:** `zig build differential-v8` (4,000 generated patterns), `lbdiff-v8`
@@ -70,9 +69,6 @@ Each row: what V8 says, what zregex gave before E0 (0.5.1), and what it gives no
 
 ## Known divergences from V8
 
-- **Still accepted under `v`, V8 rejects** (for 1.x, with bug B and chaining): an
-  unescaped ClassSetSyntaxCharacter (`[(]`) and the reserved double punctuators
-  (`[a!!b]`).
 - **V8 matches inside a surrogate pair under `u`/`v`.** With `u`/`v` and a search that
   passes over a surrogate pair, V8 reports a match at the position between the pair's two
   units, which the spec doesn't require: under `u`/`v` the input is a list of code points
@@ -134,7 +130,7 @@ hasn't participated yet matches empty (`(?<=(\w)\1)x` on `"aax"` gives `[2,3]`, 
 `(?i:…)`, `(?-m:…)` and the other forms of ES2025's modifiers are not implemented:
 `(?i:a)` is `error.UnsupportedFeature`. Decision (2026-09-29): pending until further
 notice, not on the way to 1.0. Their 377 test262 entries are skipped because the
-harness's Node lacks the feature, so they are not counted in 3087/3110. What exists and
+harness's Node lacks the feature, so they are not counted in 3113/3136. What exists and
 what is missing: `docs/plans/F7.md`, "Decisiones", 4.
 
 ## `v` with `i`

@@ -610,12 +610,48 @@ pub const Lexer = struct {
             },
             else => {
                 if (c < 0x80) {
+                    // Under `v` a ClassSetCharacter is neither a
+                    // ClassSetSyntaxCharacter (`( ) { } / |` here; `[`, `]`,
+                    // `-` and `\` have their own branches) nor the start of a
+                    // ClassSetReservedDoublePunctuator (`!!`, `##`, ... `^^`;
+                    // `&&` is the intersection operator above). The `^` of a
+                    // negation never gets here: the parser takes it first.
+                    if (self.v_mode and (isClassSetSyntaxChar(c) or
+                        (isClassSetDoublePunctuator(c) and self.pos + 1 < self.pattern.len and self.pattern[self.pos + 1] == c)))
+                        return error.InvalidClassSetOperand;
                     self.pos += 1;
                     return Token.char_token(c, start_pos);
                 }
                 return self.literalMultibyteToken(c, start_pos);
             },
         }
+    }
+
+    /// ECMA-262's ClassSetSyntaxCharacter, but for the ones `nextInClass`
+    /// already tokenizes (`[`, `]`, `-`, `\`).
+    fn isClassSetSyntaxChar(c: u8) bool {
+        return switch (c) {
+            '(', ')', '{', '}', '/', '|' => true,
+            else => false,
+        };
+    }
+
+    /// The characters of ECMA-262's ClassSetReservedDoublePunctuator but `&`
+    /// (`&&` is the intersection operator).
+    fn isClassSetDoublePunctuator(c: u8) bool {
+        return switch (c) {
+            '!', '#', '$', '%', '*', '+', ',', '.', ':', ';', '<', '=', '>', '?', '@', '^', '`', '~' => true,
+            else => false,
+        };
+    }
+
+    /// ECMA-262's ClassSetReservedPunctuator: under `v`, `\` + one of these is
+    /// the character itself (`-` is already a class identity escape).
+    fn isClassSetReservedPunctuator(c: u8) bool {
+        return switch (c) {
+            '&', '!', '#', '%', ',', ':', ';', '<', '=', '>', '@', '`', '~' => true,
+            else => false,
+        };
     }
 
     /// Parse an escape sequence inside `[...]`. Mostly the same as
@@ -713,9 +749,12 @@ pub const Lexer = struct {
             // special class meaning, fall back to the literal character --
             // unless `unicode_mode` is set and `c` isn't a recognized class
             // identity-escape character, in which case it's a SyntaxError
-            // (see `isStrictIdentityEscape`).
+            // (see `isStrictIdentityEscape`). Under `v`, a
+            // ClassSetReservedPunctuator escaped is the character itself.
             else => {
-                if (self.unicode_mode and !isStrictIdentityEscape(c, true)) {
+                if (self.unicode_mode and !isStrictIdentityEscape(c, true) and
+                    !(self.v_mode and isClassSetReservedPunctuator(c)))
+                {
                     return error.InvalidEscape;
                 }
                 // `\` before a non-ASCII character escapes the whole

@@ -1153,6 +1153,48 @@ test "F7b(6): the VM's set cache doesn't mix the letters of an i literal" {
     }
 }
 
+test "v: class set syntax the spec forbids, and the reserved-punctuator escapes" {
+    const v: zregex.CompileOptions = .{ .v = true };
+    const u: zregex.CompileOptions = .{ .unicode = true };
+    // test262's breaking-change-from-u-to-v 01-28 but 03 and 09 (already
+    // errors), and the lone hyphens of the corpora: a SyntaxError under `v`
+    // (ClassSetSyntaxCharacter, ClassSetReservedDoublePunctuator), valid
+    // with `u` and without flags.
+    const rejected = [_][]const u8{
+        "[(]",  "[)]",  "[{]",  "[}]",  "[/]",   "[-]",   "[|]",  "[!!]", "[##]",   "[$$]",
+        "[%%]", "[**]", "[++]", "[,,]", "[..]",  "[::]",  "[;;]", "[<<]", "[==]",   "[>>]",
+        "[??]", "[@@]", "[``]", "[~~]", "[^^^]", "[_^^]", "[-a]", "[a-]", "[\\d-]", "[a-z-]",
+    };
+    // Inside a nested operand too (not valid with `u`: the `]` after `[[(]`).
+    try testing.expectError(error.InvalidClassSetOperand, zregex.Regex.compileWithOptions(testing.allocator, "[[(]--[a]]", v));
+    for (rejected) |p| {
+        try testing.expectError(error.InvalidClassSetOperand, zregex.Regex.compileWithOptions(testing.allocator, p, v));
+        for ([_]zregex.CompileOptions{ .{}, u }) |o| {
+            var re = try zregex.Regex.compileWithOptions(testing.allocator, p, o);
+            re.deinit();
+        }
+    }
+    // A ClassSetReservedPunctuator escaped is the character under `v`; with
+    // `u` it stays InvalidEscape, without flags an identity escape.
+    const punct = "&!#%,:;<=>@`~";
+    for (punct) |c| {
+        const p = [_]u8{ '[', '\\', c, ']' };
+        var re = try zregex.Regex.compileWithOptions(testing.allocator, &p, v);
+        defer re.deinit();
+        const s = [_]u8{c};
+        try testing.expect(try re.matchFull(&s));
+        try testing.expect(!try re.matchFull("x"));
+        try testing.expectError(error.InvalidEscape, zregex.Regex.compileWithOptions(testing.allocator, &p, u));
+        var plain = try zregex.Regex.compileWithOptions(testing.allocator, &p, .{});
+        plain.deinit();
+    }
+    // Still valid under `v`.
+    for ([_][]const u8{ "[a-z]", "[[a]&&[b]]", "[!]", "[a!b]", "[^^]", "[&]", "[a&b]", "[\\(]", "[\\-]", "[a^b]", "[;]", "[\\{\\}]" }) |p| {
+        var re = try zregex.Regex.compileWithOptions(testing.allocator, p, v);
+        re.deinit();
+    }
+}
+
 test "E0: valid syntax that isn't implemented is UnsupportedFeature, never a wrong result" {
     // `/^[\q{abc|d}]$/v` used to read `\q` as the letter q and match "q",
     // "|" and "a" but not "abc". Every row: V8 12.4 accepts the pattern.

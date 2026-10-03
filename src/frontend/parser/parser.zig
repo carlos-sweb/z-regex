@@ -940,8 +940,10 @@ pub const Parser = struct {
                     } else {
                         // Hyphen before ']' (or, in Annex B, before a class
                         // escape like `\d`): literal. Under `u` a class escape
-                        // can't be a range endpoint.
+                        // can't be a range endpoint. Under `v` `-` is a
+                        // ClassSetSyntaxCharacter, never a literal: `[a-]`.
                         if (self.lexer.unicode_mode and !self.check(.rbracket)) return error.InvalidCharRange;
+                        if (self.lexer.v_mode) return error.InvalidClassSetOperand;
                         try self.appendClassChar(class, first_char);
                         try self.appendClassChar(class, '-');
                     }
@@ -954,6 +956,9 @@ pub const Parser = struct {
             } else if (self.check(.hyphen)) {
                 // A hyphen where a ClassAtom is expected is the atom `-`
                 // itself: `[-a]`, or the start of a range such as `[--0]`.
+                // Not under `v`, where `-` is a ClassSetSyntaxCharacter:
+                // `[-]`, `[-a]`, `[a-z-]` are SyntaxErrors.
+                if (self.lexer.v_mode) return error.InvalidClassSetOperand;
                 try self.advance();
                 if (self.check(.hyphen)) {
                     try self.advance(); // the range operator
@@ -1129,7 +1134,8 @@ pub const Parser = struct {
     /// character in the pattern).
     /// Under `u`, a class escape (`\d`, `\p{..}`, ...) just parsed as a class
     /// member can't start a range: `[\d-a]` is a SyntaxError (Annex B reads
-    /// the `-` as a literal). A `-` right before `]` is still a literal.
+    /// the `-` as a literal). A `-` right before `]` is still a literal
+    /// (but not under `v`: the loop's next turn rejects it, `[\d-]`).
     fn rejectClassEscapeRange(self: *Self) ParseError!void {
         if (!self.lexer.unicode_mode or !self.check(.hyphen)) return;
         const saved = self.lexer.pos;

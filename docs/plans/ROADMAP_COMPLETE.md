@@ -5,7 +5,7 @@
 | | |
 |---|---|
 | **Versión** | v0.8.0 en `main` (`edde4e1`). T0-A cerrado: DFA de ida e inverso, construido en compilación, con tope; en code unit y en code point. |
-| **test262** | 3087 de 3110 (99,3 %), en UTF-16 y en WTF-8, desde la limpieza pre-1.0 (antes 2994/3017). 728 entradas saltadas: 509 del host (377 de ellas de los modificadores) y 219 por `regexp-v-flag` (`scripts/test262/features.json`); las 93 de `v` que pasan corren (`v-subset.json`). |
+| **test262** | 3113 de 3136 (99,3 %), en UTF-16 y en WTF-8, desde el fix de la laxitud de `v` (antes 3087/3110; 2994/3017 en 0.8.0). 702 entradas saltadas: 509 del host (377 de ellas de los modificadores) y 193 por `regexp-v-flag` (`scripts/test262/features.json`); las 119 de `v` que pasan corren (`v-subset.json`). |
 | **C ABI** | 40 símbolos. |
 | **Binario** | ReleaseFast 1.214.560 B y ReleaseSmall 754.152 B (`measure_binary.sh`, x86_64_v3). |
 | **Motores** | T0: VM de Pike y DFA, más los caminos rápidos (literal, class run, Shift-And, B). T1: Unicode (`u`/`v`) sobre T0 en modo code point. T2: backtracker con pila explícita, LookLinear y lookbehind hacia atrás. |
@@ -40,7 +40,7 @@ Sin priorizar hasta la última sección.
 | 1.4 | **F5c, `\q{…}`** (cadenas en clases: alternancia de secuencias, la más larga primero) | *est.* 1 semana | M (la clase deja de ser un conjunto de code points: lowering a alternancia) | compl. | 1.1-1.3 | 1.x |
 | 1.5 | **F5c, propiedades de strings:** `\p{RGI_Emoji}` y 6 más (`Basic_Emoji`, `Emoji_Keycap_Sequence`, `RGI_Emoji_Flag_Sequence`, …): tablas de secuencias de emoji-sequences.txt y emoji-zwj-sequences.txt | *est.* 1-2 semanas (generador + tablas + lowering como 1.4) | M (tamaño: decenas de KB, *est.*) | compl. (uso: validación de emoji) | 1.4 | 1.x |
 | 1.6 | **F5c, `v` con `i` completo:** MaybeSimpleCaseFolding en propiedades, clases negadas y operandos no cerrados (`/\p{Lu}/iv`, `/[^a-z]/iv`, `/[[a-z]--[q]]/iv`); quitar `non_ascii_fold` | *est.* 1-2 semanas | M (semántica de complemento tras el plegado, que V8 hace distinto de `iu`) | compl. | tablas de F5b | 1.x |
-| 1.7 | **F5c, laxitud bajo `v`:** zregex acepta `[(]` y los dobles reservados (`[a!!b]`), que V8 rechaza (LIMITATIONS, «Known divergences») | *est.* 1 día | B: **añade errores**, choca con la regla «nunca añadir errores». Hay que decidir si un SyntaxError del spec que hoy se acepta es un bug corregible | compl. | decisión | 1.x (con decisión) |
+| 1.7 | **F5c, laxitud bajo `v`:** **hecho** tras la limpieza pre-1.0. Bajo `v`, un `( ) { } / \|` sin escapar, un doble reservado (`[a!!b]`, `[_^^]`) y un `-` que no es rango ni `--` (`[-a]`, `[a-]`, `[\d-]`) dan `InvalidClassSetOperand`, un nombre que ya existía; los 13 escapes de `ClassSetReservedPunctuator` (`\&`, `\!`, …) compilan. Las 26 de `breaking-change-from-u-to-v` pasan. En el corpus dejan de compilar 105 patrones `v`, todos SyntaxError en V8 | hecho | — | compl. | — | **hecho** |
 | 1.8 | **`\p{ASCII}` + K bajo `iv`:** V8 no casa U+212A y nuestra lectura del spec sí. Hoy `UnsupportedFeature`, así que no se ve | *est.* investigación de 1 día | B | compl. | 1.6 | 1.x (con 1.6) |
 | 1.9 | **Modificadores ES2025** `(?i:…)`, `(?-m:…)`, `(?i-s:…)`. Ya existe: `ModifierScope` en el HIR, flags por scope en T2, sitios de LookLinear con flags (F7, decisión 4). Falta: parser y early errors, flags por scope en el lowering de T0 (`i` por tramo: el plegado ya es por nodo; `m`/`s` cambian el assert y el `.`) | *est.* 1-2 semanas | M (el DFA ya no puede tener un solo `word_ci` global) | compl. (377 tests saltados como host; Node 22 no los tiene) | Node ≥ 23 para medirlos | **decisión del usuario: pendiente hasta nuevo aviso** |
 | 1.10 | **Lookbehind hacia atrás bajo `u`/`v`** (variable, con capturas o backreferences): `/(?<=a+)b/u`. Átomos hacia atrás en modo code point: `decodeBefore` ya existe; falta el plegado `iu` hacia atrás y las clases de propiedades hacia atrás | *est.* 1-2 semanas | M | compl. (2 de test262: `named-groups/lookbehind.js`); uso: medio | arquitectura B de E1 | 1.x |
@@ -142,7 +142,7 @@ Cifras de `docs/BENCHMARKS.md` (v0.8.0, `execAt`, mejor de 10 rondas) salvo que 
 | 6.1 | **test262: 4 de lookbehind** (`nested-lookaround.js` ×2 = B6; `named-groups/lookbehind.js` ×2 = hacia atrás bajo `u`) | con 1.10 y 1.11 | — | compl. | 1.10, 1.11 | 1.x |
 | 6.2 | **test262: 4 fails del host** (`S7.8.5_A1.5_T1/T3`, `A2.5_T1/T3`: `\` + LineTerminator, que es error del lexer de JS; zregex coincide con V8) | — | — | — | — | **nunca**: son del host (F7 ítem 19) |
 | 6.3 | **test262: 15 `unextracted`** (literales que el extractor del harness no saca: LineTerminator en el literal, flags con escapes unicode) | — | — | — | — | **nunca** para el motor; mejorar el extractor es opcional (*est.* 1 día) |
-| 6.4 | **test262 con `v`:** **hecho** en la limpieza pre-1.0. De las 314 entradas con `regexp-v-flag`: 95 pasan (93 de la suite del motor, activadas en `scripts/test262/v-subset.json`, y 2 de la suite del host); 192 `UnsupportedFeature` (F5c); 26 la laxitud bajo `v` (1.7, `breaking-change-from-u-to-v`); 1 del host. Ningún resultado incorrecto. Al cerrar F5c: volver a medir con `run.mjs --with-feature regexp-v-flag` y ampliar la lista | hecho | — | compl. | — | **hecho** |
+| 6.4 | **test262 con `v`:** **hecho** en la limpieza pre-1.0. De las 314 entradas con `regexp-v-flag`: 121 pasan (119 de la suite del motor, activadas en `scripts/test262/v-subset.json`, y 2 de la suite del host; 26 de ellas desde el fix de 1.7); 192 `UnsupportedFeature` (F5c); 1 del host. Ningún resultado incorrecto. Al cerrar F5c: volver a medir con `run.mjs --with-feature regexp-v-flag` y ampliar la lista | hecho | — | compl. | — | **hecho** |
 | 6.5 | **test262: 377 de modificadores** saltadas como host (Node 22): medirlas con Node ≥ 23 aunque fallen | *est.* 0,5 días | B | información | Node | con 1.9 |
 | 6.6 | **Diferencial `u`/`v` contra V8 en ejecución** (no solo compilación): `differential-v8` usa 4.000 patrones; añadir sujetos con astrales, sustitutos y LS/PS en modo `u` | *est.* 1-2 días | B | corrección del DFA en code point | — | 1.0.0 |
 | 6.7 | **Diferencial propio del DFA en el repo:** **hecho** (`tools/dfadiff.zig`, en el gate). T0 tal como se enruta (caminos rápidos y DFA, code unit y code point) frente a la VM pura, todos los slots, en cada índice, con y sin `sticky`, en WTF-8 y UTF-16: 28.556 programas (21.301 DFAs en code unit y 4.349 en code point), 73,8 M de ejecuciones comparadas, 0 diferencias. Con dos mutaciones del DFA en una copia (decodificar en code unit; `\b` sin palabra extendida), da diferencias o falla | hecho | — | regresiones del DFA | — | **hecho** |
@@ -166,7 +166,7 @@ Origen: búsqueda de «1.x», «deferred», «pending», «deuda», «nunca» en
 | 7.5 | Lookbehind hacia atrás bajo `u`/`v` | `LIMITATIONS.md`, `ROADMAP_1.0.md` | ver 1.10 | 1.x |
 | 7.6 | B6 (lookaround en un lookbehind hacia atrás) | `LIMITATIONS.md`, `E1.md`, notas de 0.6.0 | ver 1.11 | 1.x |
 | 7.7 | LookLinear hacia atrás | `ROADMAP_1.0.md` (E1), notas de 0.6.0 | ver 2.16 | 1.x |
-| 7.8 | Laxitud de sintaxis bajo `v` | `LIMITATIONS.md` («Known divergences»), `ROADMAP_1.0.md` | ver 1.7 | 1.x (con decisión) |
+| 7.8 | Laxitud de sintaxis bajo `v` | `ROADMAP_1.0.md` | ver 1.7 (hecho) | hecho |
 | 7.9 | Tablas de plegado a módulo aparte | `F7.md` ítem 7, `HISTORY.md` (F5b) | ver 3.3 | condicionado |
 | 7.10 | `zregex-t0` | `F7.md` ítem 12 y decisión 3, `F7c.md` §6 | ver 3.4 | condicionado |
 | 7.11 | Serialización, telemetría | `F7.md` ítems 17-18 | — | nunca sin consumidor |
@@ -184,7 +184,7 @@ Origen: búsqueda de «1.x», «deferred», «pending», «deuda», «nunca» en
 | Decisión | Estado | Qué la desbloquea |
 |---|---|---|
 | Modificadores ES2025 | «pendiente hasta nuevo aviso» (2026-09-29) | un consumidor, o Node del harness ≥ 23 para medirlos |
-| ¿Corregir la laxitud bajo `v` (1.7) añadiendo errores? | sin decidir; choca con la letra del freeze | aclarar en API.md si «corregir un SyntaxError que el spec exige» es un fix permitido |
+| ¿Corregir la laxitud bajo `v` (1.7) añadiendo errores? | **decidido:** sí, con un nombre existente (`InvalidClassSetOperand`); no se añaden nombres a RegexError | — |
 | `zregex-t0` / tablas aparte | condicionado a un consumidor | un consumidor embebido |
 | Campos de diagnóstico de `CompileOptions` | fuera del contrato, pero en la raíz | decidir antes de 1.0 (4.3) |
 | Criterio de salida de la producción | «1-3 meses sin cambios de API» | definir qué consumidores cuentan (z-interpreter, …) y qué cifra |
@@ -234,7 +234,7 @@ Estimaciones, no compromisos. Ordenadas por la relación entre lo que gana un co
 2. **Cabecera C con test** (4.1). *est.* 2 días.
 3. **Medir lo que no se mide:** activar las 312 de `v` en test262 (6.4) y pasar el diferencial del DFA al gate (6.7). **Hecho** en la limpieza pre-1.0.
 4. **Casos límite del DFA** (6.10) y diferencial `u`/`v` en ejecución contra V8 (6.6). *est.* 4 días.
-5. **Decidir** los campos de diagnóstico (4.3) y la laxitud de `v` (1.7).
+5. **Decidir** los campos de diagnóstico (4.3). La laxitud de `v` (1.7): **hecho**.
 6. **Interning más barato del DFA** (2.2, la parte barata), para bajar el coste de compilación de npm sin cambiar la arquitectura. *est.* 4 días.
 7. **El resto del mes:** la producción con z-interpreter, arreglando lo que salga.
 
@@ -247,7 +247,7 @@ Lo de 1 mes, más:
 
 ### Con 6 meses
 Lo de 3 meses, más:
-1. **Lookbehind hacia atrás bajo `u`/`v` y B6** (1.10, 1.11): test262 llegaría a 3091/3110 (los 19 restantes son del host o del extractor).
+1. **Lookbehind hacia atrás bajo `u`/`v` y B6** (1.10, 1.11): test262 llegaría a 3117/3136 (los 19 restantes son del host o del extractor).
 2. **Construcción diferida del DFA y DFA sobre el tope** (2.2 lazy y 2.3). *est.* 4 semanas.
 3. **Fase 4 (ReverseInner)** (2.1) y **saltos en modo code point** (2.6).
 4. **Conjuntos de patrones** (8.4) si un consumidor los pide; si no, **DFA por bytes para T1** (2.7).
