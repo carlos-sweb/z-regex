@@ -739,9 +739,13 @@ pub const Parser = struct {
         }
 
         const category = properties.resolveUnicodeProperty(name) orelse {
-            // A property of strings (`v` only, not negated) is valid syntax
-            // that isn't implemented (F5c); elsewhere it is a SyntaxError.
-            if (self.lexer.v_mode and !negated and isPropertyOfStrings(name)) return error.UnsupportedFeature;
+            // A property of strings is valid only under `v`, not negated;
+            // elsewhere it is a SyntaxError. Of the seven, the ones without
+            // data yet are UnsupportedFeature (F5c).
+            if (self.lexer.v_mode and !negated) {
+                if (properties.resolveStringProperty(name)) |prop| return Node.createStringProperty(self.allocator, @intFromEnum(prop));
+                if (isPropertyOfStrings(name)) return error.UnsupportedFeature;
+            }
             return error.UnknownUnicodeProperty;
         };
         return Node.createUnicodeProperty(self.allocator, @intFromEnum(category), negated);
@@ -778,13 +782,52 @@ pub const Parser = struct {
     /// implemented (`\q{…}`, a property of strings) is
     /// `MixedClassSetOperators` when it mixes them (F7c-4b), not
     /// `UnsupportedFeature`.
+    ///
+    /// Under `v`, a negated class whose contents may contain strings
+    /// (MayContainStrings: `[^\q{ab}]`, `[^\p{Emoji_Keycap_Sequence}]`) is
+    /// a SyntaxError, `InvalidClassSetOperand`.
     fn parseCharClass(self: *Self) ParseError!*Node {
         const body = self.current_token.position + 1; // after the `[`
-        return self.parseCharClassBody() catch |err| {
+        const class = self.parseCharClassBody() catch |err| {
             if (err == error.UnsupportedFeature and self.lexer.v_mode and
                 classMixesSetOperators(self.lexer.pattern, body))
                 return error.MixedClassSetOperators;
             return err;
+        };
+        if (class.inverted and contentsMayContainStrings(class)) {
+            class.deinit();
+            return error.InvalidClassSetOperand;
+        }
+        return class;
+    }
+
+    /// ECMA-262's MayContainStrings of a class's contents, its own `^`
+    /// aside: a syntactic rule, not the strings the class ends up with. A
+    /// union may when any member may; an intersection when every operand
+    /// may; a difference when its first operand may. A `\q{...}` may when
+    /// one of its strings isn't one character, and a property of strings
+    /// always may. Only `v` builds the nodes that may.
+    fn contentsMayContainStrings(n: *const Node) bool {
+        return switch (n.type) {
+            .char_class => for (n.children.items) |child| {
+                if (mayContainStrings(child)) break true;
+            } else false,
+            .class_set_op => switch (@as(ast_mod.ClassSetOp, @enumFromInt(n.char_value))) {
+                .difference => mayContainStrings(n.children.items[0]),
+                .intersection => for (n.children.items) |child| {
+                    if (!mayContainStrings(child)) break false;
+                } else true,
+            },
+            else => mayContainStrings(n),
+        };
+    }
+
+    fn mayContainStrings(n: *const Node) bool {
+        return switch (n.type) {
+            .class_string, .string_property => true,
+            // `[^...]` never contains strings (or is an error already).
+            .char_class, .class_set_op => !n.inverted and contentsMayContainStrings(n),
+            else => false,
         };
     }
 
@@ -926,6 +969,9 @@ pub const Parser = struct {
                     try self.appendClassChar(class, '-');
                 }
                 try self.appendClassChar(class, '-');
+            } else if (self.check(.class_string_open)) {
+                // `\q{...}` (`v` only): its strings are members of the union.
+                try self.parseClassStrings(class);
             } else if (self.lexer.v_mode and self.check(.lbracket)) {
                 // A nested class (`v` only: elsewhere `[` is a literal here)
                 // is a member of the union, `[[a]b]`, `[a[b]]`, `[[a][b]]`,
@@ -1078,9 +1124,13 @@ pub const Parser = struct {
             try self.advance();
             return self.resolveUnicodePropertyNode(name, negated);
         }
-        if (self.isClassCharToken() or self.isShorthandClassToken()) {
+        if (self.isClassCharToken() or self.isShorthandClassToken() or self.check(.class_string_open)) {
             const class = try Node.createCharClass(self.allocator);
             errdefer class.deinit();
+            if (self.check(.class_string_open)) {
+                try self.parseClassStrings(class);
+                return class;
+            }
             if (self.isShorthandClassToken())
                 try self.appendShorthandToClass(class, self.current_token.type)
             else
@@ -1090,6 +1140,47 @@ pub const Parser = struct {
         }
         // `]`, an operator, the end: a missing operand.
         return error.InvalidClassSetOperand;
+    }
+
+    /// `\q{...}` (ClassStringDisjunction, `v` only), entered on its `\q{`
+    /// token: its `|`-separated strings, each a list of ClassSetCharacters
+    /// (none for the empty string), appended to `class`. A string of one
+    /// character is that character (`[\q{a}]` is `[a]`, so `[^\q{a}]` is
+    /// valid); the others are `class_string` nodes. The `|` and the `}` are
+    /// read from the pattern here (inside a class the lexer rejects them);
+    /// every character through the lexer, with the class's rules
+    /// (`[\q{(}]`, `[\q{a-b}]`, `[\q{\d}]` are SyntaxErrors). Leaves the
+    /// token after the `}` current.
+    fn parseClassStrings(self: *Self, class: *Node) ParseError!void {
+        const pattern = self.lexer.pattern;
+        var string = try Node.createClassString(self.allocator);
+        var string_owned = true;
+        errdefer if (string_owned) string.deinit();
+        while (true) {
+            if (self.lexer.pos >= pattern.len) return error.UnmatchedBracket;
+            const c = pattern[self.lexer.pos];
+            if (c == '|' or c == '}') {
+                self.lexer.pos += 1;
+                string_owned = false;
+                if (string.children.items.len == 1) {
+                    const char = string.children.pop().?;
+                    string.deinit();
+                    errdefer char.deinit();
+                    try class.appendChild(char);
+                } else {
+                    errdefer string.deinit();
+                    try class.appendChild(string);
+                }
+                if (c == '}') break;
+                string = try Node.createClassString(self.allocator);
+                string_owned = true;
+                continue;
+            }
+            try self.advance();
+            if (!self.isClassCharToken()) return error.InvalidClassSetOperand;
+            try self.appendClassChar(string, self.classCharValue());
+        }
+        try self.advance();
     }
 
     /// Whether the current token can appear as a character-class member or

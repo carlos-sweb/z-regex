@@ -6,11 +6,12 @@ what a release promises is in [API.md](API.md).
 
 ## Status
 
-- **test262:** 3159 of the 3182 entries that run pass (99.3 %), in UTF-16 and in WTF-8;
-  656 are skipped: 509 by the harness (its runner, or a feature its Node lacks, such as
-  the 377 of RegExp modifiers) and 147 of the `v` flag (`scripts/test262/features.json`).
-  Of the `v` flag's 314 entries, the 165 of the engine suite that pass run
-  (`v-subset.json`); the rest: 146 `UnsupportedFeature` (F5c), 1 host, and 2 of the host
+- **test262:** 3281 of the 3304 entries that run pass (99.3 %), in UTF-16 and in WTF-8;
+  534 are skipped: 509 by the harness (its runner, or a feature its Node lacks, such as
+  the 377 of RegExp modifiers) and 25 of the `v` flag (`scripts/test262/features.json`).
+  Of the `v` flag's 314 entries, the 287 of the engine suite that pass run
+  (`v-subset.json`); the rest: 24 `UnsupportedFeature` (F5c: the properties of strings
+  without data), 1 host, and 2 of the host
   suite (they pass; that suite isn't in the count). Of the 23 that run and don't pass: 4 are lookbehinds
   zregex rejects as `UnsupportedFeature` (2 `nested-lookaround`, 2 under `u` in
   `named-groups/lookbehind`), 4 fail in the JS lexer (host), 15 can't be extracted.
@@ -32,8 +33,7 @@ release only removes such cases ([API.md](API.md), "Errors").
 | RegExp modifiers (ES2025) | `(?i:a)`, `(?-m:a)` | Pending until further notice (see below) |
 | A lookaround inside a lookbehind matched backward | `(?<=a(?=b)c+)` | 1.x |
 | Under `u`/`v`, a lookbehind matched backward (variable length, captures or backreferences inside) | `/(?<=a+)b/u` | 1.x |
-| `v`: `\q{...}` | `[\q{abc}]` | F5c (1.x) |
-| `v`: properties of strings | `\p{RGI_Emoji}` and 6 more | F5c (1.x) |
+| `v`: the properties of strings but `Emoji_Keycap_Sequence` | `\p{RGI_Emoji}`, `\p{Basic_Emoji}` and 4 more | F5c 2c |
 | `i` with `v`: property escapes, negated classes and set operands (or nested classes in a union) not closed under the folding | `/\p{Lu}/iv`, `/[^a-z]/iv`, `/[[a-z]--[q]]/iv`, `/[a--b]/iv` | F5c (1.x) |
 
 ### Row by row: `v`, modifiers and escapes
@@ -43,7 +43,8 @@ Each row: what V8 says, what zregex gave before E0 (0.5.1), and what it gives no
 
 | Pattern | V8 | Before E0 | Since E0 |
 |---|---|---|---|
-| `[\q{a}]` (`\q{...}`) | valid | **wrong result**: `\q` was the letter q | `UnsupportedFeature` |
+| `[\q{a}]` (`\q{...}`) | valid | **wrong result**: `\q` was the letter q | `UnsupportedFeature`; compiles since F5c 2a |
+| `[^\q{ab}]`, `[^\p{Emoji_Keycap_Sequence}]` (a negated class that may contain strings) | SyntaxError | — | `InvalidClassSetOperand` (F5c 2a) |
 | `\q`, `[\q]`, `\q{a}`, `\z` | SyntaxError | accepted | `InvalidEscape` |
 | `[\p{L}--\d]`, `[\p{L}--a]`, `[a--b]`, `[a&&b]`, `[[a]&&b]`, `[\w--\d]` (a bare right operand, bug B) | valid | `InvalidClassSetOperand` | `UnsupportedFeature`; compiles since F5c 1.1 |
 | `[[a][b]]`, `[a[b]]` (a union with nested classes) | valid | `InvalidClassSetOperand` / `UnexpectedToken` | `UnsupportedFeature`; compiles since F5c 1.1 |
@@ -53,7 +54,7 @@ Each row: what V8 says, what zregex gave before E0 (0.5.1), and what it gives no
 | `[A--B&&C]` (operators mixed) | SyntaxError | `ChainedClassSetOperatorNotSupported` | `MixedClassSetOperators` (flat operands too since F7c-4b) |
 | `[ab&&[c]]`, `[a-z--b]` (a list or a range as an operand) | SyntaxError | compiled / `UnsupportedFeature` | `InvalidClassSetOperand` (F7c-4b) |
 | `[a--]`, `[--a]` | SyntaxError | `InvalidClassSetOperand` | the same |
-| `\p{RGI_Emoji}` and the other 6 properties of strings | valid | `UnknownUnicodeProperty` | `UnsupportedFeature` |
+| `\p{RGI_Emoji}` and the other 6 properties of strings | valid | `UnknownUnicodeProperty` | `UnsupportedFeature`; `\p{Emoji_Keycap_Sequence}` compiles since F5c 2b |
 | `\P{RGI_Emoji}`; those names with `u` | SyntaxError | `UnknownUnicodeProperty` | the same |
 | `(?i:a)`, `(?-m:a)`, `(?i-s:a)` (RegExp modifiers, any flags) | valid (ES2025) | `UnexpectedToken` | `UnsupportedFeature` |
 | `(?x:a)`, `(?i)`, `(?ii:a)`, `(?-:a)` | SyntaxError | `UnexpectedToken` | the same |
@@ -62,8 +63,8 @@ Each row: what V8 says, what zregex gave before E0 (0.5.1), and what it gives no
   ECMA-262 (`ClassSetOperand`) and V8 agree: a list or a range is only a `ClassUnion`, so
   `[a-z--b]` is a SyntaxError and the range is written nested, `[[a-z]--b]`.
 - **Limit of the rule:** a pattern that is invalid *and* uses a form that isn't implemented
-  reports the first one it reaches: `[\q{a}]\w(?!a){2}` with `v` is `UnsupportedFeature`
-  (the class comes first), where V8 reports the SyntaxError of the quantified lookahead.
+  reports the first one it reaches: `\p{RGI_Emoji}\w(?!a){2}` with `v` is `UnsupportedFeature`
+  (the property comes first), where V8 reports the SyntaxError of the quantified lookahead.
   Both are compile errors; neither is a wrong result.
 
 ## Known divergences from V8
@@ -83,6 +84,10 @@ Each row: what V8 says, what zregex gave before E0 (0.5.1), and what it gives no
 | `/\B(?<![^\sa]😀\*[^z])/v` (also `/\B/v`) | `"😀x😀"`, 2 | `[4,4]` | `[5,5]` |
 
 - **`\p{ASCII}` and the Kelvin sign under `iv`:** see "`v` with `i`" below.
+- **`[\q{K}]` and the Kelvin sign under `iv`:** zregex matches U+212A with `/[\q{K}]/iv`, as
+  with `/[K]/iv`: a one-character string of `\q{...}` is that character (ECMA-262,
+  ClassStringDisjunction). V8 (Node 22) matches it with `/[K]/iv` and `/[\q{Kx}]/iv`
+  (on "\u212Ax") but not with `/[\q{K}]/iv`. zregex follows the spec.
 
 ## Lookbehind
 
@@ -129,7 +134,7 @@ hasn't participated yet matches empty (`(?<=(\w)\1)x` on `"aax"` gives `[2,3]`, 
 `(?i:…)`, `(?-m:…)` and the other forms of ES2025's modifiers are not implemented:
 `(?i:a)` is `error.UnsupportedFeature`. Decision (2026-09-29): pending until further
 notice, not on the way to 1.0. Their 377 test262 entries are skipped because the
-harness's Node lacks the feature, so they are not counted in 3159/3182. What exists and
+harness's Node lacks the feature, so they are not counted in 3281/3304. What exists and
 what is missing: `docs/plans/F7.md`, "Decisiones", 4.
 
 ## `v` with `i`

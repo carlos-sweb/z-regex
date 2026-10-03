@@ -163,9 +163,9 @@ pub const RegexError = parser_mod.ParseError || generator_mod.CodegenError || Al
     IncompatibleFlags,
     /// A valid pattern this engine can't run yet: a lookbehind matched
     /// backward (variable length, captures or backreferences inside) under
-    /// `u`/`v` or with a lookaround inside, `\q{...}`, a chained or
-    /// bare-character class set operand or a union with a nested class
-    /// under `v`, a property of strings, RegExp modifiers. Valid syntax that isn't implemented is
+    /// `u`/`v` or with a lookaround inside, a property of strings other
+    /// than `Emoji_Keycap_Sequence` under `v`, RegExp modifiers. Valid
+    /// syntax that isn't implemented is
     /// always this error, never a wrong result. C API:
     /// `ZREGEXP_ERROR_UNSUPPORTED`.
     UnsupportedFeature,

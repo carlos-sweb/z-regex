@@ -79,6 +79,7 @@ pub const TokenType = enum {
     // inside a class -- see `nextInClass`.
     class_minus_minus, // -- (class set difference)
     class_and_and, // && (class set intersection)
+    class_string_open, // \q{ (ClassStringDisjunction; the parser reads the rest)
 
     // Special
     eof,
@@ -722,11 +723,14 @@ pub const Lexer = struct {
             'x' => return try self.parseHexEscape(start_pos),
             'u' => return try self.parseUnicodeEscape(start_pos),
             'c' => return try self.parseControlEscape(start_pos, true),
-            // `\q{...}` (ClassStringDisjunction) is valid only under `v` and
-            // isn't implemented (F5c); `\q` otherwise follows the identity
-            // escape rules below.
+            // `\q{` (ClassStringDisjunction) only under `v`: the parser reads
+            // its strings up to the `}` (`parseClassStrings`). `\q`
+            // otherwise follows the identity escape rules below.
             'q' => {
-                if (self.v_mode and self.pos < self.pattern.len and self.pattern[self.pos] == '{') return error.UnsupportedFeature;
+                if (self.v_mode and self.pos < self.pattern.len and self.pattern[self.pos] == '{') {
+                    self.pos += 1;
+                    return Token.simple(.class_string_open, start_pos);
+                }
                 if (self.unicode_mode) return error.InvalidEscape;
                 return Token.escaped('q', start_pos);
             },

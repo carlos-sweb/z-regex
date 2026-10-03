@@ -382,6 +382,22 @@ pub fn propertyRanges(cat: UnicodeProperty) []const CodepointRange {
     };
 }
 
+/// The properties of strings (ECMA-262, `v` only) that zregex implements,
+/// by index (F5c). The other six of the table (`Basic_Emoji`, `RGI_Emoji`,
+/// ...) are UnsupportedFeature.
+pub const StringProperty = enum(u8) { Emoji_Keycap_Sequence };
+
+pub fn resolveStringProperty(name: []const u8) ?StringProperty {
+    return std.meta.stringToEnum(StringProperty, name);
+}
+
+/// The strings of a property of strings, each as its code points.
+pub fn stringPropertySequences(prop: StringProperty) []const []const u32 {
+    return switch (prop) {
+        .Emoji_Keycap_Sequence => tables.SEQ_EMOJI_KEYCAP_SEQUENCE,
+    };
+}
+
 /// The ranges `isInScript` searches for `script_index`.
 pub fn scriptRanges(script_index: u8) []const CodepointRange {
     return tables.SCRIPT_RANGES[script_index];

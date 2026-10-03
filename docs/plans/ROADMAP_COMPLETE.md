@@ -5,7 +5,7 @@
 | | |
 |---|---|
 | **Versión** | v0.8.0 en `main` (`edde4e1`). T0-A cerrado: DFA de ida e inverso, construido en compilación, con tope; en code unit y en code point. |
-| **test262** | 3159 de 3182 (99,3 %), en UTF-16 y en WTF-8, desde F5c 1.1-1.3 (antes 3113/3136 tras la laxitud de `v`, 3087/3110 tras la limpieza, 2994/3017 en 0.8.0). 656 entradas saltadas: 509 del host (377 de ellas de los modificadores) y 147 por `regexp-v-flag` (`scripts/test262/features.json`); las 165 de `v` que pasan corren (`v-subset.json`). |
+| **test262** | 3281 de 3304 (99,3 %), en UTF-16 y en WTF-8, desde F5c 2a+2b (antes 3159/3182 tras 1.1-1.3, 3113/3136 tras la laxitud de `v`, 3087/3110 tras la limpieza, 2994/3017 en 0.8.0). 534 entradas saltadas: 509 del host (377 de ellas de los modificadores) y 25 por `regexp-v-flag` (`scripts/test262/features.json`); las 287 de `v` que pasan corren (`v-subset.json`). |
 | **C ABI** | 40 símbolos. |
 | **Binario** | ReleaseFast 1.214.560 B y ReleaseSmall 754.152 B (`measure_binary.sh`, x86_64_v3). |
 | **Motores** | T0: VM de Pike y DFA, más los caminos rápidos (literal, class run, Shift-And, B). T1: Unicode (`u`/`v`) sobre T0 en modo code point. T2: backtracker con pila explícita, LookLinear y lookbehind hacia atrás. |
@@ -37,8 +37,8 @@ Sin priorizar hasta la última sección.
 | 1.1 | **F5c, operandos de `v` (bug B):** **hecho** (con 1.2 y 1.3, un commit). Un carácter suelto o un shorthand como operando derecho (`[\p{L}--a]`, `[\w--\d]`, `[a&&b]`) compila. De paso, una operación anidada como operando (`[[[a]--[b]]--[c]]`), que daba `InvalidPattern`, compila. Siguen siendo SyntaxError `[a&&&b]`, `[a--b-c]`, `[[a][b]--[c]]`. Con `iv`, un operando no cerrado bajo el plegado sigue siendo `UnsupportedFeature` (1.6) | hecho | — | compl. | — | **hecho** |
 | 1.2 | **F5c, encadenado:** **hecho** con 1.1. `[A--B--C]`, `[A&&B&&C]`, de izquierda a derecha; el nodo de la operación es n-ario (una cadena de 10.000 operandos no recursa) | hecho | — | compl. | — | **hecho** |
 | 1.3 | **F5c, unión con clases anidadas:** **hecho** con 1.1. `[[a][b]]`, `[a[b]]`, `[[a]]`, `[a-z[0-9]_]`. test262: +46 entradas (23 ficheros de `unicodeSets/generated`) | hecho | — | compl. | — | **hecho** |
-| 1.4 | **F5c, `\q{…}`** (cadenas en clases: alternancia de secuencias, la más larga primero) | *est.* 1 semana | M (la clase deja de ser un conjunto de code points: lowering a alternancia) | compl. | 1.1-1.3 | 1.x |
-| 1.5 | **F5c, propiedades de strings:** `\p{RGI_Emoji}` y 6 más (`Basic_Emoji`, `Emoji_Keycap_Sequence`, `RGI_Emoji_Flag_Sequence`, …): tablas de secuencias de emoji-sequences.txt y emoji-zwj-sequences.txt | *est.* 1-2 semanas (generador + tablas + lowering como 1.4) | M (tamaño: decenas de KB, *est.*) | compl. (uso: validación de emoji) | 1.4 | 1.x |
+| 1.4 | **F5c, `\q{…}`:** **parcial**: 2a y 2b hechos, 2c pendiente. 2a: `\q{…}` con strings de cualquier longitud, operaciones de conjuntos sobre strings, MayContainStrings (`[^\q{ab}]` es `InvalidClassSetOperand`), `iv` (strings plegados con la simple case folding). El lowering baja una clase con strings a una alternancia (los strings del más largo al más corto, factorizados en trie; luego los code points sueltos; luego el vacío) con nodos que el HIR ya tenía; la ejecución no cambia. 2b: `Emoji_Keycap_Sequence` (12 strings, de emoji-sequences.txt 17.0). test262: +122 entradas. 2c (las otras 6 propiedades) va en 1.5 | 2c: ver 1.5 | M | compl. | — | 2a+2b **hechos** |
+| 1.5 | **F5c, propiedades de strings (2c):** `\p{RGI_Emoji}` y 5 más (`Basic_Emoji`, `RGI_Emoji_Flag_Sequence`, …; `Emoji_Keycap_Sequence` hecha en 2b): tablas de secuencias de emoji-sequences.txt y emoji-zwj-sequences.txt, sobre la vía de lowering de 1.4. Precheck con prototipo medido (tamaño y rendimiento de RGI_Emoji, 3.953 strings). test262: 24 entradas | *est.* 1-2 semanas (generador + tablas + lowering como 1.4) | M (tamaño: decenas de KB, *est.*) | compl. (uso: validación de emoji) | 1.4 | 1.x |
 | 1.6 | **F5c, `v` con `i` completo:** MaybeSimpleCaseFolding en propiedades, clases negadas y operandos no cerrados (`/\p{Lu}/iv`, `/[^a-z]/iv`, `/[[a-z]--[q]]/iv`); quitar `non_ascii_fold` | *est.* 1-2 semanas | M (semántica de complemento tras el plegado, que V8 hace distinto de `iu`) | compl. | tablas de F5b | 1.x |
 | 1.7 | **F5c, laxitud bajo `v`:** **hecho** tras la limpieza pre-1.0. Bajo `v`, un `( ) { } / \|` sin escapar, un doble reservado (`[a!!b]`, `[_^^]`) y un `-` que no es rango ni `--` (`[-a]`, `[a-]`, `[\d-]`) dan `InvalidClassSetOperand`, un nombre que ya existía; los 13 escapes de `ClassSetReservedPunctuator` (`\&`, `\!`, …) compilan. Las 26 de `breaking-change-from-u-to-v` pasan. En el corpus dejan de compilar 105 patrones `v`, todos SyntaxError en V8 | hecho | — | compl. | — | **hecho** |
 | 1.8 | **`\p{ASCII}` + K bajo `iv`:** V8 no casa U+212A y nuestra lectura del spec sí. Hoy `UnsupportedFeature`, así que no se ve | *est.* investigación de 1 día | B | compl. | 1.6 | 1.x (con 1.6) |
@@ -142,7 +142,7 @@ Cifras de `docs/BENCHMARKS.md` (v0.8.0, `execAt`, mejor de 10 rondas) salvo que 
 | 6.1 | **test262: 4 de lookbehind** (`nested-lookaround.js` ×2 = B6; `named-groups/lookbehind.js` ×2 = hacia atrás bajo `u`) | con 1.10 y 1.11 | — | compl. | 1.10, 1.11 | 1.x |
 | 6.2 | **test262: 4 fails del host** (`S7.8.5_A1.5_T1/T3`, `A2.5_T1/T3`: `\` + LineTerminator, que es error del lexer de JS; zregex coincide con V8) | — | — | — | — | **nunca**: son del host (F7 ítem 19) |
 | 6.3 | **test262: 15 `unextracted`** (literales que el extractor del harness no saca: LineTerminator en el literal, flags con escapes unicode) | — | — | — | — | **nunca** para el motor; mejorar el extractor es opcional (*est.* 1 día) |
-| 6.4 | **test262 con `v`:** **hecho** en la limpieza pre-1.0. De las 314 entradas con `regexp-v-flag`: 167 pasan (165 de la suite del motor, activadas en `scripts/test262/v-subset.json`, y 2 de la suite del host; 26 de ellas desde el fix de 1.7 y 46 desde 1.1-1.3); 146 `UnsupportedFeature` (F5c: `\q{…}` y propiedades de strings); 1 del host. Ningún resultado incorrecto. Al cerrar F5c: volver a medir con `run.mjs --with-feature regexp-v-flag` y ampliar la lista | hecho | — | compl. | — | **hecho** |
+| 6.4 | **test262 con `v`:** **hecho** en la limpieza pre-1.0. De las 314 entradas con `regexp-v-flag`: 289 pasan (287 de la suite del motor, activadas en `scripts/test262/v-subset.json`, y 2 de la suite del host; 26 de ellas desde el fix de 1.7, 46 desde 1.1-1.3 y 122 desde 2a+2b); 24 `UnsupportedFeature` (F5c 2c: propiedades de strings sin datos); 1 del host. Ningún resultado incorrecto. Al cerrar F5c: volver a medir con `run.mjs --with-feature regexp-v-flag` y ampliar la lista | hecho | — | compl. | — | **hecho** |
 | 6.5 | **test262: 377 de modificadores** saltadas como host (Node 22): medirlas con Node ≥ 23 aunque fallen | *est.* 0,5 días | B | información | Node | con 1.9 |
 | 6.6 | **Diferencial `u`/`v` contra V8 en ejecución** (no solo compilación): `differential-v8` usa 4.000 patrones; añadir sujetos con astrales, sustitutos y LS/PS en modo `u` | *est.* 1-2 días | B | corrección del DFA en code point | — | 1.0.0 |
 | 6.7 | **Diferencial propio del DFA en el repo:** **hecho** (`tools/dfadiff.zig`, en el gate). T0 tal como se enruta (caminos rápidos y DFA, code unit y code point) frente a la VM pura, todos los slots, en cada índice, con y sin `sticky`, en WTF-8 y UTF-16: 28.556 programas (21.301 DFAs en code unit y 4.349 en code point), 73,8 M de ejecuciones comparadas, 0 diferencias. Con dos mutaciones del DFA en una copia (decodificar en code unit; `\b` sin palabra extendida), da diferencias o falla | hecho | — | regresiones del DFA | — | **hecho** |
@@ -162,7 +162,7 @@ Origen: búsqueda de «1.x», «deferred», «pending», «deuda», «nunca» en
 | 7.1 | Construcción diferida del DFA / interning | `T0-A-precheck.md` §13-14, `RELEASE_NOTES_v0.8.0.md` | ver 2.2 | fase propia / 1.x |
 | 7.2 | Fase 4 (ReverseInner) | `T0-A.md` §6, notas de 0.8.0 | ver 2.1 | fase propia |
 | 7.3 | `[a-z]+` corto 0,89-0,94× | `T0-A-precheck.md` §11 | ver 2.11 | 1.x |
-| 7.4 | F5c completo (`\q`, strings, `v`+`i`, `non_ascii_fold`; bug B, encadenado y unión: hechos) | `LIMITATIONS.md`, `F7.md` ítem 21, `ROADMAP_1.0.md` 1.1+ | ver 1.1-1.8 | 1.x |
+| 7.4 | F5c completo (propiedades de strings de 2c, `v`+`i`, `non_ascii_fold`; bug B, encadenado, unión, `\q` y `Emoji_Keycap_Sequence`: hechos) | `LIMITATIONS.md`, `F7.md` ítem 21, `ROADMAP_1.0.md` 1.1+ | ver 1.1-1.8 | 1.x |
 | 7.5 | Lookbehind hacia atrás bajo `u`/`v` | `LIMITATIONS.md`, `ROADMAP_1.0.md` | ver 1.10 | 1.x |
 | 7.6 | B6 (lookaround en un lookbehind hacia atrás) | `LIMITATIONS.md`, `E1.md`, notas de 0.6.0 | ver 1.11 | 1.x |
 | 7.7 | LookLinear hacia atrás | `ROADMAP_1.0.md` (E1), notas de 0.6.0 | ver 2.16 | 1.x |
@@ -240,14 +240,14 @@ Estimaciones, no compromisos. Ordenadas por la relación entre lo que gana un co
 
 ### Con 3 meses
 Lo de 1 mes, más:
-1. **F5c por partes,** en el orden 1.1 → 1.2 → 1.3 → 1.6 → 1.4 → 1.5. Lo barato primero: bug B, encadenado y unión (**hecho**); después `v`+`i`, `\q` y las propiedades de strings, *est.* 4 semanas.
+1. **F5c por partes,** en el orden 1.1 → 1.2 → 1.3 → 1.6 → 1.4 → 1.5. Lo barato primero: bug B, encadenado y unión (**hecho**); `\q` y `Emoji_Keycap_Sequence` (**hecho**, 2a+2b); después las otras propiedades de strings (2c) y `v`+`i`.
 2. **One-pass DFA para grupos** (2.4): el mayor hueco frente a V8 en T0. *est.* 3 semanas.
 3. **Prefiltro de lookbehind** (2.15) y **prefiltro del Shift-And disperso** (2.9). *est.* 1 semana.
 4. **v1.0.0** al final de la producción, si la API no cambió.
 
 ### Con 6 meses
 Lo de 3 meses, más:
-1. **Lookbehind hacia atrás bajo `u`/`v` y B6** (1.10, 1.11): test262 llegaría a 3163/3182 (los 19 restantes son del host o del extractor).
+1. **Lookbehind hacia atrás bajo `u`/`v` y B6** (1.10, 1.11): test262 llegaría a 3285/3304 (los 19 restantes son del host o del extractor).
 2. **Construcción diferida del DFA y DFA sobre el tope** (2.2 lazy y 2.3). *est.* 4 semanas.
 3. **Fase 4 (ReverseInner)** (2.1) y **saltos en modo code point** (2.6).
 4. **Conjuntos de patrones** (8.4) si un consumidor los pide; si no, **DFA por bytes para T1** (2.7).

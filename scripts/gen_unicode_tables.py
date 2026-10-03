@@ -1,7 +1,9 @@
 #!/usr/bin/env python3
 """Generate src/unicode/tables.zig from the Unicode Character Database's
 UnicodeData.txt, PropList.txt, DerivedCoreProperties.txt, emoji-data.txt,
-Scripts.txt, PropertyValueAliases.txt, and ScriptExtensions.txt.
+Scripts.txt, PropertyValueAliases.txt, and ScriptExtensions.txt, and the
+emoji data's emoji-sequences.txt (the properties of strings of `v` that
+zregex implements, STRING_PROPERTIES below).
 
 Emits, per Unicode General_Category (both the single-letter major category
 and its two-letter subcategories, e.g. both `L` and `Lu`/`Ll`/`Lt`/`Lm`/`Lo`)
@@ -68,14 +70,15 @@ With `--word-out PATH`, also writes `src/ir/word_fold.zig`: the non-ASCII code
 points whose `u` class holds an ASCII word character (ECMA-262's
 WordCharacters under `u` + `i`).
 
-Usage (UCD 17.0.0, pinned; the unicodetools repository holds the same files
-as unicode.org's Public/17.0.0/ucd):
-    B=https://raw.githubusercontent.com/unicode-org/unicodetools/main/unicodetools/data/ucd/17.0.0
+Usage (UCD 17.0.0 and emoji 17.0, pinned; the unicodetools repository holds
+the same files as unicode.org's Public/17.0.0/ucd and Public/emoji/17.0):
+    B=https://raw.githubusercontent.com/unicode-org/unicodetools/main/unicodetools/data
     for f in UnicodeData.txt PropList.txt DerivedCoreProperties.txt emoji/emoji-data.txt Scripts.txt \
         PropertyValueAliases.txt ScriptExtensions.txt PropertyAliases.txt DerivedNormalizationProps.txt \
         CaseFolding.txt SpecialCasing.txt; do
-      curl -sSfo "$(basename $f)" "$B/$f"; done
-    python3 scripts/gen_unicode_tables.py UnicodeData.txt PropList.txt DerivedCoreProperties.txt emoji-data.txt Scripts.txt PropertyValueAliases.txt ScriptExtensions.txt PropertyAliases.txt DerivedNormalizationProps.txt CaseFolding.txt SpecialCasing.txt --word-out src/ir/word_fold.zig > src/unicode/tables.zig
+      curl -sSfo "$(basename $f)" "$B/ucd/17.0.0/$f"; done
+    curl -sSfo emoji-sequences.txt "$B/emoji/17.0/emoji-sequences.txt"
+    python3 scripts/gen_unicode_tables.py UnicodeData.txt PropList.txt DerivedCoreProperties.txt emoji-data.txt Scripts.txt PropertyValueAliases.txt ScriptExtensions.txt PropertyAliases.txt DerivedNormalizationProps.txt CaseFolding.txt SpecialCasing.txt emoji-sequences.txt --word-out src/ir/word_fold.zig > src/unicode/tables.zig
 """
 import re
 import sys
@@ -494,6 +497,32 @@ def emit_fold_classes(prefix, classes):
     print()
 
 
+# The properties of strings emitted (`SEQ_<NAME>`). The other six of
+# ECMA-262's table stay UnsupportedFeature (F5c 2c).
+STRING_PROPERTIES = ["Emoji_Keycap_Sequence"]
+
+
+def parse_emoji_sequences(path):
+    """emoji-sequences.txt: `CP CP ...; Property ; name # comment` lines (a
+    `CP..CP` range is one single-code-point string per code point). Returns
+    {property: [tuple of code points, ...]} in file order."""
+    out = {}
+    with open(path, "r", encoding="utf-8") as f:
+        for line in f:
+            line = line.split("#", 1)[0].strip()
+            if not line:
+                continue
+            fields = [x.strip() for x in line.split(";")]
+            cps, prop = fields[0], fields[1]
+            seqs = out.setdefault(prop, [])
+            if ".." in cps:
+                lo, hi = (int(x, 16) for x in cps.split(".."))
+                seqs.extend((c,) for c in range(lo, hi + 1))
+            else:
+                seqs.append(tuple(int(x, 16) for x in cps.split()))
+    return out
+
+
 def main():
     args = sys.argv[1:]
     word_out = None
@@ -501,12 +530,12 @@ def main():
         i = args.index("--word-out")
         word_out = args[i + 1]
         del args[i : i + 2]
-    if len(args) != 11:
+    if len(args) != 12:
         print(
             f"usage: {sys.argv[0]} UnicodeData.txt PropList.txt DerivedCoreProperties.txt "
             "emoji-data.txt Scripts.txt PropertyValueAliases.txt ScriptExtensions.txt "
             "PropertyAliases.txt DerivedNormalizationProps.txt CaseFolding.txt SpecialCasing.txt "
-            "[--word-out src/ir/word_fold.zig]",
+            "emoji-sequences.txt [--word-out src/ir/word_fold.zig]",
             file=sys.stderr,
         )
         sys.exit(1)
@@ -522,6 +551,7 @@ def main():
         derived_normalization_path,
         case_folding_path,
         special_casing_path,
+        emoji_sequences_path,
     ) = args
 
     by_category = {}  # category (major or minor) -> list of codepoints
@@ -807,6 +837,18 @@ def main():
             print(f"    {zig_ranges_slice(fold_delta(fold_u, ranges))},")
         print("};")
 
+    # The properties of strings (ECMA-262, `v` only) that zregex implements,
+    # from emoji-sequences.txt: each string as its code points, in file order.
+    sequences = parse_emoji_sequences(emoji_sequences_path)
+    for name in STRING_PROPERTIES:
+        print()
+        print(f"/// {name} (emoji-sequences.txt): a property of strings, each string as")
+        print("/// its code points.")
+        print(f"pub const SEQ_{name.upper()}: []const []const u32 = &.{{")
+        for seq in sequences[name]:
+            print("    &.{ " + ", ".join(f"0x{c:X}" for c in seq) + " },")
+        print("};")
+
     # WordCharacters under `u` + `i` (ECMA-262): the ASCII word characters'
     # `u` closure, minus themselves.
     ascii_word = set(range(0x30, 0x3A)) | set(range(0x41, 0x5B)) | set(range(0x61, 0x7B)) | {0x5F}
@@ -836,7 +878,8 @@ def main():
         f"upper_to_lower={len(upper_to_lower)} lower_to_upper={len(lower_to_upper)} "
         f"fold_u_classes={len(fold_u)} fold_u_cps={sum(len(m) for m, _ in fold_u)} "
         f"fold_legacy_classes={len(fold_legacy)} fold_legacy_cps={sum(len(m) for m, _ in fold_legacy)} "
-        f"word_extra={[hex(c) for c in word_extra]}",
+        f"word_extra={[hex(c) for c in word_extra]} "
+        f"string_properties={ {n: len(sequences[n]) for n in STRING_PROPERTIES} }",
         file=sys.stderr,
     )
 

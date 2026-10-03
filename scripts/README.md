@@ -108,19 +108,23 @@ Script alias including the extra fields (`Qaac`, `Qaai`), and the `LC` table
 case-folding classes of `i` with `u` (simple folding, statuses C and S) and without it
 (ECMA-262's Canonicalize: the full `toUppercase` when it is one code unit and doesn't
 take a code point >= 128 below 128), each property's closure delta, and, with
-`--word-out`, `src/ir/word_fold.zig` (the non-ASCII word characters of `u` + `i`). A
-regeneration from the same files must reproduce both files byte for byte.
+`--word-out`, `src/ir/word_fold.zig` (the non-ASCII word characters of `u` + `i`). Since
+F5c 2b it reads the emoji data's `emoji-sequences.txt` (emoji 17.0): the strings of
+`Emoji_Keycap_Sequence` (`SEQ_EMOJI_KEYCAP_SEQUENCE`), the property of strings of `v`
+implemented so far. A regeneration from the same files must reproduce both files byte for
+byte.
 
 ```bash
-B=https://raw.githubusercontent.com/unicode-org/unicodetools/main/unicodetools/data/ucd/17.0.0
+B=https://raw.githubusercontent.com/unicode-org/unicodetools/main/unicodetools/data
 cd /tmp && for f in UnicodeData.txt PropList.txt DerivedCoreProperties.txt emoji/emoji-data.txt \
     Scripts.txt PropertyValueAliases.txt ScriptExtensions.txt PropertyAliases.txt DerivedNormalizationProps.txt \
     CaseFolding.txt SpecialCasing.txt; do
-  curl -sSfo "$(basename $f)" "$B/$f"; done; cd -
+  curl -sSfo "$(basename $f)" "$B/ucd/17.0.0/$f"; done
+curl -sSfo emoji-sequences.txt "$B/emoji/17.0/emoji-sequences.txt"; cd -
 python3 scripts/gen_unicode_tables.py /tmp/UnicodeData.txt /tmp/PropList.txt /tmp/DerivedCoreProperties.txt \
   /tmp/emoji-data.txt /tmp/Scripts.txt /tmp/PropertyValueAliases.txt /tmp/ScriptExtensions.txt \
   /tmp/PropertyAliases.txt /tmp/DerivedNormalizationProps.txt /tmp/CaseFolding.txt /tmp/SpecialCasing.txt \
-  --word-out src/ir/word_fold.zig > src/unicode/tables.zig
+  /tmp/emoji-sequences.txt --word-out src/ir/word_fold.zig > src/unicode/tables.zig
 zig build test
 ```
 

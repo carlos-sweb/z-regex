@@ -17,6 +17,8 @@ pub const NodeType = enum {
     unicode_script, // \p{Script=...} / \p{sc=...} / \P{Script=...}
     unicode_script_extensions, // \p{Script_Extensions=...} / \p{scx=...} / \P{Script_Extensions=...}
     class_set_op, // `v`-mode class set operation: [A--B--...] / [A&&B&&...]
+    class_string, // `v`: one string of `\q{...}` that isn't one character (its children the characters)
+    string_property, // `v`: \p{...} of a property of strings (e.g. Emoji_Keycap_Sequence)
 
     // Quantifiers (greedy)
     star, // Zero or more (greedy)
@@ -155,6 +157,23 @@ pub const Node = struct {
             .char_value = category,
             .inverted = negated,
         };
+        return node;
+    }
+
+    /// Create one string of a `v`-mode `\q{...}`: empty, or two characters
+    /// or more, each a `char` child appended after this. A string of one
+    /// character is that `char` itself.
+    pub fn createClassString(allocator: Allocator) !*Node {
+        const node = try allocator.create(Node);
+        node.* = .{ .type = .class_string, .allocator = allocator };
+        return node;
+    }
+
+    /// Create a property of strings node (`\p{Emoji_Keycap_Sequence}`,
+    /// `v` only): `prop` is a `unicode/properties.zig` `StringProperty`.
+    pub fn createStringProperty(allocator: Allocator, prop: u8) !*Node {
+        const node = try allocator.create(Node);
+        node.* = .{ .type = .string_property, .allocator = allocator, .char_value = prop };
         return node;
     }
 
