@@ -394,3 +394,112 @@ El tope acota el peor caso: el programa de 385 ms del prototipo queda fuera del 
 **Bench de los patrones con asserts:** entre 0,96× y 1,02× (las mismas tablas).
 
 **Binario:** ReleaseFast 1.208.800 B (+720), ReleaseSmall 750.456 B (+496).
+
+## 14. Fase 3 implementada: code points (`u`/`v`)
+**Diseño** (`src/tier0/dfa.zig`):
+- **El modo es un dato del DFA:** un programa `u`/`v` recibe su DFA en modo code point (`Dfa.mode`).
+  - **Las tablas:** son las mismas, sobre los valores que da `decodeAt(.code_point)`. Un par válido es un valor astral y un sustituto suelto, su propio valor.
+  - **La ruta ASCII no cambia:** por debajo de 0x80, una unidad es un carácter entero en los dos modos.
+  - **Solo la ruta lenta decodifica en el modo del DFA,** así que no hay instancias nuevas del ejecutor.
+- **`\b` con `i`** usa los caracteres de palabra extendidos (`word.extra`, ſ y K), como `Vm.isWordBoundary`; los cortes los separan.
+- **El registro:**
+  - `tier0.compile.Options.code_point` construye el DFA sin prefiltros ni salto, porque `first` e `inner` miran code units;
+  - `Options.dfa` es el interruptor de diagnóstico;
+  - `exec` despacha al DFA cuando `d.mode == mode`.
+
+**Precheck:**
+1. **Cobertura:** 4.349 de los 4.354 programas `u`/`v` de T0 tienen DFA. Los otros 5 quedan fuera por el tope.
+
+   | Corpus | Con DFA | Con asserts | Fuera por el tope |
+   |---|---|---|---|
+   | f2c | 1.102 | 121 | 1 |
+   | f2c-2 | 2.985 | 485 | 3 |
+   | npm | 262 | 156 | 1 |
+
+2. **Clases:**
+
+   | | p50 | p99 | máx. |
+   |---|---|---|---|
+   | sin asserts | 2-3 | 11 | 39 |
+   | con asserts | 5-6 | 12-29 | 31 |
+   | **cortes** | 13-24 | 1.507-1.886 | 2.598 |
+
+   `\p{…}` es lo que dispara el número de cortes.
+3. **Estados:**
+   - ida: p50 6-13, p99 73-149, máximo 855;
+   - inverso: p50 2-7, p99 27-71, máximo 91.
+4. **Sustitutos sueltos (punto 4) y bytes mal formados (punto 5):**
+   - **Sujetos:** a `cbsubj` se suman casos en los dos formatos.
+     - WTF-8: lead y trail sueltos, la pareja codificada por separado, una continuación suelta, secuencias truncadas y `0xFF`.
+     - UTF-16: lead y trail sueltos, un par invertido y un lead al final.
+   - **Resultado:** el diferencial es idéntico a la fase 2 (75,9 M de ejecuciones).
+6. **Asserts:** 45 programas con `\b` extendido y 49 con `^`/`$` de línea, todos sin diferencias.
+7. **Coste de `compile()`:** abajo.
+8. **Binario:** abajo.
+
+**El fix del alfabeto** (antes de portar):
+- **El problema:** el prototipo daba firma a cada intervalo con `Set.contains` (búsqueda binaria) por corte y por instrucción, y repetía el trabajo para la familia de mal formados. Con miles de cortes, el p99 `u`/`v` subía 10-17×.
+- **Ahora:**
+  - un barrido por los rangos ordenados de cada conjunto;
+  - la firma «mal formado» derivada de la válida (sin los bits de los literales), igual a ella salvo cuando un literal acepta el intervalo.
+- **Tablas:** idénticas, en los 25.650 DFAs de los tres corpus.
+- **El p99 `u`/`v`:** de 280-462 µs a 121-337 µs.
+- **El criterio** se compara con code unit con DFA: el p99 `u`/`v` de npm queda por debajo del de code unit.
+
+**Corrección:**
+- **Tests:**
+  - 911 pasados y 13 omitidos, en Debug y en ReleaseSafe;
+  - los nuevos comparan `exec` con el DFA y sin él, en modo code point, en todos los índices, con y sin `sticky`, en WTF-8 y UTF-16:
+    - literales astrales;
+    - clases no ASCII y astrales;
+    - `.` con y sin `s`;
+    - `\b`/`\B` con palabra extendida;
+    - `^`/`$` con LS/PS y `m`;
+    - grupos;
+    - matches vacíos;
+    - sustitutos sueltos, pares e índices dentro de un par;
+    - bytes mal formados;
+    - el tope;
+    - fallos de memoria.
+  - Una mutación (decodificar en code unit) los hace fallar.
+- **Diferencial propio:** idéntico a la fase 2 con y sin `sticky`, en `cprobe` (68,5 M de ejecuciones) y en la sonda de sustitutos (75,9 M).
+- **Gate:** GATE-PASS; test262 2994 en UTF-16 y WTF-8; los diferenciales sin cambios.
+
+**Bench `u`/`v`** (`execAt` en bucle, la mejor de 10 intercaladas, MB/s, mismos matches):
+
+| Patrón | Fase 2 (VM) | Fase 3 (DFA) | Factor |
+|---|---|---|---|
+| `\p{L}+` (libro) | 44,7 | 89,0 | 1,99× |
+| `\p{Script=Greek}+` (griego) | 44,5 | 30,1 | **0,68×** |
+| `[\p{L}\p{N}_]+` (código) | 51,0 | 119,0 | 2,33× |
+| `\b\p{L}+\b` (libro) | 17,3 | 80,3 | 4,64× |
+
+**El griego es más lento:**
+- **Callgrind:** 50,4 M → 67,7 M instrucciones en 256 KiB.
+- **La ida** del DFA es más barata que la VM (13,8 M frente a 27,8 M).
+- **El inverso** decodifica cada carácter hacia atrás en WTF-8 (`decodeBefore` más `seqAt`), unos 34 M. En un texto casi todo no ASCII, con matches cortos, eso pesa más que lo que ahorra la ida.
+
+  Mejora posible (estimación): decodificar en línea las secuencias de 2 bytes en las dos direcciones; cubre griego, cirílico y latín extendido.
+
+**Code unit sin regresión:**
+- **Tiempo** (los casos de la fase 2 más tres sin asserts): entre 0,90× y 1,06×.
+- **En instrucciones:**
+  - `\bDarcy\b`, −0,7 %;
+  - el denso, +4,7 %;
+  - el e-mail con `\b`, +3,6 %.
+
+**Coste de `compile()`** (µs; dos rondas; `fbdac3a` → fase 3):
+
+| Corpus | Total p50 | Total p99 | Total máx. | `u`/`v` p50 | `u`/`v` p99 | `u`/`v` máx. |
+|---|---|---|---|---|---|---|
+| f2c | 7,1-7,2 → 8,1-8,3 | 203-204 → 259-268 | 2.013-2.025 → 1.928-1.948 | 2,8 → 4,8 | 31 → 191-193 | 2.836-2.884 → 2.864-3.016 |
+| f2c-2 | 8,7-8,8 → 9,9 | 227 → 273-276 | 2.718-2.722 → 3.006-3.012 | 3,1 → 5,6 | 29 → 253-262 | 2.806-2.842 → 2.898 |
+| npm | 16,4-16,5 → 16,0-16,2 | 1.001-1.008 → 992-998 | 7.586-7.868 → 8.258-8.259 | 3,6-3,7 → 13,8-14,0 | 40-41 → 502-514 | 95-97 → 1.036-1.055 |
+
+Esta máquina mide más lento que la de los §11-13; las dos columnas se midieron juntas.
+
+**Binario** (`measure_binary.sh`, 40 símbolos):
+- ReleaseFast 1.211.904 B (+3.104 frente a `fbdac3a`);
+- ReleaseSmall 751.528 B (+1.072).
+
+**Deuda aparte:** Construcción diferida del DFA (lazy build, o abaratar el interning de estados). Afecta a code unit y a code point. No es de fase 3.

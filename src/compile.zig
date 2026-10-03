@@ -148,11 +148,17 @@ pub fn compileTiers(allocator: Allocator, pattern: []const u8, options: CompileO
     // `route` ran the check `compileAccepted` asserts. The VM uses the
     // prefilters in code-unit mode only (`tier0.exec`), so a `u`/`v` pattern
     // (code-point mode, F5a) doesn't pay for their analysis.
-    const prefilters = options.t0_prefilters and !options.unicode and !options.v;
+    // A `u`/`v` pattern gets the DFA in code-point mode (A phase 3).
+    const code_point = options.unicode or options.v;
+    const t0_options: tier0.compile_mod.Options = .{ .prefilters = options.t0_prefilters and !code_point, .code_point = code_point, .dfa = options.t0_prefilters };
     const t0: ?tier0.Program = switch (program) {
         .backtracker => null,
-        .plain => try tier0.compileAccepted(allocator, fe.root, .{ .prefilters = prefilters }),
-        .tagged => try tier0.compileAccepted(allocator, fe.root, .{ .prefilters = prefilters, .tagged = true }),
+        .plain => try tier0.compileAccepted(allocator, fe.root, t0_options),
+        .tagged => try tier0.compileAccepted(allocator, fe.root, blk: {
+            var o = t0_options;
+            o.tagged = true;
+            break :blk o;
+        }),
     };
     return .{ .bt = bt, .t0 = t0 };
 }

@@ -49,12 +49,23 @@
 //! the end of the input, reverse four for the context at `index`. The
 //! closure is `addClosure`'s walk with the asserts evaluated as `Vm.holds`
 //! does, from the two contexts.
+//!
+//! **Code points (A phase 3).** A `u`/`v` program gets its DFA in
+//! code-point mode (`Dfa.mode`): the same tables over the values
+//! `decodeAt(.code_point)` gives, where a valid surrogate pair is one astral
+//! value and a lone surrogate its own. Below 0x80 a unit is a whole
+//! character in both modes, so the ASCII table doesn't change; only the
+//! slow path decodes in the DFA's mode. With `i` too, `\b` takes the
+//! extended word characters (`word.extra`), as `Vm.isWordBoundary` does.
+//! `\p{…}` gives thousands of cuts, so a class's membership in each set is
+//! a sweep over its sorted ranges, not a search per cut.
 
 const std = @import("std");
 const Allocator = std.mem.Allocator;
 const subject_mod = @import("subject");
 const Subject = subject_mod.Subject;
 const Decoded = subject_mod.Decoded;
+const Mode = subject_mod.Mode;
 const Program = @import("program.zig").Program;
 const word = @import("ir").word;
 
@@ -71,6 +82,8 @@ pub const Dfa = struct {
     bad: []const u32,
     ascii: [128]u32,
     nclass: u32,
+    /// The mode the alphabet decodes in (`u`/`v`: code points, A phase 3).
+    mode: Mode = .code_unit,
     /// Forward: `ft[st + class]`, ids premultiplied by `nclass`.
     ft: []const u32,
     /// Forward starts: unanchored, sticky.
@@ -156,7 +169,7 @@ pub const Dfa = struct {
                 st = ft[st + self.ascii[u]];
                 pos += 1;
             } else {
-                const d = subjectOf(Unit, input).decodeAt(.code_unit, pos).?;
+                const d = subjectOf(Unit, input).decodeAt(self.mode, pos).?;
                 st = ft[st + self.classOf(d)];
                 pos = d.pos;
             }
@@ -177,11 +190,11 @@ pub const Dfa = struct {
                 pos -= 1;
             } else {
                 const subj = subjectOf(Unit, input);
-                var d = subj.decodeBefore(.code_unit, pos).?;
+                var d = subj.decodeBefore(self.mode, pos).?;
                 if (d.pos < index) {
                     // A character straddling `index`: from `index`, forward
                     // decoding saw only its part at `index`.
-                    const f = subj.decodeAt(.code_unit, index).?;
+                    const f = subj.decodeAt(self.mode, index).?;
                     d = .{ .value = f.value, .pos = index, .invalid = f.invalid };
                 }
                 st = rt[st + self.classOf(d)];
@@ -219,7 +232,7 @@ fn followOf(prog: *const Program, pc: usize) []const u32 {
 }
 
 /// The DFA of `prog` (which must be `eligible`), or null above the cap.
-pub fn build(gpa: Allocator, prog: *const Program) Allocator.Error!?*const Dfa {
+pub fn build(gpa: Allocator, prog: *const Program, mode: Mode) Allocator.Error!?*const Dfa {
     var arena_state = std.heap.ArenaAllocator.init(gpa);
     defer arena_state.deinit();
     const a = arena_state.allocator();
@@ -247,6 +260,9 @@ pub fn build(gpa: Allocator, prog: *const Program) Allocator.Error!?*const Dfa {
     // With asserts, the word characters and line terminators are cut out
     // too: the context of a class must be one.
     if (asserts) try cut_list.appendSlice(a, &.{ '0', '9' + 1, 'A', 'Z' + 1, '_', '_' + 1, 'a', 'z' + 1, '\n', '\n' + 1, '\r', '\r' + 1, 0x2028, 0x202A });
+    // `u`/`v` + `i`: `\b` takes the extended word characters (`Vm.isWordBoundary`).
+    const extended = prog.word_ci and mode == .code_point;
+    if (asserts and extended) for (word.extra) |c| try cut_list.appendSlice(a, &.{ c, c + 1 });
     std.mem.sort(u32, cut_list.items, {}, std.sort.asc(u32));
     var cuts: std.ArrayListUnmanaged(u32) = .empty;
     for (cut_list.items) |c| {
@@ -263,14 +279,43 @@ pub fn build(gpa: Allocator, prog: *const Program) Allocator.Error!?*const Dfa {
     // never mixes contexts.
     const sig_full = try a.alloc(u8, ncons + 1);
     const sig = if (asserts) sig_full else sig_full[0..ncons];
+    // The cuts ascend, so each set's membership is a sweep over its sorted
+    // ranges (`ranges[at[k]]` the first not below the cut), not a search
+    // per cut: `\p{…}` under `u`/`v` gives thousands of cuts.
+    const cons_pc = try a.alloc(u32, ncons);
+    for (prog.insts, 0..) |inst, pc| if (inst == .char or inst == .set) {
+        cons_pc[cons_index[pc]] = @intCast(pc);
+    };
+    const at = try a.alloc(usize, ncons);
+    @memset(at, 0);
     for (cuts.items, 0..) |v, k| {
+        var has_char = false;
+        for (cons_pc, 0..) |pc, ci| switch (prog.insts[pc]) {
+            .char => |c| {
+                sig[ci] = @intFromBool(c == v);
+                has_char = has_char or c == v;
+            },
+            .set => |i| {
+                const ranges = prog.sets[i].set.ranges;
+                while (at[ci] < ranges.len and ranges[at[ci]].hi < v) at[ci] += 1;
+                sig[ci] = @intFromBool(at[ci] < ranges.len and ranges[at[ci]].lo <= v);
+            },
+            else => unreachable,
+        };
+        if (asserts) sig[ncons] = contextOf(v, extended);
+        // Ill-formed, the same signature without the `char`s (a `set`
+        // takes the byte by its value): the same class unless a `char`
+        // accepts the interval.
         for ([_]bool{ false, true }) |is_bad| {
-            for (prog.insts, 0..) |inst, pc| switch (inst) {
-                .char => |c| sig[cons_index[pc]] = @intFromBool(!is_bad and c == v),
-                .set => |i| sig[cons_index[pc]] = @intFromBool(prog.sets[i].contains(v)),
-                else => {},
-            };
-            if (asserts) sig[ncons] = contextOf(v);
+            if (is_bad) {
+                if (!has_char) {
+                    bad[k] = valid[k];
+                    break;
+                }
+                for (cons_pc, 0..) |pc, ci| if (prog.insts[pc] == .char) {
+                    sig[ci] = 0;
+                };
+            }
             const g = try sig_ids.getOrPut(a, sig);
             if (!g.found_existing) {
                 g.key_ptr.* = try a.dupe(u8, sig);
@@ -286,10 +331,10 @@ pub fn build(gpa: Allocator, prog: *const Program) Allocator.Error!?*const Dfa {
         // mixes contexts: the cuts and the signature above).
         const cat = try a.alloc(u8, nclass);
         for (cuts.items, 0..) |v, k| {
-            cat[valid[k]] = contextOf(v);
-            cat[bad[k]] = contextOf(v);
+            cat[valid[k]] = contextOf(v, extended);
+            cat[bad[k]] = contextOf(v, extended);
         }
-        return buildCtx(gpa, a, prog, cuts.items, valid, bad, nclass, sigs.items, cons_index, ncons, cat);
+        return buildCtx(gpa, a, prog, mode, cuts.items, valid, bad, nclass, sigs.items, cons_index, ncons, cat);
     }
 
     // --- The forward DFA over the classes.
@@ -455,6 +500,7 @@ pub fn build(gpa: Allocator, prog: *const Program) Allocator.Error!?*const Dfa {
         .valid = out_valid,
         .bad = out_bad,
         .ascii = undefined,
+        .mode = mode,
         .nclass = nclass,
         .ft = ft,
         .fstart = .{ fnew[fs_unanch] * nclass, fnew[fs_sticky] * nclass },
@@ -480,9 +526,9 @@ const line: u8 = 1;
 const wordc: u8 = 2;
 const other: u8 = 3;
 
-fn contextOf(v: u32) u8 {
+fn contextOf(v: u32, extended: bool) u8 {
     if (v == '\n' or v == '\r' or v == 0x2028 or v == 0x2029) return line;
-    if (word.isWordChar(v, false)) return wordc;
+    if (word.isWordChar(v, extended)) return wordc;
     return other;
 }
 
@@ -530,14 +576,14 @@ pub const Ctx = struct {
         if (i == 0) return edge;
         const u = input[i - 1];
         if (u < 0x80) return self.cat[d.ascii[u]];
-        return self.cat[d.classOf(Dfa.subjectOf(Unit, input).decodeBefore(.code_unit, i).?)];
+        return self.cat[d.classOf(Dfa.subjectOf(Unit, input).decodeBefore(d.mode, i).?)];
     }
 
     fn contextAt(self: *const Ctx, d: *const Dfa, comptime Unit: type, input: []const Unit, i: usize) u8 {
         if (i >= input.len) return edge;
         const u = input[i];
         if (u < 0x80) return self.cat[d.ascii[u]];
-        return self.cat[d.classOf(Dfa.subjectOf(Unit, input).decodeAt(.code_unit, i).?)];
+        return self.cat[d.classOf(Dfa.subjectOf(Unit, input).decodeAt(d.mode, i).?)];
     }
 
     fn find(self: *const Ctx, d: *const Dfa, comptime Unit: type, input: []const Unit, index: usize, sticky: bool, skipper: anytype) ?[2]usize {
@@ -573,7 +619,7 @@ pub const Ctx = struct {
                 e = ft[st + d.ascii[u]];
                 to = pos + 1;
             } else {
-                const x = Dfa.subjectOf(Unit, input).decodeAt(.code_unit, pos).?;
+                const x = Dfa.subjectOf(Unit, input).decodeAt(d.mode, pos).?;
                 e = ft[st + d.classOf(x)];
                 to = x.pos;
             }
@@ -600,9 +646,9 @@ pub const Ctx = struct {
                 to = pos - 1;
             } else {
                 const subj = Dfa.subjectOf(Unit, input);
-                var x = subj.decodeBefore(.code_unit, pos).?;
+                var x = subj.decodeBefore(d.mode, pos).?;
                 if (x.pos < index) {
-                    const f = subj.decodeAt(.code_unit, index).?;
+                    const f = subj.decodeAt(d.mode, index).?;
                     x = .{ .value = f.value, .pos = index, .invalid = f.invalid };
                 }
                 t = rt[st + d.classOf(x)];
@@ -663,6 +709,7 @@ fn buildCtx(
     gpa: Allocator,
     a: Allocator,
     prog: *const Program,
+    mode: Mode,
     cuts: []const u32,
     valid: []const u32,
     bad: []const u32,
@@ -867,6 +914,7 @@ fn buildCtx(
         .valid = out_valid,
         .bad = out_bad,
         .ascii = undefined,
+        .mode = mode,
         .nclass = nclass,
         .ft = &.{},
         .fstart = .{ 0, 0 },
@@ -928,7 +976,7 @@ const Built = struct {
     fn init(root: *const hir.Node) !Built {
         const p = try compile_mod.compileWith(testing.allocator, root, .{ .prefilters = false });
         errdefer p.deinit(testing.allocator);
-        return .{ .prog = p, .dfa = if (eligible(&p)) try build(testing.allocator, &p) else null };
+        return .{ .prog = p, .dfa = if (eligible(&p)) try build(testing.allocator, &p, .code_unit) else null };
     }
 
     fn deinit(self: Built) void {
@@ -1030,7 +1078,7 @@ test "groups: the bounds of a tagged program" {
     const seq: hir.Node = .{ .seq = &.{ &g1, &dash, &plus } };
     const p = try compile_mod.compileWith(testing.allocator, &seq, .{ .prefilters = false, .tagged = true });
     defer p.deinit(testing.allocator);
-    const d = (try build(testing.allocator, &p)).?;
+    const d = (try build(testing.allocator, &p, .code_unit)).?;
     defer d.deinit(testing.allocator);
     const built: Built = .{ .prog = p, .dfa = d };
     try expectSameAsVm(&built, "12-3 555-1234 55-5 666-7-");
@@ -1143,7 +1191,7 @@ test "asserts: groups, anchored programs through exec, the cap, and allocation f
     const seq: hir.Node = .{ .seq = &.{ &wb, &g1, &dash, &plus, &wb } };
     const p = try compile_mod.compileWith(testing.allocator, &seq, .{ .prefilters = false, .tagged = true });
     defer p.deinit(testing.allocator);
-    const d = (try build(testing.allocator, &p)).?;
+    const d = (try build(testing.allocator, &p, .code_unit)).?;
     defer d.deinit(testing.allocator);
     const built: Built = .{ .prog = p, .dfa = d };
     try expectSameAsVm(&built, "12-3 555-1234 x555-1234 55-5 666-7-");
@@ -1174,7 +1222,7 @@ test "asserts: groups, anchored programs through exec, the cap, and allocation f
     // No leak on allocation failure.
     try testing.checkAllAllocationFailures(testing.allocator, struct {
         fn f(gpa: Allocator, prog: *const Program) !void {
-            const dd = (try build(gpa, prog)).?;
+            const dd = (try build(gpa, prog, .code_unit)).?;
             dd.deinit(gpa);
         }
     }.f, .{&p});
@@ -1189,8 +1237,179 @@ test "build doesn't leak on allocation failure" {
     defer p.deinit(testing.allocator);
     try testing.checkAllAllocationFailures(testing.allocator, struct {
         fn f(gpa: Allocator, prog: *const Program) !void {
-            const d = (try build(gpa, prog)).?;
+            const d = (try build(gpa, prog, .code_unit)).?;
             d.deinit(gpa);
         }
     }.f, .{&p});
+}
+
+// ---------------------------------------------------- code points (phase 3)
+
+/// The program of `root` in code-point mode (`u`/`v`) twice: with its DFA,
+/// and without (the VM alone).
+const BuiltCp = struct {
+    dfa: Program,
+    vm: Program,
+
+    fn init(root: *const hir.Node) !BuiltCp {
+        const d = try compile_mod.compileWith(testing.allocator, root, .{ .code_point = true });
+        errdefer d.deinit(testing.allocator);
+        const v = try compile_mod.compileWith(testing.allocator, root, .{ .code_point = true, .dfa = false });
+        return .{ .dfa = d, .vm = v };
+    }
+
+    fn deinit(self: BuiltCp) void {
+        self.dfa.deinit(testing.allocator);
+        self.vm.deinit(testing.allocator);
+    }
+};
+
+/// Every index (positions or not, as `tier0.exec` gets them) and both
+/// stickinesses of `input`, through `exec` in code-point mode: the DFA
+/// against the VM.
+fn expectCpSame(b: *const BuiltCp, comptime Unit: type, input: []const Unit) !void {
+    const d = b.dfa.dfa.?;
+    try testing.expectEqual(Mode.code_point, d.mode);
+    try testing.expectEqual(DfaSkipNone, b.dfa.dfa_skip);
+    var scratch: pikevm.VmScratch = .init(testing.allocator);
+    defer scratch.deinit();
+    for (0..input.len + 1) |i| for ([_]bool{ false, true }) |sticky| {
+        var s1: [2]?usize = undefined;
+        var s2: [2]?usize = undefined;
+        const got = pikevm.exec(&b.dfa, Unit, input, .code_point, i, sticky, &scratch, &s1);
+        const want = pikevm.exec(&b.vm, Unit, input, .code_point, i, sticky, &scratch, &s2);
+        if (want) |w| {
+            try testing.expectEqual(w, try got);
+            if (w) try testing.expectEqual(s2, s1);
+        } else |err| try testing.expectError(err, got);
+    };
+}
+
+const DfaSkipNone = @import("prefilter.zig").DfaSkip.none;
+
+/// A literal of code points (`lit` takes bytes).
+fn litCp(comptime cps: []const u32) hir.Node {
+    const units = comptime blk: {
+        var u: [cps.len]hir.LitUnit = undefined;
+        for (cps, 0..) |c, i| u[i] = .{ .value = c };
+        const out = u;
+        break :blk out;
+    };
+    return .{ .literal = .{ .units = &units } };
+}
+
+/// `text` in WTF-8 and UTF-16, then the extra WTF-8 bytes and UTF-16 units.
+fn expectCpSameAll(b: *const BuiltCp, comptime text: []const u8, extra8: []const u8, extra16: []const u16) !void {
+    var buf8: [512]u8 = undefined;
+    @memcpy(buf8[0..text.len], text);
+    @memcpy(buf8[text.len..][0..extra8.len], extra8);
+    try expectCpSame(b, u8, buf8[0 .. text.len + extra8.len]);
+    const t16 = std.unicode.utf8ToUtf16LeStringLiteral(text);
+    var buf16: [512]u16 = undefined;
+    @memcpy(buf16[0..t16.len], t16);
+    @memcpy(buf16[t16.len..][0..extra16.len], extra16);
+    try expectCpSame(b, u16, buf16[0 .. t16.len + extra16.len]);
+}
+
+/// Lone surrogates (lead, trail, the two encoded apart), ill-formed bytes
+/// (a lone continuation, truncated sequences, 0xFF) and an astral char.
+const wtf8_odd = "a\xED\xA0\x80b\xED\xB0\x80c\xED\xA0\x80\xED\xB0\x80d\x80e\xC3f\xE2\x82g\xFF\xF0\x9F\x98\x80h";
+/// A lone lead and trail, a reversed pair, a pair, a lead at the end.
+const utf16_odd = [_]u16{ 'a', 0xD800, 'b', 0xDC00, 'c', 0xDC00, 0xD800, 'd', 0xD83D, 0xDE00, 0xD800 };
+
+test "code points: astral literals, non-ASCII and astral classes, dot" {
+    const grin = litCp(&.{0x1F600});
+    const grin_x = litCp(&.{ 0x1F600, 'x' });
+    const grins = rep(&grin_x, 1, null);
+    // Many ranges, BMP and astral (a `\p{…}` in small): the sweep.
+    const letters = setNode(&.{ .{ .lo = 'A', .hi = 'Z' }, .{ .lo = 'a', .hi = 'z' }, .{ .lo = 0xC0, .hi = 0xD6 }, .{ .lo = 0xD8, .hi = 0xF6 }, .{ .lo = 0x391, .hi = 0x3A9 }, .{ .lo = 0x3B1, .hi = 0x3C9 }, .{ .lo = 0x10400, .hi = 0x1044F }, .{ .lo = 0x1F600, .hi = 0x1F602 } });
+    const word_run = rep(&letters, 1, null);
+    const surr = setNode(&.{.{ .lo = 0xD800, .hi = 0xDFFF }});
+    const surr_run = rep(&surr, 1, null);
+    const dot = setNode(&.{ .{ .lo = 0, .hi = 9 }, .{ .lo = 11, .hi = 12 }, .{ .lo = 14, .hi = 0x2027 }, .{ .lo = 0x202A, .hi = 0x10FFFF } });
+    const dot_all = setNode(&.{.{ .lo = 0, .hi = 0x10FFFF }});
+    const dots = rep(&dot, 1, null);
+    const dot_alls = rep(&dot_all, 2, 2);
+    const latin1 = setNode(&.{.{ .lo = 0x80, .hi = 0xFF }});
+    const text = "x\u{1F600}x\u{1F600}xy caf\u{E9} \u{391}\u{3B1}\u{10400}! \u{1F601}\u{1F603}\n\u{2028}z\u{E9}";
+    for ([_]*const hir.Node{ &grin, &grins, &word_run, &surr_run, &dots, &dot_alls, &latin1 }) |root| {
+        const built = try BuiltCp.init(root);
+        defer built.deinit();
+        try expectCpSameAll(&built, text, wtf8_odd, &utf16_odd);
+    }
+}
+
+test "code points: \\b with the extended word characters, ^ and $ with LS/PS" {
+    const wb: hir.Node = .{ .assert = .word_boundary };
+    const nwb: hir.Node = .{ .assert = .not_word_boundary };
+    const k = lit("k");
+    const any = setNode(&.{ .{ .lo = 'a', .hi = 'z' }, .{ .lo = 0x17F, .hi = 0x17F }, .{ .lo = 0x212A, .hi = 0x212A }, .{ .lo = 0xE9, .hi = 0xE9 } });
+    const run = rep(&any, 1, null);
+    const wk: hir.Node = .{ .seq = &.{ &wb, &k, &wb } };
+    const wrun: hir.Node = .{ .seq = &.{ &wb, &run, &wb } };
+    const nk: hir.Node = .{ .seq = &.{ &nwb, &k } };
+    const caret: hir.Node = .{ .assert = .caret };
+    const dollar: hir.Node = .{ .assert = .dollar };
+    const whole: hir.Node = .{ .seq = &.{ &caret, &run, &dollar } };
+    const empty_line: hir.Node = .{ .seq = &.{ &caret, &dollar } };
+    const text = "k \u{17F}k \u{212A}k k\u{17F} ok caf\u{E9}k\n\u{2028}ab\u{2029}\r\n\u{17F}\u{2028}\u{2028}";
+    for ([_]*const hir.Node{ &wk, &wrun, &nk, &whole, &empty_line }) |root| {
+        for ([_]bool{ false, true }) |ci| for ([_]bool{ false, true }) |multiline| {
+            const scoped = scopeOf(.{ .ignore_case = ci, .multiline = multiline }, root);
+            const built = try BuiltCp.init(&scoped);
+            defer built.deinit();
+            try testing.expect(built.dfa.dfa.?.ctx != null);
+            try expectCpSameAll(&built, text, wtf8_odd, &utf16_odd);
+        };
+    }
+}
+
+test "code points: groups, empty matches, an index inside a pair" {
+    const letters = setNode(&.{ .{ .lo = 'a', .hi = 'z' }, .{ .lo = 0x1F600, .hi = 0x1F64F } });
+    const run = rep(&letters, 1, null);
+    const g1: hir.Node = .{ .capture = .{ .index = 1, .name = null, .body = &run } };
+    const sp = lit(" ");
+    const grouped: hir.Node = .{ .seq = &.{ &g1, &sp } };
+    const star = rep(&letters, 0, null);
+    const empty: hir.Node = .{ .seq = &.{} };
+    // An index between the halves (UTF-16) or at `b+2` (WTF-8): `exec`
+    // takes it as is, the DFA must decode as the VM does.
+    const text = "ab\u{1F600}\u{1F601} c\u{1F602} \u{1F600}";
+    for ([_]*const hir.Node{ &grouped, &star, &empty }) |root| {
+        const tagged = root == &grouped;
+        const d = try compile_mod.compileWith(testing.allocator, root, .{ .code_point = true, .tagged = tagged });
+        errdefer d.deinit(testing.allocator);
+        const v = try compile_mod.compileWith(testing.allocator, root, .{ .code_point = true, .dfa = false, .tagged = tagged });
+        const built: BuiltCp = .{ .dfa = d, .vm = v };
+        defer built.deinit();
+        try expectCpSameAll(&built, text, wtf8_odd, &utf16_odd);
+    }
+}
+
+test "code points: the cap, and allocation failure" {
+    const a = litCp(&.{0x1F600});
+    const b_ = lit("b");
+    const ab: hir.Node = .{ .alt = &.{ &a, &b_ } };
+    const star = rep(&ab, 0, null);
+    const tail = rep(&ab, 11, 11);
+    const big: hir.Node = .{ .seq = &.{ &star, &a, &tail } };
+    const over = try compile_mod.compileWith(testing.allocator, &big, .{ .code_point = true });
+    defer over.deinit(testing.allocator);
+    try testing.expect(eligible(&over));
+    try testing.expectEqual(@as(?*const Dfa, null), over.dfa);
+    const wb: hir.Node = .{ .assert = .word_boundary };
+    const letters = setNode(&.{ .{ .lo = 'a', .hi = 'z' }, .{ .lo = 0x17F, .hi = 0x17F }, .{ .lo = 0x10400, .hi = 0x1044F } });
+    const run = rep(&letters, 1, null);
+    const seq: hir.Node = .{ .seq = &.{ &wb, &run, &wb } };
+    const scoped = scopeOf(.{ .ignore_case = true }, &seq);
+    for ([_]*const hir.Node{ &run, &scoped }) |root| {
+        const p = try compile_mod.compileWith(testing.allocator, root, .{ .code_point = true, .dfa = false });
+        defer p.deinit(testing.allocator);
+        try testing.checkAllAllocationFailures(testing.allocator, struct {
+            fn f(gpa: Allocator, prog: *const Program) !void {
+                const d = (try build(gpa, prog, .code_point)).?;
+                d.deinit(gpa);
+            }
+        }.f, .{&p});
+    }
 }
