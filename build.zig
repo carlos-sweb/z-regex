@@ -439,9 +439,11 @@ pub fn build(b: *std.Build) void {
     //   one);
     // - t1diff: what the dispatcher routes from T1 to the VM, against the
     //   backtracker (UTF-16 discrepancies to stdout, for V8 arbitration);
-    // - lldiff: LookLinear on vs off on the backtracker.
+    // - lldiff: LookLinear on vs off on the backtracker;
+    // - dfadiff: T0 as routed (fast paths and the DFA, code unit and code
+    //   point) against the plain VM, all slots, every index.
     const safe_zregex = addModules(b, target, .ReleaseSafe, false).get("zregex");
-    for ([_][]const u8{ "pfdiff", "t1diff", "lldiff" }) |name| {
+    for ([_][]const u8{ "pfdiff", "t1diff", "lldiff", "dfadiff" }) |name| {
         const m = b.createModule(.{ .root_source_file = b.path(b.fmt("tools/{s}.zig", .{name})), .target = target, .optimize = .ReleaseSafe });
         m.addImport("zregex", safe_zregex);
         const run = b.addRunArtifact(b.addExecutable(.{ .name = name, .root_module = m }));

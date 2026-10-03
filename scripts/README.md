@@ -11,6 +11,11 @@ GATE-FAIL (exit 1). The steps:
 - the internal differentials `pfdiff`, `t1diff` and `lldiff` (`tools/`, on
   `tests/corpus/{f2c,f2c-2}.txt` and `npm.tsv`; `pfdiff --slots` against
   `tests/differential/reference/pfdiff-slots.tsv`);
+- `dfadiff` (`tools/dfadiff.zig`, T0-A): every pattern with a T0 program, as routed (the
+  fast paths and the DFA, code unit and code point) against the plain VM
+  (`t0_prefilters = false`), all slots at every index, with and without sticky, in WTF-8
+  and UTF-16, over `tests/corpus/dfadiff-subject.txt` and built-in subjects with lone
+  surrogates, ill-formed bytes and LS/PS; on the three corpora;
 - `measure_binary.sh` (informational).
 
 Zig's cache is emptied after each group of steps. Logs go to OUTDIR (default `zig-out/gate`).

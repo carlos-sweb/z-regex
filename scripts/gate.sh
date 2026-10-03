@@ -68,13 +68,16 @@ clean_cache t1diff
 echo "== lldiff"; timeout 1500 zig build lldiff -- "$C/f2c.txt" "$C/f2c-2.txt" "$C/npm.tsv" >"$G/lldiff.log" 2>&1; echo "lldiff=$?"; grep -E "DIFFERENCES" "$G/lldiff.log" | tail -1
 clean_cache lldiff
 
+echo "== dfadiff"; timeout 1800 zig build dfadiff -- tests/corpus/dfadiff-subject.txt "$C/f2c.txt" "$C/f2c-2.txt" "$C/npm.tsv" >"$G/dfadiff.log" 2>&1; echo "dfa=$?"; grep -E "DIFFERENCES" "$G/dfadiff.log" | tail -1
+clean_cache dfadiff
+
 echo "== binary (informational)"; timeout 1500 scripts/measure_binary.sh 2>&1 | tail -2
 clean_cache binary
 
 echo "== verdict"
 L="$G/gate.log"
 fail=0
-grep -qE "^(fmt|debug|safe|fuzz|fuzzrs|t262|t262w|dv8|lbv8|lbdiff|ivdiff|pf|pfs|t1|lldiff)=[1-9]" "$L" && { echo "FAIL: a step exited non-zero"; fail=1; }
+grep -qE "^(fmt|debug|safe|fuzz|fuzzrs|t262|t262w|dv8|lbv8|lbdiff|ivdiff|pf|pfs|t1|lldiff|dfa)=[1-9]" "$L" && { echo "FAIL: a step exited non-zero"; fail=1; }
 grep -qE "check-layers: .* 0 violation" "$L" || { echo "FAIL: layers"; fail=1; }
 grep -q "baseline check: ok" "$G/t262.log" && grep -q "baseline check: ok" "$G/t262w.log" || { echo "FAIL: test262 baseline"; fail=1; }
 grep -qE "dv8 gone [0-9]+ new 0 changed 0" "$L" || { echo "FAIL: differential-v8 new or changed"; fail=1; }
