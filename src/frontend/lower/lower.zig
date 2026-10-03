@@ -441,6 +441,8 @@ const Lowerer = struct {
 
         for (children) |child| switch (child.type) {
             .unicode_property, .unicode_script, .unicode_script_extensions => return self.charSetNodeFrom(try self.classMembersAny(n), n.inverted, .set, .{ .property = true }),
+            // A union with a nested class (`v`): `[[a]b]`, `[a-z[0-9]_]`.
+            .char_class, .class_set_op => return self.charSetNodeFrom(try self.classMembersAny(n), n.inverted, .set, .{ .property = hasProperty(n), .set_operation = true }),
             else => {},
         };
         var needs_set = false;
@@ -498,6 +500,12 @@ const Lowerer = struct {
             .unicode_property, .unicode_script, .unicode_script_extensions => {
                 const p = try self.foldedProperty(child);
                 acc = if (acc) |a| try a.unionWith(p, self.arena) else p;
+            },
+            // A nested class (`iv`): closed under the folding, or
+            // UnsupportedFeature (`classSetOperand`).
+            .char_class, .class_set_op => {
+                const c = try self.classSetOperand(child);
+                acc = if (acc) |a| try a.unionWith(c, self.arena) else c;
             },
             else => return error.InvalidPattern,
         };
@@ -563,11 +571,15 @@ const Lowerer = struct {
                 }
             },
             .char_range => try literal.append(self.arena, .{ .lo = child.range_start, .hi = child.range_end }),
-            .unicode_property, .unicode_script, .unicode_script_extensions => try props.append(self.arena, child),
+            .unicode_property, .unicode_script, .unicode_script_extensions, .char_class, .class_set_op => try props.append(self.arena, child),
             else => return error.InvalidPattern,
         };
         var acc = try CharSet.fromRanges(self.arena, literal.items);
-        for (props.items) |p| acc = try acc.unionWith(try self.propertyMembers(p), self.arena);
+        for (props.items) |p| {
+            // A nested class (`v`) is its own set, with its own `[^...]`.
+            const set = if (p.type == .char_class or p.type == .class_set_op) try self.classSetOperand(p) else try self.propertyMembers(p);
+            acc = try acc.unionWith(set, self.arena);
+        }
         return acc;
     }
 
@@ -598,13 +610,18 @@ const Lowerer = struct {
         return CharSet.borrowed(@ptrCast(table));
     }
 
-    /// One operand of a `v` set operation: a class (its members, then its
-    /// own `[^...]` as a complement) or a bare `\p{...}`. Not folded: under
-    /// `iv` it must be closed under the folding (F7c-0).
+    /// One operand of a `v` set operation, or a nested class in a union: a
+    /// class (its members, then its own `[^...]` as a complement), a nested
+    /// set operation (likewise) or a bare `\p{...}`. Not folded: under `iv`
+    /// it must be closed under the folding (F7c-0).
     fn classSetOperand(self: *Lowerer, n: *const AstNode) LowerError!CharSet {
         const set = switch (n.type) {
             .char_class => blk: {
                 const members = try self.classMembers(n, false);
+                break :blk if (n.inverted) try members.complement(self.arena) else members;
+            },
+            .class_set_op => blk: {
+                const members = try self.classSetOpMembers(n);
                 break :blk if (n.inverted) try members.complement(self.arena) else members;
             },
             .unicode_property, .unicode_script, .unicode_script_extensions => try self.propertyMembers(n),
@@ -617,17 +634,21 @@ const Lowerer = struct {
         return set;
     }
 
-    /// `[A--B]` / `[A&&B]` without the outermost `[^...]` (the node's
-    /// `inverted`, applied by `charSetNode`).
+    /// `[A--B--C]` / `[A&&B&&C]` without the outermost `[^...]` (the node's
+    /// `inverted`, applied by `charSetNode`): the operator from left to right.
     fn classSetOpMembers(self: *Lowerer, n: *const AstNode) LowerError!CharSet {
-        if (n.children.items.len != 2) return error.InvalidPattern;
-        const left = try self.classSetOperand(n.children.items[0]);
-        const right = try self.classSetOperand(n.children.items[1]);
+        const operands = n.children.items;
+        if (operands.len < 2) return error.InvalidPattern;
         const op: ast.ClassSetOp = @enumFromInt(n.char_value);
-        return switch (op) {
-            .intersection => left.intersect(right, self.arena),
-            .difference => left.difference(right, self.arena),
-        };
+        var acc = try self.classSetOperand(operands[0]);
+        for (operands[1..]) |operand| {
+            const right = try self.classSetOperand(operand);
+            acc = switch (op) {
+                .intersection => try acc.intersect(right, self.arena),
+                .difference => try acc.difference(right, self.arena),
+            };
+        }
+        return acc;
     }
 };
 

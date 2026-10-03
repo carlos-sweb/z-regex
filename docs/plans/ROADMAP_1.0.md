@@ -28,7 +28,7 @@ llegue en 1.x solo quita casos de error y nunca añade errores nuevos: es aditiv
 | **T0-A** | El DFA de T0 (ida e inverso, en compilación, con tope), con asserts y en code point, sin cambios de API. Planes: `T0-A.md`, `T0-A-precheck.md` | — | **v0.8.0** |
 | **Producción** | 1–3 meses de uso real sobre v0.8.0 (0.8.x con arreglos), sin cambios de API | — | — |
 | **1.0** | Si la producción no pide cambios de API: la misma API, con el freeze ya en vigor desde 0.7.0 | — | **v1.0.0** |
-| 1.1+ | Bug B y encadenado de `v`, LookLinear hacia atrás, lookbehind hacia atrás bajo `u`/`v`, lookarounds anidados en un lookbehind hacia atrás | — | — |
+| 1.1+ | LookLinear hacia atrás, lookbehind hacia atrás bajo `u`/`v`, lookarounds anidados en un lookbehind hacia atrás | — | — |
 
 **E2 (modificadores ES2025) no se hace:** decisión del 2026-09-29, pendientes hasta nuevo
 aviso (`docs/plans/F7.md`, Decisiones 4). Desde E0 son `UnsupportedFeature`.

@@ -133,12 +133,11 @@ reference run, not against zero:
 
 **Feature subsets (`v-subset.json`).** A test of a skipped feature runs anyway when its
 file is listed under that feature in `v-subset.json`. For `regexp-v-flag` (F5c, not done)
-the list holds the 85 files (119 entries) that pass whole, measured with
+the list holds the 108 files (165 entries) that pass whole, measured with
 `run.mjs --with-feature regexp-v-flag` (which runs all of a skipped feature's tests and
-writes no baseline). Of the 314 entries with the feature, at that measurement: 121 pass
-(119 of the engine suite, 2 of the host suite); 192 are `UnsupportedFeature` (F5c: `\q{…}`,
-properties of strings, a bare right operand, unions with nested classes); 1 is the host's
-(`uv` flags). When F5c lands, rerun the measurement and extend the list.
+writes no baseline). Of the 314 entries with the feature, at that measurement: 167 pass
+(165 of the engine suite, 2 of the host suite); 146 are `UnsupportedFeature` (F5c: `\q{…}`,
+properties of strings); 1 is the host's (`uv` flags). When F5c lands, rerun the measurement and extend the list.
 
 `skipped_host` reasons (grep `results.json` by `reason` to re-enable them on
 a newer Node):

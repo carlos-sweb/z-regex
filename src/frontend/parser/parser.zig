@@ -168,7 +168,7 @@ pub const Parser = struct {
     nesting_depth: u32 = 0,
     /// Nesting limit; a field so tests can lower it.
     max_nesting_depth: u32 = MAX_NESTING_DEPTH,
-    /// > 0 while parsing a `v`-mode nested class operand (`parseNestedClass`):
+    /// > 0 while parsing a `v`-mode nested class operand (`parseNestedOperand`):
     /// the token after its `]` is only a lookahead the caller re-reads in
     /// class mode (see `consumeClassClose`).
     nested_class_depth: u32 = 0,
@@ -775,8 +775,9 @@ pub const Parser = struct {
     ///
     /// Under `v`, `--` and `&&` at one level of a class are a SyntaxError
     /// whatever the operands: a class whose parse stops at something not
-    /// implemented (a bare operand, a chain) is `MixedClassSetOperators`
-    /// when it mixes them (F7c-4b), not `UnsupportedFeature`.
+    /// implemented (`\q{…}`, a property of strings) is
+    /// `MixedClassSetOperators` when it mixes them (F7c-4b), not
+    /// `UnsupportedFeature`.
     fn parseCharClass(self: *Self) ParseError!*Node {
         const body = self.current_token.position + 1; // after the `[`
         return self.parseCharClassBody() catch |err| {
@@ -819,57 +820,6 @@ pub const Parser = struct {
             try self.advance();
         }
 
-        // `v`-mode only: the whole of operand1 is itself a nested bracketed
-        // class (e.g. `[[a-z]&&[^x]]`) rather than a flat member list. Only
-        // reachable when `v_mode` is on, since that's the only time `[`
-        // tokenizes specially inside a class (see `nextInClass`) -- and
-        // only when an operator actually follows, to keep this feature's
-        // scope to exactly one operation (no bare `[[a-z]]` double-bracket
-        // idiom, no chaining/deeper nesting; see `docs/KNOWN_LIMITATIONS.md`).
-        if (self.lexer.v_mode and self.check(.lbracket)) {
-            // `parseCharClass` always assumes it's entered with
-            // `in_char_class` false, so its own `^`-negation lookahead (right
-            // below this comment in the *nested* call) fetches the token
-            // after `[` in normal mode -- without resetting it here first,
-            // that lookahead would instead fetch via `nextInClass` (since
-            // we're still logically inside this outer, already-open class),
-            // which doesn't special-case `^` at all, silently losing a
-            // nested `[^...]`'s negation.
-            const nested = try self.parseNestedClass();
-            // No `errdefer nested.deinit()` here: `finishClassSetOp` takes
-            // ownership immediately and has its own `errdefer` for it --
-            // registering a second one here would double-free `nested` if
-            // `finishClassSetOp` fails after its own cleanup already ran.
-
-            // The nested call's own cleanup already fetched whatever
-            // follows its `]` -- but in *normal* mode (same tradeoff as the
-            // `^`-negation lookahead at the top of this function: the
-            // nested call has no way to know it's still inside an outer,
-            // still-open class body). Rewind and re-fetch in class mode so
-            // `--`/`&&` tokenize correctly here rather than as literal
-            // characters.
-            self.lexer.rewindTo(self.current_token.position);
-            self.lexer.in_char_class = true;
-            // A lexer error on the token after the nested class must free it
-            // (no errdefer: see the ownership note above).
-            self.advance() catch |err| {
-                nested.deinit();
-                return err;
-            };
-
-            // No operator following a nested operand1 is out of this
-            // feature's scope (no bare `[[a-z]]` double-bracket idiom) --
-            // see `docs/KNOWN_LIMITATIONS.md`.
-            if (!self.check(.class_minus_minus) and !self.check(.class_and_and)) {
-                nested.deinit();
-                // `[[a]]`, `[[a][b]]`: a union with a nested class is valid
-                // `v` syntax that isn't implemented (F5c).
-                if (self.check(.eof)) return error.UnmatchedBracket;
-                return error.UnsupportedFeature;
-            }
-            return try self.finishClassSetOp(nested, inverted);
-        }
-
         const class = try Node.createCharClass(self.allocator);
         // `class_owned` gates this errdefer off once ownership transfers to
         // `finishClassSetOp` below (which has its own `errdefer` for
@@ -881,8 +831,8 @@ pub const Parser = struct {
 
         // What the pattern wrote, one per loop turn (a shorthand is one
         // even when it splices several children), and whether one was a
-        // range: an operand of `--`/`&&` is a single character, `\p{…}` or
-        // shorthand, never a list or a range (F7c-4b).
+        // range: an operand of `--`/`&&` is a single character, `\p{…}`,
+        // shorthand or nested class, never a list or a range (F7c-4b).
         var items: usize = 0;
         var has_range = false;
         while (!self.check(.rbracket) and !self.check(.eof) and
@@ -977,9 +927,12 @@ pub const Parser = struct {
                 }
                 try self.appendClassChar(class, '-');
             } else if (self.lexer.v_mode and self.check(.lbracket)) {
-                // `[a[b]]`: a union with a nested class after other members,
-                // valid `v` syntax that isn't implemented (F5c).
-                return error.UnsupportedFeature;
+                // A nested class (`v` only: elsewhere `[` is a literal here)
+                // is a member of the union, `[[a]b]`, `[a[b]]`, `[[a][b]]`,
+                // or the left operand of `--`/`&&` when it is the only one.
+                const nested = try self.parseNestedOperand();
+                errdefer nested.deinit();
+                try class.appendChild(nested);
             } else {
                 return error.UnexpectedToken;
             }
@@ -991,6 +944,10 @@ pub const Parser = struct {
             // range as the left operand (`[ab&&[c]]`, `[a-z--b]`): V8 and
             // ECMA-262 take a range as an operand only nested, `[[a-z]--b]`.
             if (items != 1 or has_range) return error.InvalidClassSetOperand;
+            // A nested operand1 (`[[a-z]--b]`) stays the one child of
+            // `class`, with its own `^`: the lowering takes a class's nested
+            // member as its own set.
+            //
             // `class.inverted` was set to the *outer* `^` above (correct
             // for an ordinary class), but a flat operand1 (as opposed to a
             // nested `[...]` operand1 with its own independent `^`) is
@@ -1011,15 +968,31 @@ pub const Parser = struct {
         return class;
     }
 
-    /// Parse a nested `[...]` operand of a `v`-mode class set operation.
-    /// Entered with `in_char_class` reset (see the callers for why); the
-    /// caller then rewinds and re-reads the token after the nested `]` in
-    /// class mode.
-    fn parseNestedClass(self: *Self) ParseError!*Node {
+    /// Parse a nested `[...]` inside a `v`-mode class: a member of a union
+    /// or an operand of `--`/`&&`. The nested `parseCharClass` is entered
+    /// with `in_char_class` reset, so that its own `^`-negation lookahead
+    /// fetches the token after `[` in normal mode (`nextInClass` doesn't
+    /// special-case `^`, and a nested `[^...]` would lose its negation).
+    /// Its `]` fetches the next token in normal mode too (it can't know it
+    /// is still inside an outer class), so that token is rewound and
+    /// re-read in class mode: `--`, `&&` and `]` tokenize as such, not as
+    /// literal characters. The only place a nested class is parsed.
+    fn parseNestedOperand(self: *Self) ParseError!*Node {
         self.lexer.in_char_class = false;
-        self.nested_class_depth += 1;
-        defer self.nested_class_depth -= 1;
-        return self.parseCharClass();
+        const nested = blk: {
+            self.nested_class_depth += 1;
+            defer self.nested_class_depth -= 1;
+            break :blk try self.parseCharClass();
+        };
+        self.lexer.rewindTo(self.current_token.position);
+        self.lexer.in_char_class = true;
+        // A lexer error on the token after the nested class must free it
+        // (the caller owns it only once it is returned).
+        self.advance() catch |err| {
+            nested.deinit();
+            return err;
+        };
+        return nested;
     }
 
     /// Consume a class's closing `]`, fetching the next token in normal
@@ -1042,89 +1015,80 @@ pub const Parser = struct {
         _ = try self.consume(.rbracket);
     }
 
-    /// Finish parsing a `v`-mode class set operation (`[A--B]` / `[A&&B]`)
-    /// once operand1 (`left`) and its enclosing class's own negation
-    /// (`outer_negated`, from a leading `^` on the *outermost* bracket --
-    /// distinct from either operand's own negation, if it's a `[^...]`
-    /// nested class) are already parsed and `self.current_token` is the
-    /// operator (`.class_minus_minus`/`.class_and_and`). Only ever called
+    /// Finish parsing a `v`-mode class set operation (`[A--B--C]` /
+    /// `[A&&B&&C]`) once operand1 (`left`) and its enclosing class's own
+    /// negation (`outer_negated`, from a leading `^` on the *outermost*
+    /// bracket -- distinct from either operand's own negation, if it's a
+    /// `[^...]` nested class) are already parsed and `self.current_token` is
+    /// the operator (`.class_minus_minus`/`.class_and_and`). Only ever called
     /// from `parseCharClass`, which already checked one of those two token
     /// types is current before calling this.
+    ///
+    /// ClassSubtraction and ClassIntersection are left-recursive in
+    /// ECMA-262: a chain of one operator applies it from left to right. The
+    /// node is n-ary (one operator, every operand a child), so a long chain
+    /// costs no recursion depth in the parser, the lowering or `deinit`.
     fn finishClassSetOp(self: *Self, left: *Node, outer_negated: bool) ParseError!*Node {
-        // `_owned` flags gate each errdefer off once the node becomes a
-        // child of `node` below (whose own errdefer would otherwise also
-        // free it via `node.deinit()`'s child walk, double-freeing it).
+        // `left_owned` gates the errdefer off once `left` is a child of
+        // `node` (whose own errdefer would otherwise also free it).
         var left_owned = true;
         errdefer if (left_owned) left.deinit();
         const op: ast_mod.ClassSetOp = if (self.check(.class_minus_minus)) .difference else .intersection;
-        try self.advance(); // consume '--' or '&&'
+        const node = try Node.createClassSetOp(self.allocator, op, outer_negated);
+        errdefer node.deinit();
+        try node.appendChild(left);
+        left_owned = false;
 
-        const right = try self.parseClassSetOperand();
-        var right_owned = true;
-        errdefer if (right_owned) right.deinit();
-
-        // Exactly one operation. A chain of the same operator
-        // (`[A--B--C]`) is valid `v` syntax that isn't implemented (F5c);
-        // mixing `--` and `&&` in one class is a SyntaxError. The mix after
-        // an operand that stops the parse first (a bare `b` in `[a--b&&c]`,
-        // or a chain) is caught by `parseCharClass`.
-        if (self.check(.class_minus_minus) or self.check(.class_and_and)) {
-            const same = self.check(.class_minus_minus) == (op == .difference);
-            return if (same) error.UnsupportedFeature else error.MixedClassSetOperators;
+        while (true) {
+            try self.advance(); // consume '--' or '&&'
+            // `&&` is followed by [lookahead ≠ &]: `[a&&&b]` is a
+            // SyntaxError, `[a&&\&]` isn't.
+            if (op == .intersection and self.check(.char) and self.current_token.char_value == '&')
+                return error.InvalidClassSetOperand;
+            {
+                const right = try self.parseClassSetOperand();
+                errdefer right.deinit();
+                try node.appendChild(right);
+            }
+            if (self.check(.class_minus_minus) or self.check(.class_and_and)) {
+                // `--` and `&&` in one class is a SyntaxError.
+                if (self.check(.class_minus_minus) != (op == .difference)) return error.MixedClassSetOperators;
+                continue;
+            }
+            // An operand is one item: `[a--b-c]`, `[a--[b]c]` are
+            // SyntaxErrors. The end of the pattern is the missing `]`.
+            if (!self.check(.rbracket) and !self.check(.eof)) return error.InvalidClassSetOperand;
+            break;
         }
 
         try self.consumeClassClose();
-
-        const node = try Node.createClassSetOp(self.allocator, op, outer_negated);
-        errdefer node.deinit();
-        // Flip each `_owned` flag only *after* `appendChild` succeeds: if it
-        // fails, the node was never added to `node`'s children, so it must
-        // still be freed by its own errdefer (flipping early would leak it,
-        // since `node`'s own errdefer only walks children actually present).
-        try node.appendChild(left);
-        left_owned = false;
-        try node.appendChild(right);
-        right_owned = false;
         return node;
     }
 
-    /// Parse a `v`-mode class set operation's second operand (the right-hand
-    /// side of `--`/`&&`): either a nested `[...]` class (which may itself
-    /// be `[^...]`-negated) or a bare `\p{...}`/`\P{...}` atom (e.g.
-    /// `[\p{L}--\p{Lu}]`). No other operand shape is supported in this
-    /// scope -- see `docs/KNOWN_LIMITATIONS.md`.
+    /// Parse an operand of `--`/`&&` after the operator: a nested `[...]`
+    /// class (which may itself be `[^...]`-negated), a `\p{...}`/`\P{...}`
+    /// atom, a shorthand (`[\w--\d]`) or a single character
+    /// (`[\p{L}--a]`). A character or a shorthand is a one-member class,
+    /// the same shape a flat operand1 has.
     fn parseClassSetOperand(self: *Self) ParseError!*Node {
-        if (self.check(.lbracket)) {
-            // Reset to normal mode before recursing, same reasoning as
-            // operand1's nested case in `parseCharClass` -- otherwise a
-            // negated nested operand (`[^x]`) silently loses its `^`.
-            const nested = try self.parseNestedClass();
-            // Same rewind-and-re-fetch-in-class-mode fix as operand1's
-            // nested case in `parseCharClass` -- the nested call's own
-            // cleanup fetched whatever follows its `]` in normal mode,
-            // which would misparse the outer class's closing `]` (or a
-            // chained operator, correctly rejected below by the caller) as
-            // literal characters instead.
-            self.lexer.rewindTo(self.current_token.position);
-            self.lexer.in_char_class = true;
-            // A lexer error on the token after the nested class must free it
-            // (the caller owns it only once it is returned).
-            self.advance() catch |err| {
-                nested.deinit();
-                return err;
-            };
-            return nested;
-        }
+        if (self.check(.lbracket)) return self.parseNestedOperand();
         if (self.check(.unicode_prop) or self.check(.not_unicode_prop)) {
             const name = self.lexer.pattern[self.current_token.name_start..self.current_token.name_end];
             const negated = self.current_token.type == .not_unicode_prop;
             try self.advance();
             return self.resolveUnicodePropertyNode(name, negated);
         }
-        // A bare character or a shorthand (`[\p{L}--a]`, `[\w--\d]`) is a
-        // valid operand that isn't implemented (bug B, F5c); anything else
-        // (`]`, an operator, the end) is a SyntaxError.
-        if (self.isClassCharToken() or self.isShorthandClassToken()) return error.UnsupportedFeature;
+        if (self.isClassCharToken() or self.isShorthandClassToken()) {
+            const class = try Node.createCharClass(self.allocator);
+            errdefer class.deinit();
+            if (self.isShorthandClassToken())
+                try self.appendShorthandToClass(class, self.current_token.type)
+            else
+                try self.appendClassChar(class, self.classCharValue());
+            try self.advance();
+            return class;
+        }
+        // `]`, an operator, the end: a missing operand.
         return error.InvalidClassSetOperand;
     }
 

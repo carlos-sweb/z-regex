@@ -6,11 +6,11 @@ what a release promises is in [API.md](API.md).
 
 ## Status
 
-- **test262:** 3113 of the 3136 entries that run pass (99.3 %), in UTF-16 and in WTF-8;
-  702 are skipped: 509 by the harness (its runner, or a feature its Node lacks, such as
-  the 377 of RegExp modifiers) and 193 of the `v` flag (`scripts/test262/features.json`).
-  Of the `v` flag's 314 entries, the 119 of the engine suite that pass run
-  (`v-subset.json`); the rest: 192 `UnsupportedFeature` (F5c), 1 host, and 2 of the host
+- **test262:** 3159 of the 3182 entries that run pass (99.3 %), in UTF-16 and in WTF-8;
+  656 are skipped: 509 by the harness (its runner, or a feature its Node lacks, such as
+  the 377 of RegExp modifiers) and 147 of the `v` flag (`scripts/test262/features.json`).
+  Of the `v` flag's 314 entries, the 165 of the engine suite that pass run
+  (`v-subset.json`); the rest: 146 `UnsupportedFeature` (F5c), 1 host, and 2 of the host
   suite (they pass; that suite isn't in the count). Of the 23 that run and don't pass: 4 are lookbehinds
   zregex rejects as `UnsupportedFeature` (2 `nested-lookaround`, 2 under `u` in
   `named-groups/lookbehind`), 4 fail in the JS lexer (host), 15 can't be extracted.
@@ -33,11 +33,8 @@ release only removes such cases ([API.md](API.md), "Errors").
 | A lookaround inside a lookbehind matched backward | `(?<=a(?=b)c+)` | 1.x |
 | Under `u`/`v`, a lookbehind matched backward (variable length, captures or backreferences inside) | `/(?<=a+)b/u` | 1.x |
 | `v`: `\q{...}` | `[\q{abc}]` | F5c (1.x) |
-| `v`: a bare character or shorthand as the right operand (bug B) | `[\p{L}--a]`, `[a--b]`, `[\w--\d]` | F5c (1.x) |
-| `v`: a chain of one operator | `[A--B--C]`, `[A&&B&&C]` | F5c (1.x) |
-| `v`: a union with nested classes | `[[a][b]]`, `[a[b]]` | F5c (1.x) |
 | `v`: properties of strings | `\p{RGI_Emoji}` and 6 more | F5c (1.x) |
-| `i` with `v`: property escapes, negated classes and set operands not closed under the folding | `/\p{Lu}/iv`, `/[^a-z]/iv`, `/[[a-z]--[q]]/iv` | F5c (1.x) |
+| `i` with `v`: property escapes, negated classes and set operands (or nested classes in a union) not closed under the folding | `/\p{Lu}/iv`, `/[^a-z]/iv`, `/[[a-z]--[q]]/iv`, `/[a--b]/iv` | F5c (1.x) |
 
 ### Row by row: `v`, modifiers and escapes
 
@@ -48,9 +45,11 @@ Each row: what V8 says, what zregex gave before E0 (0.5.1), and what it gives no
 |---|---|---|---|
 | `[\q{a}]` (`\q{...}`) | valid | **wrong result**: `\q` was the letter q | `UnsupportedFeature` |
 | `\q`, `[\q]`, `\q{a}`, `\z` | SyntaxError | accepted | `InvalidEscape` |
-| `[\p{L}--\d]`, `[\p{L}--a]`, `[a--b]`, `[a&&b]`, `[[a]&&b]`, `[\w--\d]` (a bare right operand, bug B) | valid | `InvalidClassSetOperand` | `UnsupportedFeature` |
-| `[[a][b]]`, `[a[b]]` (a union with nested classes) | valid | `InvalidClassSetOperand` / `UnexpectedToken` | `UnsupportedFeature` |
-| `[A--B--C]`, `[A&&B&&C]` (the same operator chained) | valid | `ChainedClassSetOperatorNotSupported` | `UnsupportedFeature` |
+| `[\p{L}--\d]`, `[\p{L}--a]`, `[a--b]`, `[a&&b]`, `[[a]&&b]`, `[\w--\d]` (a bare right operand, bug B) | valid | `InvalidClassSetOperand` | `UnsupportedFeature`; compiles since F5c 1.1 |
+| `[[a][b]]`, `[a[b]]` (a union with nested classes) | valid | `InvalidClassSetOperand` / `UnexpectedToken` | `UnsupportedFeature`; compiles since F5c 1.1 |
+| `[A--B--C]`, `[A&&B&&C]` (the same operator chained) | valid | `ChainedClassSetOperatorNotSupported` | `UnsupportedFeature`; compiles since F5c 1.1 (left to right) |
+| `[[[a]--[b]]--[c]]` (a nested operation as an operand) | valid | — | `InvalidPattern` until F5c 1.1, which compiles it |
+| `[a&&&b]`, `[a--b-c]`, `[[a][b]--[c]]` (`&&` then `&`, an operand that isn't one item) | SyntaxError | — | `InvalidClassSetOperand` (F5c 1.1; `UnsupportedFeature` before) |
 | `[A--B&&C]` (operators mixed) | SyntaxError | `ChainedClassSetOperatorNotSupported` | `MixedClassSetOperators` (flat operands too since F7c-4b) |
 | `[ab&&[c]]`, `[a-z--b]` (a list or a range as an operand) | SyntaxError | compiled / `UnsupportedFeature` | `InvalidClassSetOperand` (F7c-4b) |
 | `[a--]`, `[--a]` | SyntaxError | `InvalidClassSetOperand` | the same |
@@ -63,7 +62,7 @@ Each row: what V8 says, what zregex gave before E0 (0.5.1), and what it gives no
   ECMA-262 (`ClassSetOperand`) and V8 agree: a list or a range is only a `ClassUnion`, so
   `[a-z--b]` is a SyntaxError and the range is written nested, `[[a-z]--b]`.
 - **Limit of the rule:** a pattern that is invalid *and* uses a form that isn't implemented
-  reports the first one it reaches: `[A--\d]\w(?!a){2}` with `v` is `UnsupportedFeature`
+  reports the first one it reaches: `[\q{a}]\w(?!a){2}` with `v` is `UnsupportedFeature`
   (the class comes first), where V8 reports the SyntaxError of the quantified lookahead.
   Both are compile errors; neither is a wrong result.
 
@@ -130,7 +129,7 @@ hasn't participated yet matches empty (`(?<=(\w)\1)x` on `"aax"` gives `[2,3]`, 
 `(?i:…)`, `(?-m:…)` and the other forms of ES2025's modifiers are not implemented:
 `(?i:a)` is `error.UnsupportedFeature`. Decision (2026-09-29): pending until further
 notice, not on the way to 1.0. Their 377 test262 entries are skipped because the
-harness's Node lacks the feature, so they are not counted in 3113/3136. What exists and
+harness's Node lacks the feature, so they are not counted in 3159/3182. What exists and
 what is missing: `docs/plans/F7.md`, "Decisiones", 4.
 
 ## `v` with `i`

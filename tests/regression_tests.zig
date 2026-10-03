@@ -403,11 +403,121 @@ test "F7c-4b: mixed operators and non-atom operands in a v class are a SyntaxErr
         var re = try zregex.Regex.compileWithOptions(testing.allocator, p, v);
         re.deinit();
     }
-    // Also valid, not implemented: a bare character or shorthand as the
-    // right operand (bug B, F5c) and a chain of one operator (F5c). The
-    // opposite of the rows above: valid syntax zregex doesn't run yet.
+    // A bare character or shorthand as the right operand (bug B) and a
+    // chain of one operator: UnsupportedFeature until F5c 1.1.
     for ([_][]const u8{ "[a--b]", "[a&&b]", "[[a]&&b]", "[\\p{L}--a]", "[\\w--\\d]", "[[a-z]--b]", "[a--b--c]" }) |p| {
-        try testing.expectError(error.UnsupportedFeature, zregex.Regex.compileWithOptions(testing.allocator, p, v));
+        var re = try zregex.Regex.compileWithOptions(testing.allocator, p, v);
+        re.deinit();
+    }
+}
+
+test "F5c 1.1: bare operands, chained operators and nested unions under v" {
+    const v: zregex.CompileOptions = .{ .v = true };
+    const In = struct { []const u8, bool };
+    // Each row: whole-input matches as V8 (Node 22) gives them.
+    const cases = [_]struct { []const u8, []const In }{
+        // A bare character or shorthand operand (bug B).
+        .{ "[\\p{L}--a]", &.{ .{ "a", false }, .{ "b", true }, .{ "5", false } } },
+        .{ "[\\w--\\d]", &.{ .{ "a", true }, .{ "5", false }, .{ "_", true }, .{ "-", false } } },
+        .{ "[a--b]", &.{ .{ "a", true }, .{ "b", false } } },
+        .{ "[\\d--5]", &.{ .{ "4", true }, .{ "5", false }, .{ "6", true } } },
+        .{ "[a&&a]", &.{ .{ "a", true }, .{ "b", false } } },
+        .{ "[\\w&&\\d]", &.{ .{ "a", false }, .{ "7", true } } },
+        .{ "[_&&_]", &.{ .{ "_", true }, .{ "a", false } } },
+        .{ "[[a-z]--a]", &.{ .{ "a", false }, .{ "b", true } } },
+        .{ "[[a-z]&&\\d]", &.{ .{ "a", false }, .{ "1", false } } },
+        .{ "[^\\w--\\d]", &.{ .{ "a", false }, .{ "5", true }, .{ "-", true } } },
+        .{ "[\\d--\\b]", &.{ .{ "1", true }, .{ "\x08", false } } },
+        .{ "[a&&\\&]", &.{ .{ "a", false }, .{ "&", false } } },
+        .{ "[\\&&&\\&]", &.{ .{ "&", true }, .{ "a", false } } },
+        .{ "[a--\\-]", &.{ .{ "a", true }, .{ "-", false } } },
+        // A chain of one operator, from left to right.
+        .{ "[a--b--c]", &.{ .{ "a", true }, .{ "b", false }, .{ "c", false } } },
+        .{ "[\\w&&\\d&&[0-5]]", &.{ .{ "3", true }, .{ "7", false }, .{ "a", false } } },
+        .{ "[\\p{L}--[a-z]--\\p{Lu}]", &.{ .{ "a", false }, .{ "B", false }, .{ "\u{e9}", true } } },
+        .{ "[[a-z]--[b]--[c]--d]", &.{ .{ "a", true }, .{ "b", false }, .{ "c", false }, .{ "d", false }, .{ "e", true } } },
+        // A union with nested classes.
+        .{ "[[a][b]]", &.{ .{ "a", true }, .{ "b", true }, .{ "c", false } } },
+        .{ "[[a]b]", &.{ .{ "a", true }, .{ "b", true }, .{ "c", false } } },
+        .{ "[a[b]]", &.{ .{ "a", true }, .{ "b", true }, .{ "c", false } } },
+        .{ "[[a]]", &.{ .{ "a", true }, .{ "b", false } } },
+        .{ "[^[a]]", &.{ .{ "a", false }, .{ "b", true } } },
+        .{ "[[^a]]", &.{ .{ "a", false }, .{ "b", true } } },
+        .{ "[^[^a]]", &.{ .{ "a", true }, .{ "b", false } } },
+        .{ "[a-z[0-9]_]", &.{ .{ "Z", false }, .{ "_", true }, .{ "9", true }, .{ "a", true }, .{ "-", false } } },
+        .{ "[[a--b]]", &.{ .{ "a", true }, .{ "b", false } } },
+        .{ "[\\d[a]]", &.{ .{ "1", true }, .{ "a", true }, .{ "b", false } } },
+        .{ "[\\p{Lu}[a]]", &.{ .{ "A", true }, .{ "a", true }, .{ "b", false } } },
+        .{ "[[[a]]]", &.{ .{ "a", true }, .{ "b", false } } },
+        .{ "[[a][^a]]", &.{ .{ "a", true }, .{ "b", true } } },
+        // A nested operation as an operand: InvalidPattern before F5c 1.1.
+        .{ "[[[a]--[b]]--[c]]", &.{ .{ "a", true }, .{ "b", false } } },
+        .{ "[[a]--[[b]--[c]]]", &.{ .{ "a", true }, .{ "b", false } } },
+        .{ "[[a]&&[[a]&&[a]]]", &.{ .{ "a", true }, .{ "b", false } } },
+        .{ "[[[a-z]--[b]]&&[a-c]]", &.{ .{ "a", true }, .{ "b", false }, .{ "c", true }, .{ "d", false } } },
+        .{ "[[a-c]--[[b][c]]]", &.{ .{ "a", true }, .{ "b", false }, .{ "c", false } } },
+    };
+    for (cases) |c| {
+        var re = try zregex.Regex.compileWithOptions(testing.allocator, c[0], v);
+        defer re.deinit();
+        for (c[1]) |in| {
+            if (try re.matchFull(in[0]) != in[1]) {
+                std.debug.print("/{s}/v on \"{s}\": expected {}\n", .{ c[0], in[0], in[1] });
+                return error.TestUnexpectedResult;
+            }
+        }
+    }
+    // Still a SyntaxError (V8 too): `&&` followed by `&`, an operand that
+    // is a list or a range, a union before an operator, a mix.
+    const Bad = struct { []const u8, anyerror };
+    for ([_]Bad{
+        .{ "[a&&&b]", error.InvalidClassSetOperand },
+        .{ "[[a]&&&[b]]", error.InvalidClassSetOperand },
+        .{ "[_&&_&&]", error.InvalidClassSetOperand },
+        .{ "[a&&&]", error.InvalidClassSetOperand },
+        .{ "[\\d&&&]", error.InvalidClassSetOperand },
+        .{ "[a--b-c]", error.InvalidClassSetOperand },
+        .{ "[a&&b-c]", error.InvalidClassSetOperand },
+        .{ "[[a]--b[c]]", error.InvalidClassSetOperand },
+        .{ "[a--[b]c]", error.InvalidClassSetOperand },
+        .{ "[a--b--]", error.InvalidClassSetOperand },
+        .{ "[a---b]", error.InvalidClassSetOperand },
+        .{ "[[a][b]--[c]]", error.InvalidClassSetOperand },
+        .{ "[[a-z--b]c]", error.InvalidClassSetOperand },
+        .{ "[a--b&&c--d]", error.MixedClassSetOperators },
+        .{ "[[a]&&[b]&&[c]--[d]]", error.MixedClassSetOperators },
+        .{ "[[a]-b]", error.InvalidClassSetOperand },
+        .{ "[a--b", error.UnexpectedToken },
+    }) |c| {
+        try testing.expectError(c[1], zregex.Regex.compileWithOptions(testing.allocator, c[0], v));
+    }
+    // Under `iv` an operand must be closed under the folding (F7c-0): `a`
+    // isn't (its class is {a, A}), `\d` is.
+    const iv: zregex.CompileOptions = .{ .v = true, .case_insensitive = true };
+    for ([_][]const u8{ "[a--b]", "[[a]b]", "[\\w--\\d]" }) |p| {
+        try testing.expectError(error.UnsupportedFeature, zregex.Regex.compileWithOptions(testing.allocator, p, iv));
+    }
+    {
+        var re = try zregex.Regex.compileWithOptions(testing.allocator, "[\\d--5]", iv);
+        defer re.deinit();
+        try testing.expect(try re.matchFull("4"));
+        try testing.expect(!try re.matchFull("5"));
+    }
+    // A chain of 10,000 operands: the node is n-ary, so neither the parser,
+    // the lowering nor `deinit` recurses per operand.
+    {
+        var buf: std.ArrayListUnmanaged(u8) = .empty;
+        defer buf.deinit(testing.allocator);
+        try buf.appendSlice(testing.allocator, "[\\p{L}");
+        for (0..10_000) |i| {
+            try buf.appendSlice(testing.allocator, "--");
+            try buf.append(testing.allocator, @intCast('a' + i % 26));
+        }
+        try buf.append(testing.allocator, ']');
+        var re = try zregex.Regex.compileWithOptions(testing.allocator, buf.items, v);
+        defer re.deinit();
+        try testing.expect(try re.matchFull("A"));
+        try testing.expect(!try re.matchFull("q"));
     }
 }
 
@@ -1202,12 +1312,6 @@ test "E0: valid syntax that isn't implemented is UnsupportedFeature, never a wro
     const cases = [_]struct { []const u8, zregex.CompileOptions }{
         .{ "^[\\q{abc|d}]$", v },
         .{ "[\\q{a}]", v },
-        .{ "[\\p{L}--\\d]", v }, // bug B: a shorthand operand
-        .{ "[\\p{L}--a]", v }, // bug B: a bare character operand
-        .{ "[[a][b]]", v }, // a union with nested classes
-        .{ "[a[b]]", v },
-        .{ "[[a]--[b]--[c]]", v }, // the same operator chained
-        .{ "[[a]&&[b]&&[c]]", v },
         .{ "\\p{RGI_Emoji}", v }, // a property of strings
         .{ "[\\p{Basic_Emoji}]", v },
         .{ "(?i:a)", .{} }, // RegExp modifiers (ES2025)

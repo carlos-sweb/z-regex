@@ -16,7 +16,7 @@ pub const NodeType = enum {
     unicode_property, // \p{...} / \P{...} (Unicode General_Category or binary property)
     unicode_script, // \p{Script=...} / \p{sc=...} / \P{Script=...}
     unicode_script_extensions, // \p{Script_Extensions=...} / \p{scx=...} / \P{Script_Extensions=...}
-    class_set_op, // `v`-mode class set operation: [A--B] / [A&&B]
+    class_set_op, // `v`-mode class set operation: [A--B--...] / [A&&B&&...]
 
     // Quantifiers (greedy)
     star, // Zero or more (greedy)
@@ -190,13 +190,14 @@ pub const Node = struct {
         return node;
     }
 
-    /// Create a `v`-mode class set operation node (`[A--B]` / `[A&&B]`).
-    /// `op` is `0` for difference (matches `A` but not `B`) or `1` for
-    /// intersection (matches both); `children[0]`/`children[1]` are the two
-    /// operand nodes (each a `char_class` node, for an ordinary or nested
-    /// `[...]` operand, or a `unicode_property`/`unicode_script`/
-    /// `unicode_script_extensions` node for a bare `\p{...}`/`\P{...}`
-    /// operand) -- append both via `appendChild` after calling this.
+    /// Create a `v`-mode class set operation node (`[A--B--C]` /
+    /// `[A&&B&&C]`). `op` is `0` for difference (matches `A` but not `B`) or
+    /// `1` for intersection (matches both), applied from left to right over
+    /// the children, two or more: the operands in order (each a `char_class`
+    /// node, for a nested `[...]`, a single character or a shorthand; a
+    /// nested `class_set_op`; or a `unicode_property`/`unicode_script`/
+    /// `unicode_script_extensions` node for a bare `\p{...}`/`\P{...}`)
+    /// -- append them via `appendChild` after calling this.
     /// `negated` is this whole operation's own `[^...]` negation (distinct
     /// from either operand's own negation, if it's a `[^...]` nested class).
     pub fn createClassSetOp(allocator: Allocator, op: ClassSetOp, negated: bool) !*Node {
