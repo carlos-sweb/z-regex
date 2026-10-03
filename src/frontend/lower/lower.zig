@@ -395,7 +395,7 @@ const Lowerer = struct {
 
     /// `list` sorted, without duplicates.
     fn uniqueStrings(list: [][]const u32) []const []const u32 {
-        std.mem.sort([]const u32, list, {}, lessString);
+        std.sort.heap([]const u32, list, {}, lessString);
         var n: usize = 0;
         for (list) |str| {
             if (n > 0 and std.mem.eql(u32, list[n - 1], str)) continue;
@@ -562,7 +562,7 @@ const Lowerer = struct {
         if (depth >= max_trie_depth) {
             // Flat: every remaining string, longest first.
             const rest = try self.arena.dupe([]const u32, strings);
-            std.mem.sort([]const u32, rest, {}, longerFirst);
+            std.sort.heap([]const u32, rest, {}, longerFirst);
             for (rest) |str| {
                 if (str.len == at) {
                     ends = true;
