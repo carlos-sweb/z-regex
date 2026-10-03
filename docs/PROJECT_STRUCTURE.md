@@ -44,9 +44,11 @@ subject/
 tier0/
   compile.zig        HIR -> Thompson program; which patterns T0 takes
   program.zig        the program
-  pikevm.zig         the Pike VM without captures
+  pikevm.zig         the Pike VM without captures, and T0's dispatch (fast paths, DFA, VM)
   pikevm_tagged.zig  the tagged Pike VM (captures, two passes)
   prefilter.zig      exact prefilters and fast paths
+  shiftand.zig       Shift-And for a straight line of 1 to 64 ASCII characters and classes
+  dfa.zig            the DFA: forward and reverse, built at compile time within a cap
 tier1/
   root.zig           empty: T1 patterns run on tier0 or tier2
 tier2/
@@ -77,7 +79,8 @@ fuzz_common.zig, fuzz_parser.zig, fuzz_stress.zig
 differential.zig         WTF-8 against UTF-16: the same match from every position
 test262_conformance.zig, test262_data.zig   the 168-case sample (generated data)
 layers/ref_all.zig       compile canaries of check-layers
-corpus/                  pattern corpora: f2c.txt, f2c-2.txt, npm.tsv, lookbehind.tsv, iter_v8.tsv
+corpus/                  pattern corpora: f2c.txt, f2c-2.txt, npm.tsv, lookbehind.tsv, iter_v8.tsv;
+                         dfadiff-subject.txt (dfadiff's subject)
 differential/reference/  references the gate compares against (dv8, lbdiff-v8, ivdiff, pfdiff slots)
 ```
 
@@ -85,7 +88,7 @@ differential/reference/  references the gate compares against (dv8, lbdiff-v8, i
 
 ```
 tools/check_layers.zig   the layer lint
-tools/pfdiff.zig, t1diff.zig, lldiff.zig, lbdiff.zig   internal differentials
+tools/pfdiff.zig, t1diff.zig, lldiff.zig, lbdiff.zig, dfadiff.zig   internal differentials
 tools/f0c.zig, cgprobe.zig                         tier histogram, callgrind probe
 scripts/gate.sh          the gate (every check, one verdict)
 scripts/gate/            V8 arbiters of pfdiff and t1diff
@@ -111,6 +114,7 @@ REGEX_TIERS_PLAN.md      the tier design and its phases
 ECMASCRIPT_COMPATIBILITY_PLAN.md   the compatibility plan of the first phases
 F6A_PRECHECK.md          F6a's precheck (cited by the sources)
 RELEASE_NOTES_v*.md      one per release
-plans/                   ROADMAP_1.0.md and the plans of E1, F7 and F7c
+plans/                   ROADMAP_1.0.md, ROADMAP_COMPLETE.md (what's left), and the plans of E1,
+                         F7, F7c and T0 (T0-J, T0-CB, T0-A, T0-A-precheck)
 archive/                 documents of closed phases and the Spanish README
 ```

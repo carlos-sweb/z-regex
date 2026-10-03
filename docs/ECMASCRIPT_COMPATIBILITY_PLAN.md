@@ -1,5 +1,9 @@
 # Path to 100% ECMAScript RegExp Compatibility
 
+> **Historical** (the plan of the first phases). File paths refer to the tree of its time
+> (`src/parser/`, `src/executor/`, `src/bytecode/`); today's tree is in
+> [PROJECT_STRUCTURE.md](PROJECT_STRUCTURE.md), today's status in [LIMITATIONS.md](LIMITATIONS.md).
+
 This is an engineering plan, not a schedule. Every gap it addresses was confirmed by
 direct testing against the current source tree (see
 [KNOWN_LIMITATIONS.md](KNOWN_LIMITATIONS.md) for the evidence); nothing here is inferred

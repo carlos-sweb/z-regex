@@ -2,6 +2,8 @@
 
 > Documento de diseño y plan de implementación. No contiene código final: las firmas Zig son ilustrativas.
 > Estado: propuesta. Fecha: 2026-09-25. Rama de origen: `claude/trusting-ride-po3bt8`.
+>
+> **Nota (limpieza pre-1.0):** documento de diseño de su época. Las fases están cerradas hasta F6b y F7c; T0 tiene además un DFA desde 0.8.0. Las rutas de ficheros citan el árbol de entonces (p. ej. `src/executor/`, `src/core/`); el árbol actual está en `PROJECT_STRUCTURE.md` y el funcionamiento en `ARCHITECTURE.md`.
 
 ---
 

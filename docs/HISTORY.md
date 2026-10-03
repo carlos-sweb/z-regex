@@ -29,6 +29,7 @@ closed phases cited here are in `docs/archive/`.
 - `v` with `i` (F7c-0): measurements
 - Fixed in F2b
 - The `u` and `v` flags as they were built (Phases 4-5)
+- After 0.6.0: where 0.7.0, 0.7.1 and 0.8.0 are recorded
 
 ## Versions up to 0.6.0
 
@@ -1930,3 +1931,19 @@ multi-string literals; `v`'s own additional reserved-punctuator restrictions ins
 class (beyond what `u`-mode strictness already covers, itself only partial); and full
 `u`-mode strictness under `v` (since `v` implies all of `u`'s rules, and Phase 5b's
 strictness is itself only the unrecognized-escape slice — see above).
+
+---
+
+## After 0.6.0: where 0.7.0, 0.7.1 and 0.8.0 are recorded
+
+This file keeps the record up to F7c-4b as it was written. The later releases are recorded
+in their own documents:
+
+- **0.7.0 (F7c, the API freeze):** `docs/plans/F7c.md` and `docs/RELEASE_NOTES_v0.7.0.md`.
+- **0.7.1 (T0 throughput: J, C and B):** `docs/plans/T0-J.md`, `docs/plans/T0-CB.md` and
+  `docs/RELEASE_NOTES_v0.7.1.md`.
+- **0.8.0 (T0-A, the DFA on T0):** `docs/plans/T0-A.md`, `docs/plans/T0-A-precheck.md`
+  (§10-14: the phases, the fixes and their measurements) and `docs/RELEASE_NOTES_v0.8.0.md`.
+- **The pre-1.0 cleanup** (after 0.8.0): `dfadiff` in the gate, 93 test262 entries of `v`
+  activated (3087/3110), documentation brought in line; what's left is inventoried in
+  `docs/plans/ROADMAP_COMPLETE.md`.

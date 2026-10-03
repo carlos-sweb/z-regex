@@ -353,35 +353,30 @@ pub fn compile(
 
 ## Module-Specific Guidelines
 
-### Core Module (`src/core/`)
+The modules and what each may import are in [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)
+("Modules and layers"); `zig build check-layers` enforces them. One line per file:
+[docs/PROJECT_STRUCTURE.md](docs/PROJECT_STRUCTURE.md).
 
-- Define shared types and errors
-- No dependencies on other modules
-- Keep it minimal and stable
+### Front end (`src/frontend/`)
 
-### Compiler Module (`src/compiler/`)
+- The lexer and parser follow ECMA-262 (Annex B without `u`/`v`); cite the spec section
+- Valid syntax that isn't implemented is `error.UnsupportedFeature`, never a wrong result
 
-- Parser must be spec-compliant (ECMAScript)
-- Add references to spec sections in comments
-- Optimize code generation, not parsing speed
+### T0 (`src/tier0/`)
 
-### Executor Module (`src/executor/`)
+- Linear in the subject: no change may add backtracking
+- A change to the DFA (`dfa.zig`) or a fast path runs `zig build dfadiff` (and the gate)
 
-- Optimize for speed (hot path)
-- Inline small functions
-- Profile before optimizing
+### T2 (`src/tier2/`)
 
-### Unicode Module (`src/unicode/`)
+- The backtracker keeps its state on heap stacks, never on the native stack
+- Keep the opcode set stable (`tier2/bytecode/opcodes.zig`); `tests/snapshots/bytecode.txt`
+  pins the code generator's output
 
-- Always reference Unicode version (e.g., Unicode 15.0)
-- Regenerate tables from UCD, don't hand-edit
-- Document table generation process
+### Unicode (`src/unicode/`)
 
-### Bytecode Module (`src/bytecode/`)
-
-- Keep opcode set stable
-- Document binary format precisely
-- Version bytecode format if changed
+- Tables are generated from the UCD (17.0.0 today, `scripts/gen_unicode_tables.py`):
+  regenerate them, don't hand-edit
 
 ## Testing Guidelines
 

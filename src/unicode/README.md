@@ -13,7 +13,7 @@ What's real and tested (see `properties.zig`/`casefold.zig`'s own tests, and the
   `Letter`/`Uppercase_Letter`, or an explicit `gc=`/`General_Category=` prefix) to a
   `UnicodeProperty` enum value, and `isInCategory` answers membership via binary search
   over a sorted, merged range table. Wired into the lexer/parser/codegen/matcher as the
-  `UNICODE_PROPERTY`/`UNICODE_PROPERTY_INV` opcodes (`src/bytecode/opcodes.zig`).
+  `UNICODE_PROPERTY`/`UNICODE_PROPERTY_INV` opcodes (`src/tier2/bytecode/opcodes.zig`).
 - **`\p{Name}` / `\P{Name}` (binary properties)** — every ECMA-262 binary property
   available from `PropList.txt`/`DerivedCoreProperties.txt`/`emoji-data.txt`/
   `UnicodeData.txt` (same mechanism as General_Category above), 50 total:

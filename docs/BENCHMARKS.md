@@ -7,6 +7,95 @@ expression, a T2 case (backreferences, lookaround) only with backtracking engine
 support it. Tiers are never mixed in one table. z-regex 0.7.0, the version of the previous
 publication, runs in the same rounds as a base (see "Against 0.7.0").
 
+## Headline (v0.8.0, execAt)
+
+Reference: V8 warm and Rust regex, the `execAt` tables under "Results", best round. Each
+"×" is the ratio of two cells of the same table, never a number across tables, tiers or
+hosts. Even: within ±10%. The method is under "Setup", the raw tables under "Results".
+
+**T0 (z-regex: T0's DFA, its fast paths, and the tagged VM for groups)**
+
+| Case | Route | vs V8 | vs Rust regex |
+|---|---|---|---|
+| literal `hello` | literal | **7.5× ahead** | 1.48× behind |
+| `[a-z]+` | class run | **2.35× ahead** | **3.2× ahead** |
+| `\d{3}-\d{4}` sparse | Shift-And | 1.67× behind | 3.1× behind |
+| `\d{3}-\d{4}` dense | Shift-And | **2.36× ahead** | **4.85× ahead** |
+| e-mail | DFA | **9.5× ahead** | even (1.06× ahead) |
+| `(\d{3})-(\d{4})` sparse | Shift-And, tagged VM | 3.7× behind | 4.1× behind |
+| `(\d{3})-(\d{4})` dense | Shift-And, tagged VM | 1.96× behind | even (1.04×) |
+| `(?:(a)\|b)*c` | DFA, tagged VM | 1.35× behind | 2.3× behind |
+| book: `Darcy` | literal | **1.56× ahead** | 1.43× behind |
+| book: `[A-Z][a-z]+` | DFA | **1.19× ahead** | **1.98× ahead** |
+| book: `(Mr\|Mrs\|Miss)\.? ([A-Z][a-z]+)` | DFA, tagged VM | **1.55× ahead** | 2.9× behind |
+
+**T1 (`u`/`v`: T0's DFA in code-point mode; `v` on the backtracker)**
+
+| Case | vs V8 | vs Rust regex |
+|---|---|---|
+| `\p{L}+ /u` | **2.0× ahead** | **1.14× ahead** |
+| `\p{Script=Greek}+ /u` | **1.8× ahead** | 1.36× behind |
+| `\p{General_Category=Lu} /u` | **2.5× ahead** | 1.40× behind |
+| `[\p{L}--[a-z]] /v` | 1.35× behind | n/a |
+| book: `\p{L}+ /u` | **3.4× ahead** | **1.69× ahead** |
+
+**T2 (the explicit-stack backtracker; Rust regex has no backreferences or lookaround)**
+
+| Case | vs V8 | vs PCRE2 JIT | vs PCRE2 interp. |
+|---|---|---|---|
+| `<(\w+)>.*?<\/\1>` | 6.5× behind | 7.7× behind | 2.4× behind |
+| `(?=.*[a-z])(?=.*[A-Z]).{8,}` | 5.4× behind | 7.5× behind | 1.18× behind |
+| `(?<=\$)\d+` | 14× behind | 61× behind | 30× behind |
+| book: `\b(\w+) \1\b` | 14× behind | 9.7× behind | 2.4× behind |
+
+**Where z-regex is ahead**
+- **T0's DFA** (0.8.0): the e-mail 9.5× V8, the book's `[A-Z][a-z]+` 1.19× V8 and 1.98× Rust,
+  the book's title pattern 1.55× V8. On T1 every `u` case is ahead of V8 (1.8–3.4×), and
+  `\p{L}+` is ahead of Rust (1.14× on the mixed corpus, 1.69× on the book).
+- **Fast paths:** `[a-z]+` (class run) 2.35× V8 and 3.2× Rust; `\d{3}-\d{4}` on dense digits
+  (Shift-And) 2.36× V8 and 4.85× Rust; the literal `hello` 7.5× V8.
+- **Short inputs** without groups: 20–74 ns on T0, ahead of V8 on every such case (1.4–3.2×)
+  and of Rust on most (`[a-z]+` 20 ns against 83, the e-mail 74 against 85).
+- **Compile time:** 1.4–25 µs on T0 (the e-mail 12.4 µs, the DFA included) against 2.6–198 µs
+  for Rust regex; 6–42 µs on T1 against Rust's 56–325.
+- **Adversarial:** `(a+)+b` runs on T0 (the DFA gives the bounds), a few µs at any n. V8 is exponential (seconds at n = 25–30, killed after 5 s). PCRE2 answers at once when
+  a required character is absent, and on `(a+)+b` over `a^n cb` stops at its match limit
+  (~29 ms JIT, ~190 ms interpreter) with an error instead of an answer.
+
+**Even (±10%):** the e-mail and `(\d{3})-(\d{4})` dense against Rust regex; `[a-z]+` findAll
+against Rust (1.01×).
+
+**The e-mail case.** No longer the worst T0 case: on the DFA (with J and B of 0.7.1 before
+it) the e-mail runs at 758.7 MB/s, 1.06× Rust regex (within the ±10% band, so even) and 9.5×
+V8; it was 19× behind Rust in 0.7.0. Against V8 the worst T0 case is now
+`(\d{3})-(\d{4})` on sparse digits, 3.7× behind (the tagged VM over each match, after
+Shift-And); the worst case of the whole benchmark is T2's lookbehind `(?<=\$)\d+`, 14× behind
+V8 and 61× behind PCRE2 JIT.
+
+**Where it's behind, and why**
+- **Groups on T0** (`(\d{3})-(\d{4})`, `(?:(a)|b)*c`, the title pattern against Rust):
+  1.35–3.7× behind V8, 2.3–4.1× behind Rust. The DFA (or Shift-And) gives the match bounds, and
+  the tagged VM then fills the groups over the span: a second pass, on the Pike VM.
+- **Literals against Rust:** 1.43–1.48× behind (`hello`, `Darcy`). Rust's `memchr` picks the
+  rarest bytes of each needle and the vector width at run time; z-regex searches the first
+  and last bytes in pairs of vectors of a width fixed at build time (AVX2 here).
+- **Sparse `\d{3}-\d{4}`:** 1.67× behind V8 and 3.1× behind Rust: Shift-And steps every
+  byte, where Rust's prefilter skips to the digits.
+- **Short inputs with groups:** 3.4–6.1× behind V8 (e.g. `(\d{3})-(\d{4})` 365 ns against
+  108): the tagged VM's fixed cost per search.
+- **T1 against Rust:** `\p{Script=Greek}+` and `\p{General_Category=Lu}` 1.36–1.40× behind.
+  The DFA decodes UTF-8 one character at a time and looks non-ASCII classes up by binary
+  search over the cuts; Rust's DFA steps bytes. `v` (`[\p{L}--[a-z]]`) still runs on the
+  backtracker.
+- **findAll:** z-regex's facade allocates per match; on dense cases it gives up most of the
+  execAt speed (`[a-z]+` 186 → 56 MB/s, the e-mail 759 → 506). `Regex.iterator` doesn't.
+- **T2:** 5.4–14× behind V8 and 7.5–61× behind PCRE2 JIT, 1.18–30× behind PCRE2's interpreter;
+  unchanged since 0.7.0. The lookbehind case is the worst (14× behind V8): the backward body
+  runs at every position with no prefilter on `$`.
+- **`(?=(a+)+b)`** (a genuine T2 adversarial): z-regex stops at its step budget after ~32 ms
+  with `StepLimitExceeded`: bounded, but not an answer. V8 is exponential; PCRE2 answers at
+  once (required-character shortcut).
+
 ## Setup
 
 | | |
@@ -456,94 +545,6 @@ freeing the results. Putting every `captures` slice in one block (an arena) meas
 In the `literal hello` row the findAll/execAt gap (1.2–1.3× in these tables) is mostly noise:
 a pass takes ~60 µs and each timed sample is one pass; timed over ≥ 150 ms per sample the gap
 is ~1.05×.
-
-## Analysis
-
-Reference: V8 warm and Rust regex, `execAt` column, best round; "×" is a ratio of best
-rounds. Even: within ±10%.
-
-**T0 (z-regex: T0's DFA, its fast paths, and the tagged VM for groups)**
-
-| Case | Route | vs V8 | vs Rust regex |
-|---|---|---|---|
-| literal `hello` | literal | **7.5× ahead** | 1.48× behind |
-| `[a-z]+` | class run | **2.35× ahead** | **3.2× ahead** |
-| `\d{3}-\d{4}` sparse | Shift-And | 1.67× behind | 3.1× behind |
-| `\d{3}-\d{4}` dense | Shift-And | **2.36× ahead** | **4.85× ahead** |
-| e-mail | DFA | **9.5× ahead** | even (1.06× ahead) |
-| `(\d{3})-(\d{4})` sparse | Shift-And, tagged VM | 3.7× behind | 4.1× behind |
-| `(\d{3})-(\d{4})` dense | Shift-And, tagged VM | 1.96× behind | even (1.04×) |
-| `(?:(a)\|b)*c` | DFA, tagged VM | 1.35× behind | 2.3× behind |
-| book: `Darcy` | literal | **1.56× ahead** | 1.43× behind |
-| book: `[A-Z][a-z]+` | DFA | **1.19× ahead** | **1.98× ahead** |
-| book: `(Mr\|Mrs\|Miss)\.? ([A-Z][a-z]+)` | DFA, tagged VM | **1.55× ahead** | 2.9× behind |
-
-**T1 (`u`/`v`: T0's DFA in code-point mode; `v` on the backtracker)**
-
-| Case | vs V8 | vs Rust regex |
-|---|---|---|
-| `\p{L}+ /u` | **2.0× ahead** | **1.14× ahead** |
-| `\p{Script=Greek}+ /u` | **1.8× ahead** | 1.36× behind |
-| `\p{General_Category=Lu} /u` | **2.5× ahead** | 1.40× behind |
-| `[\p{L}--[a-z]] /v` | 1.35× behind | n/a |
-| book: `\p{L}+ /u` | **3.4× ahead** | **1.69× ahead** |
-
-**T2 (the explicit-stack backtracker; Rust regex has no backreferences or lookaround)**
-
-| Case | vs V8 | vs PCRE2 JIT | vs PCRE2 interp. |
-|---|---|---|---|
-| `<(\w+)>.*?<\/\1>` | 6.5× behind | 7.7× behind | 2.4× behind |
-| `(?=.*[a-z])(?=.*[A-Z]).{8,}` | 5.4× behind | 7.5× behind | 1.18× behind |
-| `(?<=\$)\d+` | 14× behind | 61× behind | 30× behind |
-| book: `\b(\w+) \1\b` | 14× behind | 9.7× behind | 2.4× behind |
-
-**Where z-regex is ahead**
-- **T0's DFA** (0.8.0): the e-mail 9.5× V8, the book's `[A-Z][a-z]+` 1.19× V8 and 1.98× Rust,
-  the book's title pattern 1.55× V8. On T1 every `u` case is ahead of V8 (1.8–3.4×), and
-  `\p{L}+` is ahead of Rust (1.14× on the mixed corpus, 1.69× on the book).
-- **Fast paths:** `[a-z]+` (class run) 2.35× V8 and 3.2× Rust; `\d{3}-\d{4}` on dense digits
-  (Shift-And) 2.36× V8 and 4.85× Rust; the literal `hello` 7.5× V8.
-- **Short inputs** without groups: 20–74 ns on T0, ahead of V8 on every such case (1.4–3.2×)
-  and of Rust on most (`[a-z]+` 20 ns against 83, the e-mail 74 against 85).
-- **Compile time:** 1.4–25 µs on T0 (the e-mail 12.4 µs, the DFA included) against 2.6–198 µs
-  for Rust regex; 6–42 µs on T1 against Rust's 56–325.
-- **Adversarial:** `(a+)+b` runs on T0 (the DFA gives the bounds), a few µs at any n. V8 is exponential (seconds at n = 25–30, killed after 5 s). PCRE2 answers at once when
-  a required character is absent, and on `(a+)+b` over `a^n cb` stops at its match limit
-  (~29 ms JIT, ~190 ms interpreter) with an error instead of an answer.
-
-**Even (±10%):** the e-mail and `(\d{3})-(\d{4})` dense against Rust regex; `[a-z]+` findAll
-against Rust (1.01×).
-
-**The e-mail case.** No longer the worst T0 case: on the DFA (with J and B of 0.7.1 before
-it) the e-mail runs at 758.7 MB/s, 1.06× Rust regex (within the ±10% band, so even) and 9.5×
-V8; it was 19× behind Rust in 0.7.0. Against V8 the worst T0 case is now
-`(\d{3})-(\d{4})` on sparse digits, 3.7× behind (the tagged VM over each match, after
-Shift-And); the worst case of the whole benchmark is T2's lookbehind `(?<=\$)\d+`, 14× behind
-V8 and 61× behind PCRE2 JIT.
-
-**Where it's behind, and why**
-- **Groups on T0** (`(\d{3})-(\d{4})`, `(?:(a)|b)*c`, the title pattern against Rust):
-  1.35–3.7× behind V8, 2.3–4.1× behind Rust. The DFA (or Shift-And) gives the match bounds, and
-  the tagged VM then fills the groups over the span: a second pass, on the Pike VM.
-- **Literals against Rust:** 1.43–1.48× behind (`hello`, `Darcy`). Rust's `memchr` picks the
-  rarest bytes of each needle and the vector width at run time; z-regex searches the first
-  and last bytes in pairs of vectors of a width fixed at build time (AVX2 here).
-- **Sparse `\d{3}-\d{4}`:** 1.67× behind V8 and 3.1× behind Rust: Shift-And steps every
-  byte, where Rust's prefilter skips to the digits.
-- **Short inputs with groups:** 3.4–6.1× behind V8 (e.g. `(\d{3})-(\d{4})` 365 ns against
-  108): the tagged VM's fixed cost per search.
-- **T1 against Rust:** `\p{Script=Greek}+` and `\p{General_Category=Lu}` 1.36–1.40× behind.
-  The DFA decodes UTF-8 one character at a time and looks non-ASCII classes up by binary
-  search over the cuts; Rust's DFA steps bytes. `v` (`[\p{L}--[a-z]]`) still runs on the
-  backtracker.
-- **findAll:** z-regex's facade allocates per match; on dense cases it gives up most of the
-  execAt speed (`[a-z]+` 186 → 56 MB/s, the e-mail 759 → 506). `Regex.iterator` doesn't.
-- **T2:** 5.4–14× behind V8 and 7.5–61× behind PCRE2 JIT, 1.18–30× behind PCRE2's interpreter;
-  unchanged since 0.7.0. The lookbehind case is the worst (14× behind V8): the backward body
-  runs at every position with no prefilter on `$`.
-- **`(?=(a+)+b)`** (a genuine T2 adversarial): z-regex stops at its step budget after ~32 ms
-  with `StepLimitExceeded`: bounded, but not an answer. V8 is exponential; PCRE2 answers at
-  once (required-character shortcut).
 
 ## Notes
 
