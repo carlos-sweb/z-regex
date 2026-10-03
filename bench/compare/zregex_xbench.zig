@@ -87,6 +87,9 @@ fn engineName(re: zregex.Regex) []const u8 {
     const tagged = p.nslots > 2 or for (p.insts) |inst| {
         if (inst == .fail) break true;
     } else false;
+    // T0-A: the DFA gives the bounds (a tagged program's groups, the
+    // tagged VM over the span).
+    if (p.dfa != null) return if (tagged) "DFA, tagged VM" else "DFA";
     return if (tagged) "tagged VM" else "VM";
 }
 

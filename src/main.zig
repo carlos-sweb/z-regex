@@ -44,7 +44,7 @@ const std = @import("std");
 // =============================================================================
 
 /// The package version.
-pub const version = "0.7.1";
+pub const version = "0.8.0";
 
 /// A compiled pattern: compile once, match many times (`compile`,
 /// `compileWithOptions`, `find`, `findAll`, `execAt`, `iterator`,

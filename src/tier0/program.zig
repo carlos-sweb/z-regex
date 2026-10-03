@@ -6,6 +6,8 @@ const std = @import("std");
 const Allocator = std.mem.Allocator;
 const CharSet = @import("ir").charset.CharSet;
 const Prefilter = @import("prefilter.zig").Prefilter;
+const DfaSkip = @import("prefilter.zig").DfaSkip;
+const Dfa = @import("dfa.zig").Dfa;
 
 pub const Assert = enum {
     /// `^` without `m`: position 0.
@@ -101,8 +103,15 @@ pub const Program = struct {
     /// Fast paths and the start-position skip (`prefilter.zig`); empty when
     /// compiled without them.
     prefilter: Prefilter = .{},
+    /// The DFA (`dfa.zig`, T0-A phase 1): built with the prefilters for a
+    /// program without asserts whose route isn't a fast path, within the
+    /// cap; null otherwise (the VM runs).
+    dfa: ?*const Dfa = null,
+    /// The skip the DFA uses in its start state (`prefilter.dfaSkip`).
+    dfa_skip: DfaSkip = .none,
 
     pub fn deinit(self: Program, gpa: Allocator) void {
+        if (self.dfa) |d| d.deinit(gpa);
         self.prefilter.deinit(gpa);
         gpa.free(self.closures);
         gpa.free(self.follow);

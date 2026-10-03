@@ -130,6 +130,38 @@ pub fn analyze(gpa: Allocator, root: *const hir.Node, prog: *const Program) Allo
     return pf;
 }
 
+/// Whether a program with this prefilter gets a DFA (T0-A): not when a
+/// fast path serves it whole (`literal`, `class_run`, `shift_and` run
+/// before the DFA). An anchored one does (A phase 2): its search is the
+/// forward DFA at index 0. Code-unit mode only: a `u`/`v` program has no
+/// prefilters and gets a DFA when eligible (A phase 3).
+pub fn wantsDfa(pf: *const Prefilter) bool {
+    return switch (pf.kind) {
+        .literal, .class_run, .shift_and => false,
+        .first, .inner, .none => true,
+    };
+}
+
+/// The skip the DFA uses in its unanchored start state: `inner` always;
+/// `first` only when it admits few units (at most `selective_first` bytes
+/// of 256 in WTF-8, no unit from 256 up in UTF-16), since on a text where
+/// most units can start a match it only adds a test per position.
+pub const DfaSkip = enum { none, first, inner };
+
+pub const selective_first = 32;
+
+pub fn dfaSkip(pf: *const Prefilter) DfaSkip {
+    return switch (pf.kind) {
+        .inner => .inner,
+        .first => |*f| blk: {
+            var n: usize = 0;
+            for (f.utf8) |b| n += @intFromBool(b);
+            break :blk if (n <= selective_first and !f.high) .first else .none;
+        },
+        else => .none,
+    };
+}
+
 /// The root scope's body and flags.
 fn body(root: *const hir.Node) struct { *const hir.Node, hir.Flags } {
     return switch (root.*) {

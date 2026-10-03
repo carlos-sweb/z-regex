@@ -324,9 +324,10 @@ test "execAt on the VM: a warm composite scratch allocates nothing" {
     // Routing to the VM: not in the forced-backtracker run (F4a(5)).
     if (zregex.internal.force_backtracker) return error.SkipZigTest;
     const a = testing.allocator;
-    var re = try zregex.Regex.compile(a, "a+b|c");
+    // Without prefilters, so no DFA (T0-A): the VM runs.
+    var re = try zregex.Regex.compileWithOptions(a, "a+b|c", .{ .t0_prefilters = false });
     defer re.deinit();
-    try testing.expect(re.t0 != null);
+    try testing.expect(re.t0 != null and re.t0.?.dfa == null);
     var failing: std.testing.FailingAllocator = .init(a, .{});
     var scratch = zregex.Scratch.init(failing.allocator());
     defer scratch.deinit();
@@ -457,6 +458,13 @@ test "prefilters: which one each pattern gets" {
     try testing.expectEqual(.shift_and, try prefilterKind("\\d{3}-\\d{4}"));
     try testing.expectEqual(.shift_and, try prefilterKind("(\\d{3})-(\\d{4})"));
     try testing.expectEqual(.inner, try prefilterKind("[\\w.+-]+@[\\w-]+\\.[\\w.]+"));
+    {
+        // T0-A phase 1: the e-mail runs on the DFA, with B's skip.
+        const re = try zregex.Regex.compile(testing.allocator, "[\\w.+-]+@[\\w-]+\\.[\\w.]+");
+        defer re.deinit();
+        try testing.expect(re.t0.?.dfa != null);
+        try testing.expectEqual(.inner, re.t0.?.dfa_skip);
+    }
     // A single first byte keeps `first`, even with a required inner ` `.
     try testing.expectEqual(.first, try prefilterKind("Mr\\.? [A-Z][a-z]+"));
     try testing.expectEqual(.none, try prefilterKind("a?"));
@@ -488,11 +496,11 @@ test "fast paths never touch the VM scratch" {
     defer scratch.deinit();
     var buf: [2]?usize = undefined;
     var out: zregex.MatchSlots = .{ .slots = &buf };
-    for ([_][]const u8{ "hello", "[a-z]+", "\\d*", "\\d{3}-\\d{4}" }) |p| {
+    for ([_][]const u8{ "hello", "[a-z]+", "\\d*", "\\d{3}-\\d{4}", "[\\w.+-]+@[\\w-]+\\.[\\w.]+", "[A-Z][a-z]+" }) |p| {
         var re = try zregex.Regex.compile(testing.allocator, p);
         defer re.deinit();
         const kind = std.meta.activeTag(re.t0.?.prefilter.kind);
-        try testing.expect(kind == .literal or kind == .class_run or kind == .shift_and);
+        try testing.expect(kind == .literal or kind == .class_run or kind == .shift_and or re.t0.?.dfa != null);
         _ = try re.execAt(.{ .wtf8 = "say hello 123" }, 0, &scratch, &out, .{});
         const s16 = [_]u16{ 'h', 'e', 'l', 'l', 'o' };
         _ = try re.execAt(.{ .utf16 = &s16 }, 0, &scratch, &out, .{});

@@ -1,11 +1,13 @@
 # History - zregex
 
 The record of how zregex got where it is: what each phase (F1 to F7c) changed, measured
-and fixed, and the bugs found on the way, up to 0.7.1. It is the body of
+and fixed, and the bugs found on the way, up to 0.8.0. It is the body of
 `KNOWN_LIMITATIONS.md` up to F7c-4b, kept as it was written; the later phases of 0.7.0
 (F7c-5 to F7c-8, documentation and benchmarks) are in `docs/plans/F7c.md` and
 `docs/RELEASE_NOTES_v0.7.0.md`, and 0.7.1's T0 throughput work (J, C and B) in
-`docs/plans/T0-J.md`, `docs/plans/T0-CB.md` and `docs/RELEASE_NOTES_v0.7.1.md`.
+`docs/plans/T0-J.md`, `docs/plans/T0-CB.md` and `docs/RELEASE_NOTES_v0.7.1.md`, and 0.8.0's
+DFA (T0-A) in `docs/plans/T0-A.md`, `docs/plans/T0-A-precheck.md` and
+`docs/RELEASE_NOTES_v0.8.0.md`.
 
 **What applies today is in [LIMITATIONS.md](LIMITATIONS.md)**, and the API contract in
 [API.md](API.md). Here, a paragraph describes the engine of its own phase: file paths,

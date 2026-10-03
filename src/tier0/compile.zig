@@ -27,6 +27,7 @@ const Program = program.Program;
 const Inst = program.Inst;
 const Set = program.Set;
 const prefilter = @import("prefilter.zig");
+const dfa = @import("dfa.zig");
 
 /// Why a pattern stays on the backtracker in F4a.
 pub const Ineligible = enum {
@@ -137,6 +138,12 @@ pub const Options = struct {
     /// The prefilters and fast paths (`prefilter.zig`). Off only for tests
     /// and the bench, to measure and compare the plain VM.
     prefilters: bool = true,
+    /// A `u`/`v` program (code-point mode, F5a): no prefilters (they hold in
+    /// code-unit mode only), but a DFA in code-point mode (A phase 3) when
+    /// `dfa` is on too.
+    code_point: bool = false,
+    /// The DFA. Off only for tests and the bench, with `prefilters`.
+    dfa: bool = true,
     /// F4b's program (docs/REGEX_TIERS_PLAN.md §6.5): capture groups
     /// (`save`), their reset at each iteration (`clear`), and optional
     /// iterations of nullable bodies through the phase product (D3), with
@@ -187,7 +194,16 @@ pub fn compileAccepted(gpa: Allocator, root: *const hir.Node, options: Options) 
     if (root.* == .modifier_scope) prog.word_ci = root.modifier_scope.flags.ignore_case;
     errdefer prog.deinit(gpa);
     try buildClosures(gpa, &prog);
-    if (options.prefilters) prog.prefilter = try prefilter.analyze(gpa, root, &prog);
+    if (options.code_point) {
+        // No skip: `first` and `inner` look at code units.
+        if (options.dfa and dfa.eligible(&prog)) prog.dfa = try dfa.build(gpa, &prog, .code_point);
+    } else if (options.prefilters) {
+        prog.prefilter = try prefilter.analyze(gpa, root, &prog);
+        if (options.dfa and prefilter.wantsDfa(&prog.prefilter) and dfa.eligible(&prog)) {
+            prog.dfa = try dfa.build(gpa, &prog, .code_unit);
+            prog.dfa_skip = prefilter.dfaSkip(&prog.prefilter);
+        }
+    }
     return prog;
 }
 
@@ -662,6 +678,50 @@ test "C: which programs take the Shift-And fast path" {
     const caret: hir.Node = .{ .assert = .caret };
     const anchored: hir.Node = .{ .seq = &.{ &caret, &three } };
     try testing.expectEqual(.first, try kindOf(&anchored, false));
+}
+
+test "A: which programs get a DFA" {
+    const hasDfa = struct {
+        fn f(root: *const hir.Node, options: Options) !bool {
+            const p = try compileWith(testing.allocator, root, options);
+            defer p.deinit(testing.allocator);
+            return p.dfa != null;
+        }
+    }.f;
+    const lower: hir.Node = .{ .char_set = .{ .set = .{ .ranges = &.{.{ .lo = 'a', .hi = 'z' }} }, .inverted = false, .encoding_hint = .set } };
+    const plus: hir.Node = .{ .repeat = .{ .min = 1, .max = null, .policy = .greedy, .syntax_form = .plus, .body = &lower } };
+    const at = lit("@");
+    const email: hir.Node = .{ .seq = &.{ &plus, &at, &plus } };
+    try testing.expect(try hasDfa(&email, .{}));
+    // With groups too: the DFA gives the bounds.
+    const g: hir.Node = .{ .capture = .{ .index = 1, .name = null, .body = &plus } };
+    const grouped: hir.Node = .{ .seq = &.{ &g, &at, &plus } };
+    try testing.expect(try hasDfa(&grouped, .{ .tagged = true }));
+    // Not without prefilters (in code-unit mode), nor with the diagnostic
+    // switch, not on a fast path.
+    try testing.expect(!try hasDfa(&email, .{ .prefilters = false }));
+    try testing.expect(!try hasDfa(&email, .{ .dfa = false }));
+    try testing.expect(!try hasDfa(&plus, .{}));
+    const ab = lit("ab");
+    try testing.expect(!try hasDfa(&ab, .{}));
+    // With asserts (A phase 2), anchored ones included.
+    const wb: hir.Node = .{ .assert = .word_boundary };
+    const bounded: hir.Node = .{ .seq = &.{ &wb, &plus, &at } };
+    try testing.expect(try hasDfa(&bounded, .{}));
+    const caret: hir.Node = .{ .assert = .caret };
+    const anchored: hir.Node = .{ .seq = &.{ &caret, &plus, &at } };
+    try testing.expect(try hasDfa(&anchored, .{}));
+    // `u`/`v` (A phase 3): every eligible program, fast paths included (they
+    // hold in code-unit mode only), in code-point mode and without a skip;
+    // none with the diagnostic switch.
+    for ([_]*const hir.Node{ &email, &plus, &ab, &bounded }) |root| {
+        const p = try compileWith(testing.allocator, root, .{ .code_point = true });
+        defer p.deinit(testing.allocator);
+        try testing.expectEqual(.code_point, p.dfa.?.mode);
+        try testing.expectEqual(prefilter.DfaSkip.none, p.dfa_skip);
+        try testing.expect(p.prefilter.kind == .none);
+        try testing.expect(!try hasDfa(root, .{ .code_point = true, .dfa = false }));
+    }
 }
 
 test "C: compile with a Shift-And table doesn't leak on allocation failure" {

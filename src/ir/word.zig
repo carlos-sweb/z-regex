@@ -13,6 +13,8 @@ const word_fold = @import("word_fold.zig");
 
 /// How many code points the extended set adds.
 pub const extra_count = word_fold.extra.len;
+/// The extended word characters beyond ASCII (`isWordChar(_, true)`).
+pub const extra = word_fold.extra;
 
 /// Whether `cp` is a word character; `extended` under `u`/`v` + `i`.
 pub fn isWordChar(cp: u32, extended: bool) bool {
