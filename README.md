@@ -4,7 +4,7 @@ An ECMA-262 regular expression engine in Zig, independent of the JavaScript engi
 
 [![Zig 0.16+](https://img.shields.io/badge/zig-0.16%2B-orange)](https://ziglang.org/)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
-[![test262](https://img.shields.io/badge/test262-2994%2F3017%20run%2C%20821%20skipped-blue)](#compatibility)
+[![test262](https://img.shields.io/badge/test262-3087%2F3110%20run%2C%20728%20skipped-blue)](#compatibility)
 [![T0](https://img.shields.io/badge/T0-complete-green)](docs/REGEX_TIERS_PLAN.md)
 
 ## What it is
@@ -26,16 +26,17 @@ An ECMA-262 regular expression engine in Zig, independent of the JavaScript engi
 
 ## Status
 
-- **T0 (regular patterns): complete.** A Pike VM without captures and a tagged VM with
-  captures, both linear in the input.
+- **T0 (regular patterns): complete.** Linear in the input: fast paths (literal, class run,
+  Shift-And), a forward and a reverse DFA built at compile time within a cap (since 0.8.0),
+  and a Pike VM without captures and a tagged VM with captures for the rest and for groups.
 - **T1 (Unicode: `u`/`v`, `\p{…}`, full case folding): in development (F5).** Since F5a, `u`
-  and `\p{…}` run on T0's linear VM (code-point mode); since F5b, so does case folding
-  under `i` (with and without `u`). `v` (F5c) still runs on the backtracker.
+  and `\p{…}` run on T0 in code-point mode (the DFA too since 0.8.0); since F5b, so does
+  case folding under `i` (with and without `u`). `v` (F5c) still runs on the backtracker.
 - **T2 (backreferences, lookaround): on the explicit-stack backtracker**, with a step budget.
   Lookbehind: fixed length without captures (F6b step 1), and outside `u`/`v` any other
   without a lookaround inside, captures and backreferences included (F6b(1)-(3)); the rest
   is `error.UnsupportedFeature`.
-- **test262: 2994 of the 3017 entries that run (99.2%); 821 are skipped**, most of them
+- **test262: 3087 of the 3110 entries that run (99.3%); 728 are skipped**, most of them
   features zregex doesn't implement (`v`, RegExp modifiers): see Compatibility.
 - **Divergences from V8** in the differential: 0 different results; 2 patterns hit the step
   limit (T2).
@@ -207,19 +208,19 @@ against V8, Rust regex, PCRE2 and zig-regex.
 
 ## Compatibility
 
-- **test262: 2994 of the 3017 entries that run (99.2%)**, the same status with UTF-16 and
+- **test262: 3087 of the 3110 entries that run (99.3%)**, the same status with UTF-16 and
   WTF-8 subjects. Baseline: `scripts/test262/baseline.json`. The 23 that run and don't pass:
   4 lookbehind entries that are `UnsupportedFeature` (2 with a lookaround inside a backward
   lookbehind, `nested-lookaround`, a 1.x decision; 2 under `u`, `named-groups/lookbehind`),
   4 host (JS lexer) and 15 not extractable.
-- **821 test262 entries are skipped** and are not in 2994/3017:
+- **728 test262 entries are skipped** and are not in 3087/3110:
 
   | Skipped | Entries | Why |
   |---|---|---|
-  | `v` flag | 312 | Partial in zregex (F5c); the harness skips the feature |
+  | `v` flag | 219 | Partial in zregex (F5c). The 93 entries of the part that works run (`scripts/test262/v-subset.json`); of the rest, 192 are `UnsupportedFeature` (F5c) and 26 the laxity under `v` (see LIMITATIONS) |
   | RegExp modifiers (ES2025) | 377 | Not implemented, pending until further notice; the harness's Node (22) lacks them too |
   | Duplicate named groups | 24 | Implemented; the harness's Node lacks them. With Node 24 every `named-groups` entry passes except the variable-length lookbehind one |
-  | `RegExp.escape` | 40 | A host function; its tests don't exercise zregex |
+  | `RegExp.escape` | 40 | A built-in function of ECMA-262 (ES2025), not pattern syntax: its tests exercise the host's `RegExp.escape`, not matching. zregex has no `escape` helper (1.x) |
   | Legacy RegExp (Annex B statics) | 52 | Host |
   | Fail in V8 itself / host flag validation | 16 | Host |
 - **`differential-v8`** against `tests/differential/reference/diff-F7a.json`: 0 new, 0 gone,

@@ -6,10 +6,13 @@ what a release promises is in [API.md](API.md).
 
 ## Status
 
-- **test262:** 2994 of the 3017 entries that run pass (99.2 %), in UTF-16 and in WTF-8;
-  821 are skipped: 509 by the harness (its runner, or a feature its Node lacks, such as
-  the 377 of RegExp modifiers) and 312 for a feature zregex doesn't have yet
-  (`scripts/test262/features.json`). Of the 23 that run and don't pass: 4 are lookbehinds
+- **test262:** 3087 of the 3110 entries that run pass (99.3 %), in UTF-16 and in WTF-8;
+  728 are skipped: 509 by the harness (its runner, or a feature its Node lacks, such as
+  the 377 of RegExp modifiers) and 219 of the `v` flag (`scripts/test262/features.json`).
+  Of the `v` flag's 314 entries, the 93 of the engine suite that pass run
+  (`v-subset.json`); the rest: 192 `UnsupportedFeature` (F5c), 26 the laxity under `v`
+  (below), 1 host, and 2 of the host suite
+  (they pass; that suite isn't in the count). Of the 23 that run and don't pass: 4 are lookbehinds
   zregex rejects as `UnsupportedFeature` (2 `nested-lookaround`, 2 under `u` in
   `named-groups/lookbehind`), 4 fail in the JS lexer (host), 15 can't be extracted.
 - **Against V8:** `zig build differential-v8` (4,000 generated patterns), `lbdiff-v8`
@@ -131,7 +134,7 @@ hasn't participated yet matches empty (`(?<=(\w)\1)x` on `"aax"` gives `[2,3]`, 
 `(?i:…)`, `(?-m:…)` and the other forms of ES2025's modifiers are not implemented:
 `(?i:a)` is `error.UnsupportedFeature`. Decision (2026-09-29): pending until further
 notice, not on the way to 1.0. Their 377 test262 entries are skipped because the
-harness's Node lacks the feature, so they are not counted in 2994/3017. What exists and
+harness's Node lacks the feature, so they are not counted in 3087/3110. What exists and
 what is missing: `docs/plans/F7.md`, "Decisiones", 4.
 
 ## `v` with `i`
