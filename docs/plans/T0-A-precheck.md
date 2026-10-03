@@ -502,4 +502,22 @@ Esta máquina mide más lento que la de los §11-13; las dos columnas se midiero
 - ReleaseFast 1.211.904 B (+3.104 frente a `fbdac3a`);
 - ReleaseSmall 751.528 B (+1.072).
 
+**Fix del griego** (`Dfa.decodeBack`):
+- **El cambio:** el inverso lee en línea las secuencias WTF-8 bien formadas de 2 y 3 bytes, y las de 4 en modo code point. El resto sigue por `decodeBefore`. Un test lo compara con `decodeBefore` en todas las posiciones de un texto con secuencias raras, en los dos modos.
+- **La causa medida antes:** en el griego, el inverso costaba 34,2 M instrucciones, de ellas 21,5 M (63 %) en `decodeBefore`.
+- **Callgrind del griego:** 67,7 M → 46,3 M instrucciones; la fase 2 hacía 50,4 M. El inverso baja de 34,2 M a 12,7 M.
+- **Bench** (la mejor de 10 intercaladas, MB/s; fase 2 → `f087db5` → fix):
+
+  | Patrón | Fase 2 | `f087db5` | Fix | Fix / fase 2 |
+  |---|---|---|---|---|
+  | `\p{L}+` | 44,7 | 89,6 | 92,1 | 2,06× |
+  | `\p{Script=Greek}+` | 44,8 | 29,9 | 47,5 | **1,06×** |
+  | `[\p{L}\p{N}_]+` | 50,8 | 118,6 | 120,9 | 2,38× |
+  | `\b\p{L}+\b` | 17,3 | 80,8 | 80,5 | 4,65× |
+
+- **Lo que queda en el griego** es la ida (`decodeAt`, 15,0 M).
+- **Programas que se benefician (cota):** los DFAs con miembros no ASCII, 3.330 de 4.349 en `u`/`v` y 14.633 de 21.301 en code unit (incluye `.` y las clases negadas). Code unit gana en texto no ASCII con 2 y 3 bytes.
+- **Corrección:** tablas y diferenciales idénticos; GATE-PASS.
+- **Binario:** ReleaseFast 1.212.544 B (+640 frente a `f087db5`) y ReleaseSmall 752.104 B (+576).
+
 **Deuda aparte:** Construcción diferida del DFA (lazy build, o abaratar el interning de estados). Afecta a code unit y a code point. No es de fase 3.
