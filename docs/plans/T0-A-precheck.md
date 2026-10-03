@@ -520,4 +520,20 @@ Esta máquina mide más lento que la de los §11-13; las dos columnas se midiero
 - **Corrección:** tablas y diferenciales idénticos; GATE-PASS.
 - **Binario:** ReleaseFast 1.212.544 B (+640 frente a `f087db5`) y ReleaseSmall 752.104 B (+576).
 
+**Fix 2 del griego** (`Dfa.decodeFwd`):
+- **El cambio:** la ida lee en línea las secuencias WTF-8 bien formadas de 2 y 3 bytes, y las de 4 en modo code point. El resto sigue por `decodeAt`. Un test lo compara con `decodeAt` en todas las posiciones de un texto con secuencias raras, en los dos modos y con secuencias truncadas al final.
+- **Callgrind del griego:** 46,3 M → 31,5 M instrucciones; la fase 2 hacía 50,4 M. La ida sin el inverso baja de 29,6 M a 14,7 M.
+- **Bench** (la mejor de 10 intercaladas, MB/s; fase 2 → `6bae4fd` → fix 2):
+
+  | Patrón | Fase 2 | `6bae4fd` | Fix 2 | Fix 2 / fase 2 |
+  |---|---|---|---|---|
+  | `\p{L}+` | 45,2 | 91,2 | 96,8 | 2,14× |
+  | `\p{Script=Greek}+` | 46,4 | 48,0 | 88,7 | **1,91×** |
+  | `[\p{L}\p{N}_]+` | 51,0 | 121,1 | 123,4 | 2,42× |
+  | `\b\p{L}+\b` | 17,4 | 80,7 | 82,6 | 4,75× |
+
+- **Code unit** frente a `fbdac3a`: entre 0,94× y 1,33×.
+- **Corrección:** tablas y diferenciales idénticos; GATE-PASS.
+- **Binario:** ReleaseFast 1.214.560 B (+2.016 frente a `6bae4fd`) y ReleaseSmall 754.152 B (+2.048).
+
 **Deuda aparte:** Construcción diferida del DFA (lazy build, o abaratar el interning de estados). Afecta a code unit y a code point. No es de fase 3.

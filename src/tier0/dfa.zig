@@ -146,6 +146,37 @@ pub const Dfa = struct {
         return if (Unit == u8) .{ .wtf8 = input } else .{ .utf16 = input };
     }
 
+    /// `decodeAt(mode, pos)` for the forward DFAs, the character starting
+    /// at `pos < len` with a non-ASCII first unit. In WTF-8 the well-formed
+    /// 2- and 3-byte sequences (and 4-byte ones in code-point mode) are
+    /// read in place: `decodeAt` tries `midOf` and `seqAt`. A lead byte at
+    /// `pos` is never a `b+2` (that one is a continuation byte), and every
+    /// other byte goes the general way.
+    inline fn decodeFwd(mode: Mode, comptime Unit: type, input: []const Unit, pos: usize) Decoded {
+        if (Unit == u8) {
+            const b0 = input[pos];
+            const n = input.len - pos;
+            if (b0 >= 0xC2 and b0 <= 0xDF) {
+                if (n >= 2 and input[pos + 1] & 0xC0 == 0x80)
+                    return .{ .value = (@as(u32, b0 & 0x1F) << 6) | (input[pos + 1] & 0x3F), .pos = pos + 2 };
+            } else if (b0 >= 0xE0 and b0 <= 0xEF) {
+                if (n >= 3) {
+                    const b1 = input[pos + 1];
+                    const b2 = input[pos + 2];
+                    if (b1 & 0xC0 == 0x80 and b2 & 0xC0 == 0x80 and (b0 != 0xE0 or b1 >= 0xA0))
+                        return .{ .value = (@as(u32, b0 & 0x0F) << 12) | (@as(u32, b1 & 0x3F) << 6) | (b2 & 0x3F), .pos = pos + 3 };
+                }
+            } else if (mode == .code_point and b0 >= 0xF0 and b0 <= 0xF4 and n >= 4) {
+                const b1 = input[pos + 1];
+                const b2 = input[pos + 2];
+                const b3 = input[pos + 3];
+                if (b1 & 0xC0 == 0x80 and b2 & 0xC0 == 0x80 and b3 & 0xC0 == 0x80 and (b0 != 0xF0 or b1 >= 0x90) and (b0 != 0xF4 or b1 <= 0x8F))
+                    return .{ .value = (@as(u32, b0 & 0x07) << 18) | (@as(u32, b1 & 0x3F) << 12) | (@as(u32, b2 & 0x3F) << 6) | (b3 & 0x3F), .pos = pos + 4 };
+            }
+        }
+        return subjectOf(Unit, input).decodeAt(mode, pos).?;
+    }
+
     /// `decodeBefore(mode, pos)` for the reverse DFAs, the character
     /// ending at `pos > 0` whose last unit is not ASCII. In WTF-8 the
     /// well-formed 2- and 3-byte sequences (and 4-byte ones in code-point
@@ -198,7 +229,7 @@ pub const Dfa = struct {
                 st = ft[st + self.ascii[u]];
                 pos += 1;
             } else {
-                const d = subjectOf(Unit, input).decodeAt(self.mode, pos).?;
+                const d = decodeFwd(self.mode, Unit, input, pos);
                 st = ft[st + self.classOf(d)];
                 pos = d.pos;
             }
@@ -647,7 +678,7 @@ pub const Ctx = struct {
                 e = ft[st + d.ascii[u]];
                 to = pos + 1;
             } else {
-                const x = Dfa.subjectOf(Unit, input).decodeAt(d.mode, pos).?;
+                const x = Dfa.decodeFwd(d.mode, Unit, input, pos);
                 e = ft[st + d.classOf(x)];
                 to = x.pos;
             }
@@ -1450,6 +1481,26 @@ test "decodeBack: decodeBefore at every position of odd WTF-8" {
         for (1..text.len + 1) |pos| {
             if (!subj.isPosition(pos) or text[pos - 1] < 0x80) continue;
             try testing.expectEqual(subj.decodeBefore(mode, pos).?, Dfa.decodeBack(mode, u8, text, pos));
+        }
+    }
+}
+
+test "decodeFwd: decodeAt at every position of odd WTF-8" {
+    const body = "a\xC3\xA9\xCE\xB1\xE2\x82\xAC\xED\x9F\xBF\xED\xA0\x80\xED\xB0\x80\xEF\xBF\xBF\xF0\x9F\x98\x80" ++
+        "\xF4\x8F\xBF\xBF\xF4\x90\x80\x80\xE0\x80\x80\xE0\xA0\x80\xC0\x80\xC1\xBF\xF0\x80\x80\x80\xF5\x80\x80\x80" ++
+        "\x80\xBF\xC3\xE2\x82\xF0\x9F\x98\xFFz\xED\xA0\x80\xED\xB0\x80\xF0\x9F\x98\x80\x80";
+    // Each truncated sequence again at the very end of the text.
+    for ([_][]const u8{ "", "\xC3", "\xE2\x82", "\xF0\x9F\x98", "\xCE\xB1", "\xF0\x9F\x98\x80" }) |tail| {
+        var buf: [256]u8 = undefined;
+        @memcpy(buf[0..body.len], body);
+        @memcpy(buf[body.len..][0..tail.len], tail);
+        const text = buf[0 .. body.len + tail.len];
+        const subj: Subject = .{ .wtf8 = text };
+        for ([_]Mode{ .code_unit, .code_point }) |mode| {
+            for (0..text.len) |pos| {
+                if (!subj.isPosition(pos) or text[pos] < 0x80) continue;
+                try testing.expectEqual(subj.decodeAt(mode, pos).?, Dfa.decodeFwd(mode, u8, text, pos));
+            }
         }
     }
 }
