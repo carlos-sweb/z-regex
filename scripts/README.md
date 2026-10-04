@@ -109,9 +109,11 @@ case-folding classes of `i` with `u` (simple folding, statuses C and S) and with
 (ECMA-262's Canonicalize: the full `toUppercase` when it is one code unit and doesn't
 take a code point >= 128 below 128), each property's closure delta, and, with
 `--word-out`, `src/ir/word_fold.zig` (the non-ASCII word characters of `u` + `i`). Since
-F5c 2b it reads the emoji data's `emoji-sequences.txt` (emoji 17.0): the strings of
-`Emoji_Keycap_Sequence` (`SEQ_EMOJI_KEYCAP_SEQUENCE`), the property of strings of `v`
-implemented so far. A regeneration from the same files must reproduce both files byte for
+F5c 2b/2c it reads the emoji data's `emoji-sequences.txt` and `emoji-zwj-sequences.txt`
+(emoji 17.0): the seven properties of strings of `v`, as two compact tables
+(`StringTable`: a dictionary of code points, the strings as `u16` indices, sorted per
+property; `KEYCAP_STRINGS` and `EMOJI_STRINGS`, so that `-Dproperties_of_strings=false`
+links only the first). A regeneration from the same files must reproduce both files byte for
 byte.
 
 ```bash
@@ -120,11 +122,11 @@ cd /tmp && for f in UnicodeData.txt PropList.txt DerivedCoreProperties.txt emoji
     Scripts.txt PropertyValueAliases.txt ScriptExtensions.txt PropertyAliases.txt DerivedNormalizationProps.txt \
     CaseFolding.txt SpecialCasing.txt; do
   curl -sSfo "$(basename $f)" "$B/ucd/17.0.0/$f"; done
-curl -sSfo emoji-sequences.txt "$B/emoji/17.0/emoji-sequences.txt"; cd -
+for f in emoji-sequences.txt emoji-zwj-sequences.txt; do curl -sSfo "$f" "$B/emoji/17.0/$f"; done; cd -
 python3 scripts/gen_unicode_tables.py /tmp/UnicodeData.txt /tmp/PropList.txt /tmp/DerivedCoreProperties.txt \
   /tmp/emoji-data.txt /tmp/Scripts.txt /tmp/PropertyValueAliases.txt /tmp/ScriptExtensions.txt \
   /tmp/PropertyAliases.txt /tmp/DerivedNormalizationProps.txt /tmp/CaseFolding.txt /tmp/SpecialCasing.txt \
-  /tmp/emoji-sequences.txt --word-out src/ir/word_fold.zig > src/unicode/tables.zig
+  /tmp/emoji-sequences.txt /tmp/emoji-zwj-sequences.txt --word-out src/ir/word_fold.zig > src/unicode/tables.zig
 zig build test
 ```
 

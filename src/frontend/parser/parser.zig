@@ -20,6 +20,7 @@ const Allocator = std.mem.Allocator;
 const lexer_mod = @import("lexer.zig");
 const ast_mod = @import("ast.zig");
 const properties = @import("unicode").properties;
+const build_options = @import("build_options");
 
 const Lexer = lexer_mod.Lexer;
 const Token = lexer_mod.Token;
@@ -740,29 +741,18 @@ pub const Parser = struct {
 
         const category = properties.resolveUnicodeProperty(name) orelse {
             // A property of strings is valid only under `v`, not negated;
-            // elsewhere it is a SyntaxError. Of the seven, the ones without
-            // data yet are UnsupportedFeature (F5c).
+            // elsewhere it is a SyntaxError. A build without them
+            // (`-Dproperties_of_strings=false`) keeps Emoji_Keycap_Sequence
+            // and makes the other six UnsupportedFeature.
             if (self.lexer.v_mode and !negated) {
-                if (properties.resolveStringProperty(name)) |prop| return Node.createStringProperty(self.allocator, @intFromEnum(prop));
-                if (isPropertyOfStrings(name)) return error.UnsupportedFeature;
+                if (properties.resolveStringProperty(name)) |prop| {
+                    if (!build_options.properties_of_strings and prop != .Emoji_Keycap_Sequence) return error.UnsupportedFeature;
+                    return Node.createStringProperty(self.allocator, @intFromEnum(prop));
+                }
             }
             return error.UnknownUnicodeProperty;
         };
         return Node.createUnicodeProperty(self.allocator, @intFromEnum(category), negated);
-    }
-
-    /// The binary Unicode properties of strings (ECMA-262, table "Binary
-    /// Unicode property aliases for properties of strings"), valid only
-    /// under `v`.
-    fn isPropertyOfStrings(name: []const u8) bool {
-        const names = [_][]const u8{
-            "Basic_Emoji",                 "Emoji_Keycap_Sequence",
-            "RGI_Emoji_Modifier_Sequence", "RGI_Emoji_Flag_Sequence",
-            "RGI_Emoji_Tag_Sequence",      "RGI_Emoji_ZWJ_Sequence",
-            "RGI_Emoji",
-        };
-        for (names) |n| if (std.mem.eql(u8, n, name)) return true;
-        return false;
     }
 
     /// Parse character class: '[' '^'? charclass_item+ ']'

@@ -382,19 +382,78 @@ pub fn propertyRanges(cat: UnicodeProperty) []const CodepointRange {
     };
 }
 
-/// The properties of strings (ECMA-262, `v` only) that zregex implements,
-/// by index (F5c). The other six of the table (`Basic_Emoji`, `RGI_Emoji`,
-/// ...) are UnsupportedFeature.
-pub const StringProperty = enum(u8) { Emoji_Keycap_Sequence };
+/// The properties of strings (ECMA-262, `v` only), by index (F5c). A build
+/// with `-Dproperties_of_strings=false` keeps only `Emoji_Keycap_Sequence`
+/// (the parser makes the others UnsupportedFeature).
+pub const StringProperty = enum(u8) {
+    Emoji_Keycap_Sequence,
+    Basic_Emoji,
+    RGI_Emoji_Modifier_Sequence,
+    RGI_Emoji_Flag_Sequence,
+    RGI_Emoji_Tag_Sequence,
+    RGI_Emoji_ZWJ_Sequence,
+    RGI_Emoji,
+};
 
 pub fn resolveStringProperty(name: []const u8) ?StringProperty {
     return std.meta.stringToEnum(StringProperty, name);
 }
 
-/// The strings of a property of strings, each as its code points.
-pub fn stringPropertySequences(prop: StringProperty) []const []const u32 {
+/// Some consecutive parts of a compact table of strings
+/// (`tables.StringTable`): their strings of two code points or more (each
+/// part sorted) and their single code points.
+pub const StringSegment = struct {
+    table: *const tables.StringTable,
+    first_part: u8,
+    end_part: u8,
+
+    pub fn stringCount(self: StringSegment) usize {
+        return self.table.part_strings[self.end_part] - self.table.part_strings[self.first_part];
+    }
+
+    /// The length in code points of string `i` of the segment.
+    pub fn stringLen(self: StringSegment, i: usize) usize {
+        const k = self.table.part_strings[self.first_part] + i;
+        return self.table.offsets[k + 1] - self.table.offsets[k];
+    }
+
+    /// String `i` of the segment, decoded into `out` (`stringLen(i)` long).
+    pub fn decode(self: StringSegment, i: usize, out: []u32) void {
+        const k = self.table.part_strings[self.first_part] + i;
+        const units = self.table.units[self.table.offsets[k]..self.table.offsets[k + 1]];
+        for (units, out) |u, *cp| cp.* = self.table.cps[u];
+    }
+
+    pub fn singles(self: StringSegment) []const CodepointRange {
+        return self.table.singles[self.table.part_singles[self.first_part]..self.table.part_singles[self.end_part]];
+    }
+};
+
+const keycap_segments = [_]StringSegment{.{ .table = &tables.KEYCAP_STRINGS, .first_part = 0, .end_part = 1 }};
+
+/// `Emoji_Keycap_Sequence`'s segments alone: what a build without the other
+/// properties references, so it doesn't link `tables.EMOJI_STRINGS`.
+pub fn keycapSegments() []const StringSegment {
+    return &keycap_segments;
+}
+
+/// The segments of a property of strings. The six parts of RGI_Emoji are
+/// disjoint, so RGI_Emoji is every part of both tables.
+pub fn stringPropertySegments(prop: StringProperty) []const StringSegment {
+    const S = struct {
+        fn emoji(comptime first: u8, comptime end: u8) []const StringSegment {
+            return &[_]StringSegment{.{ .table = &tables.EMOJI_STRINGS, .first_part = first, .end_part = end }};
+        }
+        const rgi = keycap_segments ++ [_]StringSegment{.{ .table = &tables.EMOJI_STRINGS, .first_part = 0, .end_part = 5 }};
+    };
     return switch (prop) {
-        .Emoji_Keycap_Sequence => tables.SEQ_EMOJI_KEYCAP_SEQUENCE,
+        .Emoji_Keycap_Sequence => &keycap_segments,
+        .Basic_Emoji => S.emoji(0, 1),
+        .RGI_Emoji_Modifier_Sequence => S.emoji(1, 2),
+        .RGI_Emoji_Flag_Sequence => S.emoji(2, 3),
+        .RGI_Emoji_Tag_Sequence => S.emoji(3, 4),
+        .RGI_Emoji_ZWJ_Sequence => S.emoji(4, 5),
+        .RGI_Emoji => &S.rgi,
     };
 }
 
@@ -799,4 +858,37 @@ test "properties: every property has a fold delta, and it is exactly the closure
     try std.testing.expect(!binarySearchRanges(propertyFoldDelta(.L), 'a'));
     // ASCII gains the long s and the Kelvin sign.
     try std.testing.expectEqualSlices(CodepointRange, &.{ .{ .start = 0x17F, .end = 0x17F }, .{ .start = 0x212A, .end = 0x212A } }, propertyFoldDelta(.ASCII));
+}
+
+test "properties: the seven properties of strings, Unicode 17.0 (F5c)" {
+    // Strings of two code points or more, single code points, longest
+    // string: ECMA-262's table, from emoji-sequences.txt and
+    // emoji-zwj-sequences.txt (test262's lists, generated from the same
+    // data, have the same counts).
+    const Want = struct { StringProperty, usize, usize, usize };
+    for ([_]Want{
+        .{ .Emoji_Keycap_Sequence, 12, 0, 3 },
+        .{ .Basic_Emoji, 207, 1193, 2 },
+        .{ .RGI_Emoji_Modifier_Sequence, 665, 0, 2 },
+        .{ .RGI_Emoji_Flag_Sequence, 259, 0, 2 },
+        .{ .RGI_Emoji_Tag_Sequence, 3, 0, 7 },
+        .{ .RGI_Emoji_ZWJ_Sequence, 1614, 0, 10 },
+        .{ .RGI_Emoji, 2760, 1193, 10 },
+    }) |w| {
+        var strings: usize = 0;
+        var singles: usize = 0;
+        var longest: usize = 0;
+        for (stringPropertySegments(w[0])) |seg| {
+            strings += seg.stringCount();
+            for (seg.singles()) |r| singles += r.end - r.start + 1;
+            for (0..seg.stringCount()) |i| longest = @max(longest, seg.stringLen(i));
+        }
+        try std.testing.expectEqual(w[1], strings);
+        try std.testing.expectEqual(w[2], singles);
+        try std.testing.expectEqual(w[3], longest);
+    }
+    // A string decodes to its code points: the first keycap is "#" U+FE0F U+20E3.
+    var buf: [3]u32 = undefined;
+    keycapSegments()[0].decode(0, &buf);
+    try std.testing.expectEqualSlices(u32, &.{ 0x23, 0xFE0F, 0x20E3 }, &buf);
 }

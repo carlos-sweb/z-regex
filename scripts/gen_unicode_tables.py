@@ -3,7 +3,7 @@
 UnicodeData.txt, PropList.txt, DerivedCoreProperties.txt, emoji-data.txt,
 Scripts.txt, PropertyValueAliases.txt, and ScriptExtensions.txt, and the
 emoji data's emoji-sequences.txt (the properties of strings of `v` that
-zregex implements, STRING_PROPERTIES below).
+zregex implements, STRING_TABLES below) and emoji-zwj-sequences.txt.
 
 Emits, per Unicode General_Category (both the single-letter major category
 and its two-letter subcategories, e.g. both `L` and `Lu`/`Ll`/`Lt`/`Lm`/`Lo`)
@@ -77,8 +77,8 @@ the same files as unicode.org's Public/17.0.0/ucd and Public/emoji/17.0):
         PropertyValueAliases.txt ScriptExtensions.txt PropertyAliases.txt DerivedNormalizationProps.txt \
         CaseFolding.txt SpecialCasing.txt; do
       curl -sSfo "$(basename $f)" "$B/ucd/17.0.0/$f"; done
-    curl -sSfo emoji-sequences.txt "$B/emoji/17.0/emoji-sequences.txt"
-    python3 scripts/gen_unicode_tables.py UnicodeData.txt PropList.txt DerivedCoreProperties.txt emoji-data.txt Scripts.txt PropertyValueAliases.txt ScriptExtensions.txt PropertyAliases.txt DerivedNormalizationProps.txt CaseFolding.txt SpecialCasing.txt emoji-sequences.txt --word-out src/ir/word_fold.zig > src/unicode/tables.zig
+    for f in emoji-sequences.txt emoji-zwj-sequences.txt; do curl -sSfo "$f" "$B/emoji/17.0/$f"; done
+    python3 scripts/gen_unicode_tables.py UnicodeData.txt PropList.txt DerivedCoreProperties.txt emoji-data.txt Scripts.txt PropertyValueAliases.txt ScriptExtensions.txt PropertyAliases.txt DerivedNormalizationProps.txt CaseFolding.txt SpecialCasing.txt emoji-sequences.txt emoji-zwj-sequences.txt --word-out src/ir/word_fold.zig > src/unicode/tables.zig
 """
 import re
 import sys
@@ -497,9 +497,56 @@ def emit_fold_classes(prefix, classes):
     print()
 
 
-# The properties of strings emitted (`SEQ_<NAME>`). The other six of
-# ECMA-262's table stay UnsupportedFeature (F5c 2c).
-STRING_PROPERTIES = ["Emoji_Keycap_Sequence"]
+# The properties of strings (ECMA-262's table: the seven of `v`), as two
+# compact tables (`StringTable`): Emoji_Keycap_Sequence alone, so a build
+# without the others (`-Dproperties_of_strings=false`) links only it, and
+# the other parts of RGI_Emoji. The six parts are disjoint and RGI_Emoji is
+# their union, so it is every part of both tables, not a table of its own.
+STRING_TABLES = [
+    ("KEYCAP_STRINGS", ["Emoji_Keycap_Sequence"]),
+    ("EMOJI_STRINGS", ["Basic_Emoji", "RGI_Emoji_Modifier_Sequence", "RGI_Emoji_Flag_Sequence",
+                       "RGI_Emoji_Tag_Sequence", "RGI_Emoji_ZWJ_Sequence"]),
+]
+
+
+def emit_string_table(label, parts, sequences):
+    """One `StringTable`: the parts' strings of two code points or more,
+    each part sorted lexicographically, as `u16` indices into a dictionary of
+    the code points they use; their single code points as ranges."""
+    strings = [sorted(s for s in sequences[p] if len(s) > 1) for p in parts]
+    cps = sorted({c for part in strings for s in part for c in s})
+    index = {c: i for i, c in enumerate(cps)}
+    units, offsets, part_strings, singles, part_singles = [], [0], [0], [], [0]
+    for p, part in zip(parts, strings):
+        for s in part:
+            units.extend(index[c] for c in s)
+            offsets.append(len(units))
+        part_strings.append(len(offsets) - 1)
+        singles.extend(merge_ranges(sorted(s[0] for s in sequences[p] if len(s) == 1)))
+        part_singles.append(len(singles))
+    assert len(units) < 1 << 16 and len(cps) < 1 << 16
+
+    # One value per line, as the other tables: what `zig fmt` leaves as is.
+    def field(name, items):
+        if not items:
+            print(f"    .{name} = &.{{}},")
+            return
+        print(f"    .{name} = &.{{")
+        for item in items:
+            print(f"        {item},")
+        print("    },")
+
+    print()
+    print(f"/// {', '.join(parts)}.")
+    print(f"pub const {label}: StringTable = .{{")
+    field("cps", [f"0x{c:X}" for c in cps])
+    field("units", units)
+    field("offsets", offsets)
+    field("part_strings", part_strings)
+    field("singles", [f".{{ .start = 0x{lo:X}, .end = 0x{hi:X} }}" for lo, hi in singles])
+    field("part_singles", part_singles)
+    print("};")
+    return {p: len(sequences[p]) for p in parts}
 
 
 def parse_emoji_sequences(path):
@@ -530,12 +577,12 @@ def main():
         i = args.index("--word-out")
         word_out = args[i + 1]
         del args[i : i + 2]
-    if len(args) != 12:
+    if len(args) != 13:
         print(
             f"usage: {sys.argv[0]} UnicodeData.txt PropList.txt DerivedCoreProperties.txt "
             "emoji-data.txt Scripts.txt PropertyValueAliases.txt ScriptExtensions.txt "
             "PropertyAliases.txt DerivedNormalizationProps.txt CaseFolding.txt SpecialCasing.txt "
-            "emoji-sequences.txt [--word-out src/ir/word_fold.zig]",
+            "emoji-sequences.txt emoji-zwj-sequences.txt [--word-out src/ir/word_fold.zig]",
             file=sys.stderr,
         )
         sys.exit(1)
@@ -552,6 +599,7 @@ def main():
         case_folding_path,
         special_casing_path,
         emoji_sequences_path,
+        emoji_zwj_sequences_path,
     ) = args
 
     by_category = {}  # category (major or minor) -> list of codepoints
@@ -837,17 +885,32 @@ def main():
             print(f"    {zig_ranges_slice(fold_delta(fold_u, ranges))},")
         print("};")
 
-    # The properties of strings (ECMA-262, `v` only) that zregex implements,
-    # from emoji-sequences.txt: each string as its code points, in file order.
+    # The properties of strings (ECMA-262, `v` only), from emoji-sequences.txt
+    # and emoji-zwj-sequences.txt.
     sequences = parse_emoji_sequences(emoji_sequences_path)
-    for name in STRING_PROPERTIES:
-        print()
-        print(f"/// {name} (emoji-sequences.txt): a property of strings, each string as")
-        print("/// its code points.")
-        print(f"pub const SEQ_{name.upper()}: []const []const u32 = &.{{")
-        for seq in sequences[name]:
-            print("    &.{ " + ", ".join(f"0x{c:X}" for c in seq) + " },")
-        print("};")
+    sequences.update(parse_emoji_sequences(emoji_zwj_sequences_path))
+    print()
+    print("/// Properties of strings (ECMA-262, `v` only) in compact form: the strings of")
+    print("/// two code points or more of each part, sorted lexicographically, as indices")
+    print("/// into a dictionary of the code points they use; the single code points as")
+    print("/// ranges. No pointer per string, so no relocation per string.")
+    print("pub const StringTable = struct {")
+    print("    /// The code points the strings use, sorted.")
+    print("    cps: []const u32,")
+    print("    /// Every string, concatenated, each code point as its index in `cps`.")
+    print("    units: []const u16,")
+    print("    /// Where each string starts in `units`, then where the last one ends.")
+    print("    offsets: []const u16,")
+    print("    /// Where each part's strings start (an index of `offsets`), then the end.")
+    print("    part_strings: []const u16,")
+    print("    /// Each part's single code points, sorted and merged.")
+    print("    singles: []const CodepointRange,")
+    print("    /// Where each part's ranges start in `singles`, then the end.")
+    print("    part_singles: []const u16,")
+    print("};")
+    string_counts = {}
+    for label, parts in STRING_TABLES:
+        string_counts.update(emit_string_table(label, parts, sequences))
 
     # WordCharacters under `u` + `i` (ECMA-262): the ASCII word characters'
     # `u` closure, minus themselves.
@@ -879,7 +942,7 @@ def main():
         f"fold_u_classes={len(fold_u)} fold_u_cps={sum(len(m) for m, _ in fold_u)} "
         f"fold_legacy_classes={len(fold_legacy)} fold_legacy_cps={sum(len(m) for m, _ in fold_legacy)} "
         f"word_extra={[hex(c) for c in word_extra]} "
-        f"string_properties={ {n: len(sequences[n]) for n in STRING_PROPERTIES} }",
+        f"string_properties={string_counts}",
         file=sys.stderr,
     )
 

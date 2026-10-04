@@ -4,7 +4,7 @@ An ECMA-262 regular expression engine in Zig, independent of the JavaScript engi
 
 [![Zig 0.16+](https://img.shields.io/badge/zig-0.16%2B-orange)](https://ziglang.org/)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
-[![test262](https://img.shields.io/badge/test262-3281%2F3304%20run%2C%20534%20skipped-blue)](#compatibility)
+[![test262](https://img.shields.io/badge/test262-3303%2F3326%20run%2C%20512%20skipped-blue)](#compatibility)
 [![T0](https://img.shields.io/badge/T0-complete-green)](docs/REGEX_TIERS_PLAN.md)
 
 ## What it is
@@ -36,7 +36,7 @@ An ECMA-262 regular expression engine in Zig, independent of the JavaScript engi
   Lookbehind: fixed length without captures (F6b step 1), and outside `u`/`v` any other
   without a lookaround inside, captures and backreferences included (F6b(1)-(3)); the rest
   is `error.UnsupportedFeature`.
-- **test262: 3281 of the 3304 entries that run (99.3%); 534 are skipped**, most of them
+- **test262: 3303 of the 3326 entries that run (99.3%); 512 are skipped**, most of them
   features zregex doesn't implement (`v`, RegExp modifiers): see Compatibility.
 - **Divergences from V8** in the differential: 0 different results; 2 patterns hit the step
   limit (T2).
@@ -208,16 +208,16 @@ against V8, Rust regex, PCRE2 and zig-regex.
 
 ## Compatibility
 
-- **test262: 3281 of the 3304 entries that run (99.3%)**, the same status with UTF-16 and
+- **test262: 3303 of the 3326 entries that run (99.3%)**, the same status with UTF-16 and
   WTF-8 subjects. Baseline: `scripts/test262/baseline.json`. The 23 that run and don't pass:
   4 lookbehind entries that are `UnsupportedFeature` (2 with a lookaround inside a backward
   lookbehind, `nested-lookaround`, a 1.x decision; 2 under `u`, `named-groups/lookbehind`),
   4 host (JS lexer) and 15 not extractable.
-- **534 test262 entries are skipped** and are not in 3281/3304:
+- **512 test262 entries are skipped** and are not in 3303/3326:
 
   | Skipped | Entries | Why |
   |---|---|---|
-  | `v` flag | 25 | Partial in zregex (F5c). The 287 entries of the part that works run (`scripts/test262/v-subset.json`); of the rest, 24 are `UnsupportedFeature` (F5c 2c: the properties of strings other than `Emoji_Keycap_Sequence`) and 1 is the host's |
+  | `v` flag | 3 | The 309 entries that pass run (`scripts/test262/v-subset.json`); of the rest, 2 exceed the step limit on the backtracker (`RGI_Emoji.js`, see LIMITATIONS, until F5c 2c-b) and 1 is the host's |
   | RegExp modifiers (ES2025) | 377 | Not implemented, pending until further notice; the harness's Node (22) lacks them too |
   | Duplicate named groups | 24 | Implemented; the harness's Node lacks them. With Node 24 every `named-groups` entry passes except the variable-length lookbehind one |
   | `RegExp.escape` | 40 | A built-in function of ECMA-262 (ES2025), not pattern syntax: its tests exercise the host's `RegExp.escape`, not matching. zregex has no `escape` helper (1.x) |
@@ -277,7 +277,8 @@ The cross-engine benchmark: `bench/compare/prepare.sh`, then `node bench/compare
 - **Valid syntax that isn't implemented is `error.UnsupportedFeature`** (C API
   `ZREGEXP_ERROR_UNSUPPORTED`), never a wrong result: a lookbehind matched backward (variable
   length, captures or backreferences inside) under `u`/`v` or with a lookaround inside,
-  and under `v` the properties of strings other than `Emoji_Keycap_Sequence`. The table: [docs/LIMITATIONS.md](docs/LIMITATIONS.md).
+  and, in a build with `-Dproperties_of_strings=false`, the properties of strings other
+  than `Emoji_Keycap_Sequence`. The table: [docs/LIMITATIONS.md](docs/LIMITATIONS.md).
 - **RegExp modifiers (ES2025)**, `(?i:…)`, `(?-m:…)`: not implemented, pending until further
   notice; `(?i:a)` is `error.UnsupportedFeature`.
 - Patterns with a raw, non-UTF-8 byte (WTF-8 only) stay on the backtracker, as does a tagged

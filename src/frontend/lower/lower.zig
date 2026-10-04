@@ -35,6 +35,7 @@ const charset_mod = @import("ir").charset;
 const properties = @import("unicode").properties;
 const casefold = @import("unicode").casefold;
 const fold_mod = @import("fold.zig");
+const build_options = @import("build_options");
 const Lexer = @import("../parser/lexer.zig").Lexer;
 const Parser = @import("../parser/parser.zig").Parser;
 
@@ -393,8 +394,13 @@ const Lowerer = struct {
         return std.mem.order(u32, a, b) == .lt;
     }
 
-    /// `list` sorted, without duplicates.
+    /// `list` sorted, without duplicates. A property's part comes sorted
+    /// already (the generator sorts it): then there is nothing to do.
     fn uniqueStrings(list: [][]const u32) []const []const u32 {
+        if (list.len < 2) return list;
+        for (1..list.len) |i| {
+            if (!lessString({}, list[i - 1], list[i])) break;
+        } else return list;
         std.sort.heap([]const u32, list, {}, lessString);
         var n: usize = 0;
         for (list) |str| {
@@ -501,13 +507,23 @@ const Lowerer = struct {
                 return acc;
             },
             .string_property => {
-                const seqs = properties.stringPropertySequences(@enumFromInt(n.char_value));
+                const prop: properties.StringProperty = @enumFromInt(n.char_value);
+                // Without `-Dproperties_of_strings` only Emoji_Keycap_Sequence
+                // parses, and only its table is referenced (so linked).
+                const segments = if (build_options.properties_of_strings) properties.stringPropertySegments(prop) else blk: {
+                    if (prop != .Emoji_Keycap_Sequence) return error.InvalidPattern;
+                    break :blk properties.keycapSegments();
+                };
                 var ranges: std.ArrayListUnmanaged(Range) = .empty;
                 var strings: std.ArrayListUnmanaged([]const u32) = .empty;
-                for (seqs) |seq| {
-                    if (seq.len == 1) {
-                        try ranges.append(self.arena, .{ .lo = seq[0], .hi = seq[0] });
-                    } else try strings.append(self.arena, try self.foldedString(seq));
+                for (segments) |seg| {
+                    for (seg.singles()) |r| try ranges.append(self.arena, .{ .lo = r.start, .hi = r.end });
+                    try strings.ensureUnusedCapacity(self.arena, seg.stringCount());
+                    for (0..seg.stringCount()) |i| {
+                        const cps = try self.arena.alloc(u32, seg.stringLen(i));
+                        seg.decode(i, cps);
+                        strings.appendAssumeCapacity(try self.foldedString(cps));
+                    }
                 }
                 return .{ .chars = try CharSet.fromRanges(self.arena, ranges.items), .strings = uniqueStrings(strings.items), .empty = false };
             },

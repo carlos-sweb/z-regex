@@ -1434,13 +1434,66 @@ test "F5c 2a/2b: \\q{...} strings and Emoji_Keycap_Sequence under v" {
     }
 }
 
+test "F5c 2c-a: the properties of strings under v" {
+    const v: zregex.CompileOptions = .{ .v = true };
+    const iv: zregex.CompileOptions = .{ .v = true, .case_insensitive = true };
+    // Each row: the first match as V8 (Node 22) gives it, null for none.
+    const cases = [_]struct { []const u8, zregex.CompileOptions, []const u8, ?[]const u8 }{
+        .{ "^\\p{Basic_Emoji}$", v, "\u{231a}", "\u{231a}" },
+        .{ "^\\p{Basic_Emoji}$", v, "\u{1f170}\u{fe0f}", "\u{1f170}\u{fe0f}" },
+        .{ "^\\p{Basic_Emoji}$", v, "a", null },
+        .{ "^\\p{RGI_Emoji_Modifier_Sequence}$", v, "\u{1f44d}\u{1f3fd}", "\u{1f44d}\u{1f3fd}" },
+        .{ "^\\p{RGI_Emoji_Modifier_Sequence}$", v, "\u{1f44d}", null },
+        .{ "^\\p{RGI_Emoji_Flag_Sequence}$", v, "\u{1f1ea}\u{1f1f8}", "\u{1f1ea}\u{1f1f8}" },
+        .{ "^\\p{RGI_Emoji_Flag_Sequence}$", v, "\u{1f1ea}", null },
+        .{ "^\\p{RGI_Emoji_Tag_Sequence}$", v, "\u{1f3f4}\u{e0067}\u{e0062}\u{e0073}\u{e0063}\u{e0074}\u{e007f}", "\u{1f3f4}\u{e0067}\u{e0062}\u{e0073}\u{e0063}\u{e0074}\u{e007f}" },
+        .{ "^\\p{RGI_Emoji_ZWJ_Sequence}$", v, "\u{1f468}\u{200d}\u{1f469}\u{200d}\u{1f467}\u{200d}\u{1f466}", "\u{1f468}\u{200d}\u{1f469}\u{200d}\u{1f467}\u{200d}\u{1f466}" },
+        .{ "^\\p{RGI_Emoji_ZWJ_Sequence}$", v, "\u{1f468}", null },
+        .{ "^\\p{RGI_Emoji}+$", v, "\u{231a}\u{1f1ea}\u{1f1f8}1\u{fe0f}\u{20e3}\u{1f468}\u{200d}\u{1f469}\u{200d}\u{1f467}\u{200d}\u{1f466}", "\u{231a}\u{1f1ea}\u{1f1f8}1\u{fe0f}\u{20e3}\u{1f468}\u{200d}\u{1f469}\u{200d}\u{1f467}\u{200d}\u{1f466}" },
+        .{ "\\p{RGI_Emoji}", v, "x\u{1f468}\u{200d}\u{1f469}\u{200d}\u{1f467}y", "\u{1f468}\u{200d}\u{1f469}\u{200d}\u{1f467}" },
+        .{ "[\\p{RGI_Emoji}--\\p{RGI_Emoji_Flag_Sequence}]", v, "\u{1f1ea}\u{1f1f8}", null },
+        .{ "[\\p{RGI_Emoji}&&\\p{RGI_Emoji_Flag_Sequence}]", v, "a\u{1f1ea}\u{1f1f8}", "\u{1f1ea}\u{1f1f8}" },
+        .{ "[\\p{RGI_Emoji}--\\q{\u{1f1ea}\u{1f1f8}}]", v, "\u{1f1ea}\u{1f1f8}", null },
+        // `iv`: the strings fold with the simple case folding (U+24C2 and
+        // U+24DC, the circled M).
+        .{ "^\\p{RGI_Emoji}$", iv, "\u{24dc}\u{fe0f}", "\u{24dc}\u{fe0f}" },
+        .{ "^\\p{RGI_Emoji}$", iv, "\u{24c2}\u{fe0f}", "\u{24c2}\u{fe0f}" },
+        .{ "^\\p{RGI_Emoji}$", v, "\u{24dc}\u{fe0f}", null },
+        .{ "^\\p{Basic_Emoji}$", iv, "\u{24dc}\u{fe0f}", "\u{24dc}\u{fe0f}" },
+        .{ "^\\p{RGI_Emoji_Tag_Sequence}$", iv, "\u{1f3f4}\u{e0067}\u{e0062}\u{e0065}\u{e006e}\u{e0067}\u{e007f}", "\u{1f3f4}\u{e0067}\u{e0062}\u{e0065}\u{e006e}\u{e0067}\u{e007f}" },
+        .{ "^[\\p{RGI_Emoji}--\\q{\u{24c2}\u{fe0f}}]$", iv, "\u{24dc}\u{fe0f}", null },
+        .{ "^\\p{RGI_Emoji}$", iv, "\u{1f170}\u{fe0f}", "\u{1f170}\u{fe0f}" },
+    };
+    for (cases) |c| {
+        var re = try zregex.Regex.compileWithOptions(testing.allocator, c[0], c[1]);
+        defer re.deinit();
+        const m = try re.find(c[2]);
+        defer if (m) |mm| mm.deinit();
+        const got: ?[]const u8 = if (m) |mm| mm.group(c[2]) else null;
+        if (c[3] == null and got == null) continue;
+        if (c[3] == null or got == null or !std.mem.eql(u8, c[3].?, got.?)) {
+            std.debug.print("/{s}/ on \"{s}\": expected {?s}, got {?s}\n", .{ c[0], c[2], c[3], got });
+            return error.TestUnexpectedResult;
+        }
+    }
+    // MayContainStrings: every property of strings may, so a negated class
+    // with one is a SyntaxError; `\P{...}` and `u` are SyntaxErrors too.
+    const names = [_][]const u8{ "Emoji_Keycap_Sequence", "Basic_Emoji", "RGI_Emoji_Modifier_Sequence", "RGI_Emoji_Flag_Sequence", "RGI_Emoji_Tag_Sequence", "RGI_Emoji_ZWJ_Sequence", "RGI_Emoji" };
+    var buf: [64]u8 = undefined;
+    for (names) |name| {
+        try testing.expectError(error.InvalidClassSetOperand, zregex.Regex.compileWithOptions(testing.allocator, try std.fmt.bufPrint(&buf, "[^\\p{{{s}}}]", .{name}), v));
+        try testing.expectError(error.UnknownUnicodeProperty, zregex.Regex.compileWithOptions(testing.allocator, try std.fmt.bufPrint(&buf, "\\P{{{s}}}", .{name}), v));
+        try testing.expectError(error.UnknownUnicodeProperty, zregex.Regex.compileWithOptions(testing.allocator, try std.fmt.bufPrint(&buf, "\\p{{{s}}}", .{name}), .{ .unicode = true }));
+    }
+}
+
 test "E0: valid syntax that isn't implemented is UnsupportedFeature, never a wrong result" {
     // Every row: V8 12.4 accepts the pattern. (`\q{...}`, which until
-    // E0 read `\q` as the letter q, compiles since F5c 2a.)
+    // E0 read `\q` as the letter q, compiles since F5c 2a; the properties
+    // of strings since F5c 2b and 2c-a.)
     const v: zregex.CompileOptions = .{ .v = true };
     const cases = [_]struct { []const u8, zregex.CompileOptions }{
-        .{ "\\p{RGI_Emoji}", v }, // a property of strings without data (F5c 2c)
-        .{ "[\\p{Basic_Emoji}]", v },
+        .{ "(?<=a+)b", v }, // a lookbehind matched backward under `v`
         .{ "(?i:a)", .{} }, // RegExp modifiers (ES2025)
         .{ "(?-m:^a)", .{ .multiline = true } },
         .{ "(?i-s:a.)", .{ .unicode = true } },

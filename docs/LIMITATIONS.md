@@ -6,12 +6,11 @@ what a release promises is in [API.md](API.md).
 
 ## Status
 
-- **test262:** 3281 of the 3304 entries that run pass (99.3 %), in UTF-16 and in WTF-8;
-  534 are skipped: 509 by the harness (its runner, or a feature its Node lacks, such as
-  the 377 of RegExp modifiers) and 25 of the `v` flag (`scripts/test262/features.json`).
-  Of the `v` flag's 314 entries, the 287 of the engine suite that pass run
-  (`v-subset.json`); the rest: 24 `UnsupportedFeature` (F5c: the properties of strings
-  without data), 1 host, and 2 of the host
+- **test262:** 3303 of the 3326 entries that run pass (99.3 %), in UTF-16 and in WTF-8;
+  512 are skipped: 509 by the harness (its runner, or a feature its Node lacks, such as
+  the 377 of RegExp modifiers) and 3 of the `v` flag (`scripts/test262/features.json`).
+  Of the `v` flag's 314 entries, the 309 of the engine suite that pass run
+  (`v-subset.json`); the rest: 2 over the step limit (`RGI_Emoji.js`, below), 1 host, and 2 of the host
   suite (they pass; that suite isn't in the count). Of the 23 that run and don't pass: 4 are lookbehinds
   zregex rejects as `UnsupportedFeature` (2 `nested-lookaround`, 2 under `u` in
   `named-groups/lookbehind`), 4 fail in the JS lexer (host), 15 can't be extracted.
@@ -33,7 +32,7 @@ release only removes such cases ([API.md](API.md), "Errors").
 | RegExp modifiers (ES2025) | `(?i:a)`, `(?-m:a)` | Pending until further notice (see below) |
 | A lookaround inside a lookbehind matched backward | `(?<=a(?=b)c+)` | 1.x |
 | Under `u`/`v`, a lookbehind matched backward (variable length, captures or backreferences inside) | `/(?<=a+)b/u` | 1.x |
-| `v`: the properties of strings but `Emoji_Keycap_Sequence` | `\p{RGI_Emoji}`, `\p{Basic_Emoji}` and 4 more | F5c 2c |
+| `v`, in a build with `-Dproperties_of_strings=false`: the properties of strings but `Emoji_Keycap_Sequence` | `\p{RGI_Emoji}`, `\p{Basic_Emoji}` and 4 more | the default build has them (F5c 2c-a) |
 | `i` with `v`: property escapes, negated classes and set operands (or nested classes in a union) not closed under the folding | `/\p{Lu}/iv`, `/[^a-z]/iv`, `/[[a-z]--[q]]/iv`, `/[a--b]/iv` | F5c (1.x) |
 
 ### Row by row: `v`, modifiers and escapes
@@ -54,7 +53,7 @@ Each row: what V8 says, what zregex gave before E0 (0.5.1), and what it gives no
 | `[A--B&&C]` (operators mixed) | SyntaxError | `ChainedClassSetOperatorNotSupported` | `MixedClassSetOperators` (flat operands too since F7c-4b) |
 | `[ab&&[c]]`, `[a-z--b]` (a list or a range as an operand) | SyntaxError | compiled / `UnsupportedFeature` | `InvalidClassSetOperand` (F7c-4b) |
 | `[a--]`, `[--a]` | SyntaxError | `InvalidClassSetOperand` | the same |
-| `\p{RGI_Emoji}` and the other 6 properties of strings | valid | `UnknownUnicodeProperty` | `UnsupportedFeature`; `\p{Emoji_Keycap_Sequence}` compiles since F5c 2b |
+| `\p{RGI_Emoji}` and the other 6 properties of strings | valid | `UnknownUnicodeProperty` | `UnsupportedFeature`; `\p{Emoji_Keycap_Sequence}` compiles since F5c 2b, the other six since 2c-a |
 | `\P{RGI_Emoji}`; those names with `u` | SyntaxError | `UnknownUnicodeProperty` | the same |
 | `(?i:a)`, `(?-m:a)`, `(?i-s:a)` (RegExp modifiers, any flags) | valid (ES2025) | `UnexpectedToken` | `UnsupportedFeature` |
 | `(?x:a)`, `(?i)`, `(?ii:a)`, `(?-:a)` | SyntaxError | `UnexpectedToken` | the same |
@@ -66,6 +65,17 @@ Each row: what V8 says, what zregex gave before E0 (0.5.1), and what it gives no
   reports the first one it reaches: `\p{RGI_Emoji}\w(?!a){2}` with `v` is `UnsupportedFeature`
   (the property comes first), where V8 reports the SyntaxError of the quantified lookahead.
   Both are compile errors; neither is a wrong result.
+
+## Known limits
+
+- **`^\p{RGI_Emoji}+$` over all of RGI_Emoji's strings exceeds the step limit.** `v`
+  patterns run on the backtracker (T2) until F5c 2c-b moves them to T0. test262's
+  `property-escapes/generated/strings/RGI_Emoji.js` (2 entries) matches it against its
+  3,953 strings concatenated (12,389 code points): 3,127,698 steps, above the default
+  `ExecLimits.max_steps` (1,000,000), so it is `error.StepLimitExceeded` and the file stays
+  out of `v-subset.json`. With a higher limit it matches, in 80 ms (V8: 15 ms; measured on
+  the F5c 2c precheck's prototype). Each string alone, and the smaller tests
+  (`rgi-emoji-13.1` to `17.0`), pass.
 
 ## Known divergences from V8
 
@@ -134,7 +144,7 @@ hasn't participated yet matches empty (`(?<=(\w)\1)x` on `"aax"` gives `[2,3]`, 
 `(?i:…)`, `(?-m:…)` and the other forms of ES2025's modifiers are not implemented:
 `(?i:a)` is `error.UnsupportedFeature`. Decision (2026-09-29): pending until further
 notice, not on the way to 1.0. Their 377 test262 entries are skipped because the
-harness's Node lacks the feature, so they are not counted in 3281/3304. What exists and
+harness's Node lacks the feature, so they are not counted in 3303/3326. What exists and
 what is missing: `docs/plans/F7.md`, "Decisiones", 4.
 
 ## `v` with `i`
