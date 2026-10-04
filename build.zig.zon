@@ -1,6 +1,6 @@
 .{
     .name = .zregex,
-    .version = "0.8.0",
+    .version = "0.9.0",
     .minimum_zig_version = "0.16.0",
     .fingerprint = 0x9f5d80d31b316173,
     .description = "ECMA-262 regular expressions for Zig, with a C ABI",

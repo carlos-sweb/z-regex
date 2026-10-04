@@ -90,4 +90,10 @@ build('passwords', 10, ({ put, pick }) => {
   for (let i = 0, n = 4 + pick(13); i < n; i++) s += set[pick(upper ? set.length : 26)];
   put(s + '\n');
 });
+// Words and RGI emoji of the six kinds (basic, keycap, modifier, flag,
+// tag, ZWJ): the properties of strings case (F5c).
+const emoji = ['\u231A', '\u{1F600}', '\u{1F170}\uFE0F', '1\uFE0F\u20E3', '#\uFE0F\u20E3', '\u{1F44D}\u{1F3FD}',
+  '\u{1F1EA}\u{1F1F8}', '\u{1F1EF}\u{1F1F5}', '\u{1F3F4}\u{E0067}\u{E0062}\u{E0065}\u{E006E}\u{E0067}\u{E007F}',
+  '\u{1F468}\u200D\u{1F469}\u200D\u{1F467}\u200D\u{1F466}', '\u{1F469}\u200D\u{1F4BB}', '\u2764\uFE0F\u200D\u{1F525}'];
+build('emoji', 11, ({ put, pick, word }) => put((pick(4) === 0 ? emoji[pick(emoji.length)] : word()) + ' '));
 console.log(`corpus written to ${out}`);

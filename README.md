@@ -68,7 +68,7 @@ same whichever runs it.
 With Zig 0.16. Add the dependency (this writes the hash into `build.zig.zon`):
 
 ```sh
-zig fetch --save https://github.com/carlos-sweb/z-regex/archive/refs/tags/v0.8.0.tar.gz
+zig fetch --save https://github.com/carlos-sweb/z-regex/archive/refs/tags/v0.9.0.tar.gz
 ```
 
 In `build.zig`:
@@ -312,12 +312,18 @@ measurements: [docs/HISTORY.md](docs/HISTORY.md). How the engine works:
 - **v0.8.0: T0-A, the DFA on T0.** A forward and a reverse DFA built at compile time, within a
   cap, for T0's programs: without asserts, with `^`/`$`/`\b`/`\B`, and in code-point mode
   (`u`/`v`); API and results unchanged ([release notes](docs/RELEASE_NOTES_v0.8.0.md)).
+- **v0.9.0: F5c, `v` on T0.** `v` complete but for `v` with `i`'s MaybeSimpleCaseFolding:
+  invalid class set syntax rejected, bare operands, chained operators, nested unions,
+  `\q{…}` strings and the seven properties of strings; `v` patterns run on T0's VMs and DFA;
+  test262 3305/3328; API unchanged ([release notes](docs/RELEASE_NOTES_v0.9.0.md)).
 - **To 1.0** ([docs/plans/ROADMAP_1.0.md](docs/plans/ROADMAP_1.0.md)): E0 (v0.5.1) → E1, full
   F6b (v0.6.0) → F7c: API freeze and documentation (v0.7.0, done) → T0 throughput
   (v0.7.1, done) → a DFA for T0 ([docs/plans/T0-A.md](docs/plans/T0-A.md)) and the full
-  benchmark (v0.8.0, done) → 1–3 months of production use → v1.0.0 with the same API. RegExp modifiers: pending until further notice.
+  benchmark (v0.8.0, done) → F5c, `v` on T0 (v0.9.0, done) → 1–3 months of production use →
+  v1.0.0 with the same API. RegExp modifiers: pending until further notice.
 - **F5, T1 (Unicode):** F5a done (`u` and `\p{…}` on the VM, every UCD property name);
-  F5b done (full case folding under `i`); F5c (full `v`) pending.
+  F5b done (full case folding under `i`); F5c done in v0.9.0 but for `v` with `i`'s
+  MaybeSimpleCaseFolding (`UnsupportedFeature` where it differs from `iu`).
 - **F6a, T2 without lookbehind: done** (explicit-stack backtracker, capture trail,
   LookLinear; F6a(1)–(3)).
 - **F6b, lookbehind: closed in v0.6.0.** B′ (fixed length without captures, forward) and
