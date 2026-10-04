@@ -109,8 +109,9 @@ pub const TierUnavailable = union(enum) {
     /// T0, but not what the VM takes (F4b: a raw pattern byte, or a
     /// tagged program over the slot bound).
     not_eligible: tier0.Ineligible,
-    /// What this tier needs isn't built yet: T1's Unicode case folding
-    /// (F5b), `v` (F5c) and large counted repeats stay on the backtracker.
+    /// What this tier needs isn't built yet: T1's counted repeats above the
+    /// unroll budget stay on the backtracker (Unicode case folding runs on
+    /// the VM since F5b, `v` since F5c 2c-b).
     not_built: Tier,
 };
 
@@ -227,14 +228,16 @@ fn route(fe: *const lower_mod.Frontend, options: CompileOptions) error{TierUnava
 /// Whether T0's VM takes a T1 pattern (F5a): its T1 features are only `u`
 /// mode, `\p{...}` and, since F5b, Unicode case folding (the lowering
 /// folds every set; `\b` and backreferences fold at run time), which are
-/// HIR sets the VM already matches. `v` (F5c, its test262 part is still
-/// skipped) and large counted repeats stay on the backtracker.
+/// HIR sets the VM already matches. Since F5c 2c-b `v` too: the lowering
+/// leaves set operations as sets and `\q{...}` and the properties of
+/// strings as alternations of sequences, which the VM matches like any
+/// other. Large counted repeats stay on the backtracker.
 fn vmTakesUnicode(analysis: classify.Analysis) bool {
     var it = analysis.reasons().iterator();
     while (it.next()) |f| switch (f) {
         // F5b: `i`'s Unicode folding is in the HIR's sets, which the VM
-        // matches as they are (`v` stays out through `unicode_sets_mode`).
-        .unicode_mode, .property_escape, .ignore_case_unicode => {},
+        // matches as they are.
+        .unicode_mode, .property_escape, .ignore_case_unicode, .unicode_sets_mode, .class_set_operation => {},
         else => return false,
     };
     return true;

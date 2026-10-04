@@ -162,9 +162,9 @@ test "dispatcher: eligible T0 patterns go to the VM, the rest to the backtracker
     // T2, T1, a raw pattern byte.
     for ([_][]const u8{ "a(?=b)", "(a)\\1", "(?<=a)b", "\xE9" }) |p|
         try testing.expect(!try routedToVm(p, .{}));
-    // T1 goes to the VM since F5a (and with folding since F5b; see below);
-    // `v` doesn't.
-    try testing.expect(!try routedToVm("a", .{ .v = true }));
+    // T1 goes to the VM since F5a (and with folding since F5b; see below),
+    // `v` since F5c 2c-b.
+    try testing.expect(try routedToVm("a", .{ .v = true }));
     try testing.expect(try routedToVm("\\u00e9", .{ .case_insensitive = true }));
 }
 
@@ -233,10 +233,12 @@ test "force_tier .expert and .unicode" {
     // `.unicode` (F5a): the VM for T0 and for T1 without folding.
     try testing.expect(try routedToVm("abc", .{ .force_tier = .unicode }));
     try testing.expect(try routedToVm("\\p{L}+", .{ .unicode = true, .force_tier = .unicode }));
-    // Since F5b, Unicode folding too; `v` still isn't built.
+    // Since F5b, Unicode folding too; since F5c 2c-b, `v`. A counted repeat
+    // above the unroll budget still isn't built on the VM.
     try testing.expect(try routedToVm("\u{E9}", .{ .unicode = true, .case_insensitive = true, .force_tier = .unicode }));
+    try testing.expect(try routedToVm("[\\p{L}--[a]]", .{ .v = true, .force_tier = .unicode }));
     var diag: zregex.internal.TierUnavailable = undefined;
-    try testing.expectError(error.TierUnavailable, zregex.Regex.compileWithOptions(testing.allocator, "[\\p{L}--[a]]", .{ .v = true, .force_tier = .unicode, .tier_diagnostic = &diag }));
+    try testing.expectError(error.TierUnavailable, zregex.Regex.compileWithOptions(testing.allocator, "a{2000}", .{ .unicode = true, .force_tier = .unicode, .tier_diagnostic = &diag }));
     try testing.expectEqualDeep(zregex.internal.TierUnavailable{ .not_built = .unicode }, diag);
     try expectUnavailableTier("a(?=b)", .unicode, .{ .tier_too_high = .expert });
 }
@@ -248,8 +250,54 @@ test "F5a: T1 without folding runs on T0's VM" {
             std.debug.print("/{s}/u stays off the VM\n", .{p});
             return err;
         };
-    // Still on the backtracker: `v` (F5c).
-    try testing.expect(!try routedToVm("[\\p{L}--[a]]", .{ .v = true }));
+    // A counted repeat above the unroll budget stays on the backtracker.
+    try testing.expect(!try routedToVm("a{2000}", .{ .unicode = true }));
+}
+
+test "F5c 2c-b: v runs on T0's VM, plain, tagged and with a DFA" {
+    if (zregex.internal.force_backtracker) return error.SkipZigTest;
+    const v: zregex.CompileOptions = .{ .v = true };
+    // Set operations, nested classes, `\q{...}` and properties of strings
+    // are HIR sets and alternations: the plain VM, with a code-point DFA.
+    for ([_][]const u8{ "[\\p{L}--[a]]+", "[[a-z]&&[^x]]", "[\\q{abc|ab}x]", "\\p{Emoji_Keycap_Sequence}", "[\\w--\\d]{2}" }) |p| {
+        var re = try zregex.Regex.compileWithOptions(testing.allocator, p, v);
+        defer re.deinit();
+        const t0 = re.t0 orelse {
+            std.debug.print("/{s}/v stays off the VM\n", .{p});
+            return error.TestUnexpectedResult;
+        };
+        try testing.expect(t0.dfa != null);
+        try testing.expect(t0.dfa.?.mode == .code_point);
+    }
+    // Groups: the tagged program.
+    {
+        var re = try zregex.Regex.compileWithOptions(testing.allocator, "(\\p{Lu})([\\p{Ll}--[x]]+)", v);
+        defer re.deinit();
+        try testing.expectEqual(@as(u32, 6), re.t0.?.nslots);
+        const m = (try re.find("ab Cde")).?;
+        defer m.deinit();
+        try testing.expectEqualStrings("de", m.getCapture(2, "ab Cde").?);
+    }
+    // Backreferences and lookarounds stay on the backtracker, as with `u`.
+    for ([_][]const u8{ "([\\p{L}--[a]])\\1", "[\\q{ab}](?=c)", "(?<=a)[b--c]" }) |p|
+        try testing.expect(!try routedToVm(p, v));
+}
+
+test "F5c 2c-b: no DFA above max_insts_for_dfa instructions" {
+    if (zregex.internal.force_backtracker) return error.SkipZigTest;
+    // `^\p{RGI_Emoji}+$`: a program of thousands of instructions, on the
+    // VM without a DFA (its construction would only give up at the cap).
+    var re = try zregex.Regex.compileWithOptions(testing.allocator, "^\\p{RGI_Emoji}+$", .{ .v = true });
+    defer re.deinit();
+    const t0 = re.t0.?;
+    try testing.expect(t0.insts.len > zregex.internal.tier0.dfa.max_insts_for_dfa);
+    try testing.expect(t0.dfa == null);
+    try testing.expect(try re.matchFull("\u{1f1ea}\u{1f1f8}\u{1f468}\u{200d}\u{1f469}\u{200d}\u{1f467}"));
+    // Below it, the DFA is built as before.
+    var small = try zregex.Regex.compileWithOptions(testing.allocator, "^\\p{RGI_Emoji_Flag_Sequence}+$", .{ .v = true });
+    defer small.deinit();
+    try testing.expect(small.t0.?.insts.len <= zregex.internal.tier0.dfa.max_insts_for_dfa);
+    try testing.expect(small.t0.?.dfa != null);
 }
 
 test "F5b: T1 with Unicode case folding runs on T0's VM" {

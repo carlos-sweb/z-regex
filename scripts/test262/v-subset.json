@@ -11,6 +11,7 @@
   "built-ins/RegExp/property-escapes/generated/strings/RGI_Emoji-negative-CharacterClass.js",
   "built-ins/RegExp/property-escapes/generated/strings/RGI_Emoji-negative-P.js",
   "built-ins/RegExp/property-escapes/generated/strings/RGI_Emoji-negative-u.js",
+  "built-ins/RegExp/property-escapes/generated/strings/RGI_Emoji.js",
   "built-ins/RegExp/property-escapes/generated/strings/RGI_Emoji_Flag_Sequence-negative-CharacterClass.js",
   "built-ins/RegExp/property-escapes/generated/strings/RGI_Emoji_Flag_Sequence-negative-P.js",
   "built-ins/RegExp/property-escapes/generated/strings/RGI_Emoji_Flag_Sequence-negative-u.js",

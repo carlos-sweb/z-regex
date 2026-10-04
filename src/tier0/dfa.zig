@@ -290,8 +290,17 @@ fn followOf(prog: *const Program, pc: usize) []const u32 {
     return prog.follow[cl.start..][0..cl.len];
 }
 
-/// The DFA of `prog` (which must be `eligible`), or null above the cap.
+/// Above this many instructions the DFA isn't attempted (F5c 2c-b): over
+/// the corpora (f2c, f2c-2, npm: 27,084 T0 programs) the largest program
+/// that got a DFA under the cap has 1,079; above it the construction only
+/// costs time before giving up at the cap (one `v` program of 10,166
+/// instructions: 18.5 ms; `^\p{RGI_Emoji}+$`: ~11 ms).
+pub const max_insts_for_dfa = 2000;
+
+/// The DFA of `prog` (which must be `eligible`), or null above the cap or
+/// above `max_insts_for_dfa` instructions.
 pub fn build(gpa: Allocator, prog: *const Program, mode: Mode) Allocator.Error!?*const Dfa {
+    if (prog.insts.len > max_insts_for_dfa) return null;
     var arena_state = std.heap.ArenaAllocator.init(gpa);
     defer arena_state.deinit();
     const a = arena_state.allocator();

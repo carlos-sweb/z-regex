@@ -6,11 +6,11 @@ what a release promises is in [API.md](API.md).
 
 ## Status
 
-- **test262:** 3303 of the 3326 entries that run pass (99.3 %), in UTF-16 and in WTF-8;
-  512 are skipped: 509 by the harness (its runner, or a feature its Node lacks, such as
-  the 377 of RegExp modifiers) and 3 of the `v` flag (`scripts/test262/features.json`).
-  Of the `v` flag's 314 entries, the 309 of the engine suite that pass run
-  (`v-subset.json`); the rest: 2 over the step limit (`RGI_Emoji.js`, below), 1 host, and 2 of the host
+- **test262:** 3305 of the 3328 entries that run pass (99.3 %), in UTF-16 and in WTF-8;
+  510 are skipped: 509 by the harness (its runner, or a feature its Node lacks, such as
+  the 377 of RegExp modifiers) and 1 of the `v` flag (`scripts/test262/features.json`).
+  Of the `v` flag's 314 entries, the 311 of the engine suite that pass run
+  (`v-subset.json`); the rest: 1 host, and 2 of the host
   suite (they pass; that suite isn't in the count). Of the 23 that run and don't pass: 4 are lookbehinds
   zregex rejects as `UnsupportedFeature` (2 `nested-lookaround`, 2 under `u` in
   `named-groups/lookbehind`), 4 fail in the JS lexer (host), 15 can't be extracted.
@@ -66,16 +66,17 @@ Each row: what V8 says, what zregex gave before E0 (0.5.1), and what it gives no
   (the property comes first), where V8 reports the SyntaxError of the quantified lookahead.
   Both are compile errors; neither is a wrong result.
 
-## Known limits
+## `v` on T0 (F5c 2c-b)
 
-- **`^\p{RGI_Emoji}+$` over all of RGI_Emoji's strings exceeds the step limit.** `v`
-  patterns run on the backtracker (T2) until F5c 2c-b moves them to T0. test262's
-  `property-escapes/generated/strings/RGI_Emoji.js` (2 entries) matches it against its
-  3,953 strings concatenated (12,389 code points): 3,127,698 steps, above the default
-  `ExecLimits.max_steps` (1,000,000), so it is `error.StepLimitExceeded` and the file stays
-  out of `v-subset.json`. With a higher limit it matches, in 80 ms (V8: 15 ms; measured on
-  the F5c 2c precheck's prototype). Each string alone, and the smaller tests
-  (`rgi-emoji-13.1` to `17.0`), pass.
+- **`v` patterns run on T0's VMs**, with the code-point DFA, like `u`: the lowering leaves
+  set operations, `\q{...}` and the properties of strings as HIR sets and alternations.
+  Backreferences, lookarounds and counted repeats above the unroll budget stay on the
+  backtracker, as with `u`. Over the corpora (f2c, f2c-2, npm), 2,221 of the 2,551 `v`
+  patterns that compile moved from the backtracker to T0 (1,909 plain, 312 with groups).
+- **Compile time:** building the DFA costs `v` patterns ~0.2-0.3 ms more to compile than on
+  the backtracker (`[\p{L}--[a-z]]{4}`: 0.36 -> 0.57 ms). The DFA isn't attempted above
+  2,000 program instructions (`tier0.dfa.max_insts_for_dfa`: the corpora's largest program
+  with a DFA has 1,079); `^\p{RGI_Emoji}+$` compiles in ~13 ms, without a DFA.
 
 ## Known divergences from V8
 
@@ -144,7 +145,7 @@ hasn't participated yet matches empty (`(?<=(\w)\1)x` on `"aax"` gives `[2,3]`, 
 `(?i:…)`, `(?-m:…)` and the other forms of ES2025's modifiers are not implemented:
 `(?i:a)` is `error.UnsupportedFeature`. Decision (2026-09-29): pending until further
 notice, not on the way to 1.0. Their 377 test262 entries are skipped because the
-harness's Node lacks the feature, so they are not counted in 3303/3326. What exists and
+harness's Node lacks the feature, so they are not counted in 3305/3328. What exists and
 what is missing: `docs/plans/F7.md`, "Decisiones", 4.
 
 ## `v` with `i`
@@ -178,7 +179,7 @@ literal's simple pair): a silent wrong result, which the freeze doesn't allow. S
 | Backreferences | `\1`…, `\k<name>` (to every group of a duplicated name) |
 | Lookahead | every form, captures included |
 | Lookbehind | see "Lookbehind" above |
-| Classes | ranges, shorthands and properties as members, negation, `[]` and `[^]`; under `v`, one set operation `--`/`&&` per class |
+| Classes | ranges, shorthands and properties as members, negation, `[]` and `[^]`; under `v`, set operations `--`/`&&` (one operator per class, chained), nested classes, `\q{…}` and the properties of strings |
 | `\p{…}` / `\P{…}` | every UCD 17.0.0 name: General_Category, the binary properties, `Script`/`sc` and `Script_Extensions`/`scx` with their aliases |
 | Case folding | `i`: ECMA-262's Canonicalize (`toUppercase` without `u`, simple case folding with `u`), in literals, classes, ranges, properties, `\w`, `\b` and backreferences; `iv` as above |
 | Subjects | WTF-8 (bytes, lone surrogates allowed) and UTF-16 (code units), indices in the subject's units (`Subject`, `execAt`) |

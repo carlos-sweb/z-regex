@@ -29,7 +29,8 @@ hosts. Even: within ±10%. The method is under "Setup", the raw tables under "Re
 | book: `[A-Z][a-z]+` | DFA | **1.19× ahead** | **1.98× ahead** |
 | book: `(Mr\|Mrs\|Miss)\.? ([A-Z][a-z]+)` | DFA, tagged VM | **1.55× ahead** | 2.9× behind |
 
-**T1 (`u`/`v`: T0's DFA in code-point mode; `v` on the backtracker)**
+**T1 (`u`/`v`: T0's DFA in code-point mode; measured at 0.8.0, when `v` still ran on the
+backtracker: since F5c 2c-b it runs on T0, `docs/LIMITATIONS.md`, "`v` on T0")**
 
 | Case | vs V8 | vs Rust regex |
 |---|---|---|
