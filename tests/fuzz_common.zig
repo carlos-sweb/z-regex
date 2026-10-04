@@ -154,11 +154,14 @@ fn checkRouting(gpa: std.mem.Allocator, re: zregex.Regex, pattern: []const u8, o
     // The forced-backtracker run (F4a(5)) routes nothing to the VM.
     if (zregex.internal.force_backtracker) return;
     var plain = false;
-    // T0, or T1 with only `u`, `\p` (F5a) and `i`'s Unicode folding (F5b),
-    // when the VM takes the HIR.
+    // T0, or T1 with only `u`, `\p` (F5a), `i`'s Unicode folding (F5b) and
+    // `v` (F5c 2c-b), when the VM takes the HIR.
     const t1_vm = analysis.min_tier == .unicode and blk: {
         var it = analysis.reasons().iterator();
-        while (it.next()) |f| if (f != .unicode_mode and f != .property_escape and f != .ignore_case_unicode) break :blk false;
+        while (it.next()) |f| switch (f) {
+            .unicode_mode, .property_escape, .ignore_case_unicode, .unicode_sets_mode, .class_set_operation => {},
+            else => break :blk false,
+        };
         break :blk true;
     };
     const eligible = blk: {

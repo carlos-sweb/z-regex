@@ -11,6 +11,11 @@ GATE-FAIL (exit 1). The steps:
 - the internal differentials `pfdiff`, `t1diff` and `lldiff` (`tools/`, on
   `tests/corpus/{f2c,f2c-2}.txt` and `npm.tsv`; `pfdiff --slots` against
   `tests/differential/reference/pfdiff-slots.tsv`);
+- `dfadiff` (`tools/dfadiff.zig`, T0-A): every pattern with a T0 program, as routed (the
+  fast paths and the DFA, code unit and code point) against the plain VM
+  (`t0_prefilters = false`), all slots at every index, with and without sticky, in WTF-8
+  and UTF-16, over `tests/corpus/dfadiff-subject.txt` and built-in subjects with lone
+  surrogates, ill-formed bytes and LS/PS; on the three corpora;
 - `measure_binary.sh` (informational).
 
 Zig's cache is emptied after each group of steps. Logs go to OUTDIR (default `zig-out/gate`).
@@ -103,19 +108,25 @@ Script alias including the extra fields (`Qaac`, `Qaai`), and the `LC` table
 case-folding classes of `i` with `u` (simple folding, statuses C and S) and without it
 (ECMA-262's Canonicalize: the full `toUppercase` when it is one code unit and doesn't
 take a code point >= 128 below 128), each property's closure delta, and, with
-`--word-out`, `src/ir/word_fold.zig` (the non-ASCII word characters of `u` + `i`). A
-regeneration from the same files must reproduce both files byte for byte.
+`--word-out`, `src/ir/word_fold.zig` (the non-ASCII word characters of `u` + `i`). Since
+F5c 2b/2c it reads the emoji data's `emoji-sequences.txt` and `emoji-zwj-sequences.txt`
+(emoji 17.0): the seven properties of strings of `v`, as two compact tables
+(`StringTable`: a dictionary of code points, the strings as `u16` indices, sorted per
+property; `KEYCAP_STRINGS` and `EMOJI_STRINGS`, so that `-Dproperties_of_strings=false`
+links only the first). A regeneration from the same files must reproduce both files byte for
+byte.
 
 ```bash
-B=https://raw.githubusercontent.com/unicode-org/unicodetools/main/unicodetools/data/ucd/17.0.0
+B=https://raw.githubusercontent.com/unicode-org/unicodetools/main/unicodetools/data
 cd /tmp && for f in UnicodeData.txt PropList.txt DerivedCoreProperties.txt emoji/emoji-data.txt \
     Scripts.txt PropertyValueAliases.txt ScriptExtensions.txt PropertyAliases.txt DerivedNormalizationProps.txt \
     CaseFolding.txt SpecialCasing.txt; do
-  curl -sSfo "$(basename $f)" "$B/$f"; done; cd -
+  curl -sSfo "$(basename $f)" "$B/ucd/17.0.0/$f"; done
+for f in emoji-sequences.txt emoji-zwj-sequences.txt; do curl -sSfo "$f" "$B/emoji/17.0/$f"; done; cd -
 python3 scripts/gen_unicode_tables.py /tmp/UnicodeData.txt /tmp/PropList.txt /tmp/DerivedCoreProperties.txt \
   /tmp/emoji-data.txt /tmp/Scripts.txt /tmp/PropertyValueAliases.txt /tmp/ScriptExtensions.txt \
   /tmp/PropertyAliases.txt /tmp/DerivedNormalizationProps.txt /tmp/CaseFolding.txt /tmp/SpecialCasing.txt \
-  --word-out src/ir/word_fold.zig > src/unicode/tables.zig
+  /tmp/emoji-sequences.txt /tmp/emoji-zwj-sequences.txt --word-out src/ir/word_fold.zig > src/unicode/tables.zig
 zig build test
 ```
 

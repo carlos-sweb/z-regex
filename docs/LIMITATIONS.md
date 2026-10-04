@@ -1,15 +1,17 @@
 # Limitations - zregex
 
-What zregex does and doesn't do **today**, as of 0.8.0 (the API freeze of 0.7.0, plus T0 throughput and T0's DFA).
+What zregex does and doesn't do **today**, as of 0.9.0 (the API freeze of 0.7.0, plus T0 throughput, T0's DFA, and F5c: `v` on T0).
 Each entry was checked against the code, its tests or V8 (Node 22). How each item got here, phase by phase, is in [HISTORY.md](HISTORY.md);
 what a release promises is in [API.md](API.md).
 
 ## Status
 
-- **test262:** 2994 of the 3017 entries that run pass (99.2 %), in UTF-16 and in WTF-8;
-  821 are skipped: 509 by the harness (its runner, or a feature its Node lacks, such as
-  the 377 of RegExp modifiers) and 312 for a feature zregex doesn't have yet
-  (`scripts/test262/features.json`). Of the 23 that run and don't pass: 4 are lookbehinds
+- **test262:** 3305 of the 3328 entries that run pass (99.3 %), in UTF-16 and in WTF-8;
+  510 are skipped: 509 by the harness (its runner, or a feature its Node lacks, such as
+  the 377 of RegExp modifiers) and 1 of the `v` flag (`scripts/test262/features.json`).
+  Of the `v` flag's 314 entries, the 311 of the engine suite that pass run
+  (`v-subset.json`); the rest: 1 host, and 2 of the host
+  suite (they pass; that suite isn't in the count). Of the 23 that run and don't pass: 4 are lookbehinds
   zregex rejects as `UnsupportedFeature` (2 `nested-lookaround`, 2 under `u` in
   `named-groups/lookbehind`), 4 fail in the JS lexer (host), 15 can't be extracted.
 - **Against V8:** `zig build differential-v8` (4,000 generated patterns), `lbdiff-v8`
@@ -30,12 +32,8 @@ release only removes such cases ([API.md](API.md), "Errors").
 | RegExp modifiers (ES2025) | `(?i:a)`, `(?-m:a)` | Pending until further notice (see below) |
 | A lookaround inside a lookbehind matched backward | `(?<=a(?=b)c+)` | 1.x |
 | Under `u`/`v`, a lookbehind matched backward (variable length, captures or backreferences inside) | `/(?<=a+)b/u` | 1.x |
-| `v`: `\q{...}` | `[\q{abc}]` | F5c (1.x) |
-| `v`: a bare character or shorthand as the right operand (bug B) | `[\p{L}--a]`, `[a--b]`, `[\w--\d]` | F5c (1.x) |
-| `v`: a chain of one operator | `[A--B--C]`, `[A&&B&&C]` | F5c (1.x) |
-| `v`: a union with nested classes | `[[a][b]]`, `[a[b]]` | F5c (1.x) |
-| `v`: properties of strings | `\p{RGI_Emoji}` and 6 more | F5c (1.x) |
-| `i` with `v`: property escapes, negated classes and set operands not closed under the folding | `/\p{Lu}/iv`, `/[^a-z]/iv`, `/[[a-z]--[q]]/iv` | F5c (1.x) |
+| `v`, in a build with `-Dproperties_of_strings=false`: the properties of strings but `Emoji_Keycap_Sequence` | `\p{RGI_Emoji}`, `\p{Basic_Emoji}` and 4 more | the default build has them (F5c 2c-a) |
+| `i` with `v`: property escapes, negated classes and set operands (or nested classes in a union) not closed under the folding | `/\p{Lu}/iv`, `/[^a-z]/iv`, `/[[a-z]--[q]]/iv`, `/[a--b]/iv` | F5c (1.x) |
 
 ### Row by row: `v`, modifiers and escapes
 
@@ -44,15 +42,18 @@ Each row: what V8 says, what zregex gave before E0 (0.5.1), and what it gives no
 
 | Pattern | V8 | Before E0 | Since E0 |
 |---|---|---|---|
-| `[\q{a}]` (`\q{...}`) | valid | **wrong result**: `\q` was the letter q | `UnsupportedFeature` |
+| `[\q{a}]` (`\q{...}`) | valid | **wrong result**: `\q` was the letter q | `UnsupportedFeature`; compiles since F5c 2a |
+| `[^\q{ab}]`, `[^\p{Emoji_Keycap_Sequence}]` (a negated class that may contain strings) | SyntaxError | — | `InvalidClassSetOperand` (F5c 2a) |
 | `\q`, `[\q]`, `\q{a}`, `\z` | SyntaxError | accepted | `InvalidEscape` |
-| `[\p{L}--\d]`, `[\p{L}--a]`, `[a--b]`, `[a&&b]`, `[[a]&&b]`, `[\w--\d]` (a bare right operand, bug B) | valid | `InvalidClassSetOperand` | `UnsupportedFeature` |
-| `[[a][b]]`, `[a[b]]` (a union with nested classes) | valid | `InvalidClassSetOperand` / `UnexpectedToken` | `UnsupportedFeature` |
-| `[A--B--C]`, `[A&&B&&C]` (the same operator chained) | valid | `ChainedClassSetOperatorNotSupported` | `UnsupportedFeature` |
+| `[\p{L}--\d]`, `[\p{L}--a]`, `[a--b]`, `[a&&b]`, `[[a]&&b]`, `[\w--\d]` (a bare right operand, bug B) | valid | `InvalidClassSetOperand` | `UnsupportedFeature`; compiles since F5c 1.1 |
+| `[[a][b]]`, `[a[b]]` (a union with nested classes) | valid | `InvalidClassSetOperand` / `UnexpectedToken` | `UnsupportedFeature`; compiles since F5c 1.1 |
+| `[A--B--C]`, `[A&&B&&C]` (the same operator chained) | valid | `ChainedClassSetOperatorNotSupported` | `UnsupportedFeature`; compiles since F5c 1.1 (left to right) |
+| `[[[a]--[b]]--[c]]` (a nested operation as an operand) | valid | — | `InvalidPattern` until F5c 1.1, which compiles it |
+| `[a&&&b]`, `[a--b-c]`, `[[a][b]--[c]]` (`&&` then `&`, an operand that isn't one item) | SyntaxError | — | `InvalidClassSetOperand` (F5c 1.1; `UnsupportedFeature` before) |
 | `[A--B&&C]` (operators mixed) | SyntaxError | `ChainedClassSetOperatorNotSupported` | `MixedClassSetOperators` (flat operands too since F7c-4b) |
 | `[ab&&[c]]`, `[a-z--b]` (a list or a range as an operand) | SyntaxError | compiled / `UnsupportedFeature` | `InvalidClassSetOperand` (F7c-4b) |
 | `[a--]`, `[--a]` | SyntaxError | `InvalidClassSetOperand` | the same |
-| `\p{RGI_Emoji}` and the other 6 properties of strings | valid | `UnknownUnicodeProperty` | `UnsupportedFeature` |
+| `\p{RGI_Emoji}` and the other 6 properties of strings | valid | `UnknownUnicodeProperty` | `UnsupportedFeature`; `\p{Emoji_Keycap_Sequence}` compiles since F5c 2b, the other six since 2c-a |
 | `\P{RGI_Emoji}`; those names with `u` | SyntaxError | `UnknownUnicodeProperty` | the same |
 | `(?i:a)`, `(?-m:a)`, `(?i-s:a)` (RegExp modifiers, any flags) | valid (ES2025) | `UnexpectedToken` | `UnsupportedFeature` |
 | `(?x:a)`, `(?i)`, `(?ii:a)`, `(?-:a)` | SyntaxError | `UnexpectedToken` | the same |
@@ -61,15 +62,24 @@ Each row: what V8 says, what zregex gave before E0 (0.5.1), and what it gives no
   ECMA-262 (`ClassSetOperand`) and V8 agree: a list or a range is only a `ClassUnion`, so
   `[a-z--b]` is a SyntaxError and the range is written nested, `[[a-z]--b]`.
 - **Limit of the rule:** a pattern that is invalid *and* uses a form that isn't implemented
-  reports the first one it reaches: `[A--\d]\w(?!a){2}` with `v` is `UnsupportedFeature`
-  (the class comes first), where V8 reports the SyntaxError of the quantified lookahead.
+  reports the first one it reaches: `\p{RGI_Emoji}\w(?!a){2}` with `v` is `UnsupportedFeature`
+  (the property comes first), where V8 reports the SyntaxError of the quantified lookahead.
   Both are compile errors; neither is a wrong result.
+
+## `v` on T0 (F5c 2c-b)
+
+- **`v` patterns run on T0's VMs**, with the code-point DFA, like `u`: the lowering leaves
+  set operations, `\q{...}` and the properties of strings as HIR sets and alternations.
+  Backreferences, lookarounds and counted repeats above the unroll budget stay on the
+  backtracker, as with `u`. Over the corpora (f2c, f2c-2, npm), 2,221 of the 2,551 `v`
+  patterns that compile moved from the backtracker to T0 (1,909 plain, 312 with groups).
+- **Compile time:** building the DFA costs `v` patterns ~0.2-0.3 ms more to compile than on
+  the backtracker (`[\p{L}--[a-z]]{4}`: 0.36 -> 0.57 ms). The DFA isn't attempted above
+  2,000 program instructions (`tier0.dfa.max_insts_for_dfa`: the corpora's largest program
+  with a DFA has 1,079); `^\p{RGI_Emoji}+$` compiles in ~13 ms, without a DFA.
 
 ## Known divergences from V8
 
-- **Still accepted under `v`, V8 rejects** (for 1.x, with bug B and chaining): an
-  unescaped ClassSetSyntaxCharacter (`[(]`) and the reserved double punctuators
-  (`[a!!b]`).
 - **V8 matches inside a surrogate pair under `u`/`v`.** With `u`/`v` and a search that
   passes over a surrogate pair, V8 reports a match at the position between the pair's two
   units, which the spec doesn't require: under `u`/`v` the input is a list of code points
@@ -85,6 +95,10 @@ Each row: what V8 says, what zregex gave before E0 (0.5.1), and what it gives no
 | `/\B(?<![^\sa]😀\*[^z])/v` (also `/\B/v`) | `"😀x😀"`, 2 | `[4,4]` | `[5,5]` |
 
 - **`\p{ASCII}` and the Kelvin sign under `iv`:** see "`v` with `i`" below.
+- **`[\q{K}]` and the Kelvin sign under `iv`:** zregex matches U+212A with `/[\q{K}]/iv`, as
+  with `/[K]/iv`: a one-character string of `\q{...}` is that character (ECMA-262,
+  ClassStringDisjunction). V8 (Node 22) matches it with `/[K]/iv` and `/[\q{Kx}]/iv`
+  (on "\u212Ax") but not with `/[\q{K}]/iv`. zregex follows the spec.
 
 ## Lookbehind
 
@@ -131,7 +145,7 @@ hasn't participated yet matches empty (`(?<=(\w)\1)x` on `"aax"` gives `[2,3]`, 
 `(?i:…)`, `(?-m:…)` and the other forms of ES2025's modifiers are not implemented:
 `(?i:a)` is `error.UnsupportedFeature`. Decision (2026-09-29): pending until further
 notice, not on the way to 1.0. Their 377 test262 entries are skipped because the
-harness's Node lacks the feature, so they are not counted in 2994/3017. What exists and
+harness's Node lacks the feature, so they are not counted in 3305/3328. What exists and
 what is missing: `docs/plans/F7.md`, "Decisiones", 4.
 
 ## `v` with `i`
@@ -165,7 +179,7 @@ literal's simple pair): a silent wrong result, which the freeze doesn't allow. S
 | Backreferences | `\1`…, `\k<name>` (to every group of a duplicated name) |
 | Lookahead | every form, captures included |
 | Lookbehind | see "Lookbehind" above |
-| Classes | ranges, shorthands and properties as members, negation, `[]` and `[^]`; under `v`, one set operation `--`/`&&` per class |
+| Classes | ranges, shorthands and properties as members, negation, `[]` and `[^]`; under `v`, set operations `--`/`&&` (one operator per class, chained), nested classes, `\q{…}` and the properties of strings |
 | `\p{…}` / `\P{…}` | every UCD 17.0.0 name: General_Category, the binary properties, `Script`/`sc` and `Script_Extensions`/`scx` with their aliases |
 | Case folding | `i`: ECMA-262's Canonicalize (`toUppercase` without `u`, simple case folding with `u`), in literals, classes, ranges, properties, `\w`, `\b` and backreferences; `iv` as above |
 | Subjects | WTF-8 (bytes, lone surrogates allowed) and UTF-16 (code units), indices in the subject's units (`Subject`, `execAt`) |

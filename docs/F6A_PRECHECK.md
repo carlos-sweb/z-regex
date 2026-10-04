@@ -1,5 +1,7 @@
 # F6a: verificación previa y plan
 
+> **Histórico** (F6a, cerrada). Las rutas citan el árbol de `66a9d60`: `recursive_matcher.zig` se retiró en B′ (0.5.0).
+
 Lo que se midió antes de escribir código en F6a (backtracker con pila explícita, trail y
 LookLinear), y el plan que salió de ello. Medido en `66a9d60` con sondas del scratchpad (un
 proceso por caso, `ulimit -s`), `zregex_xbench` y los corpus de F0c (npm) y F2c. Las líneas

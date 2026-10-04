@@ -16,7 +16,9 @@ pub const NodeType = enum {
     unicode_property, // \p{...} / \P{...} (Unicode General_Category or binary property)
     unicode_script, // \p{Script=...} / \p{sc=...} / \P{Script=...}
     unicode_script_extensions, // \p{Script_Extensions=...} / \p{scx=...} / \P{Script_Extensions=...}
-    class_set_op, // `v`-mode class set operation: [A--B] / [A&&B]
+    class_set_op, // `v`-mode class set operation: [A--B--...] / [A&&B&&...]
+    class_string, // `v`: one string of `\q{...}` that isn't one character (its children the characters)
+    string_property, // `v`: \p{...} of a property of strings (e.g. Emoji_Keycap_Sequence)
 
     // Quantifiers (greedy)
     star, // Zero or more (greedy)
@@ -158,6 +160,23 @@ pub const Node = struct {
         return node;
     }
 
+    /// Create one string of a `v`-mode `\q{...}`: empty, or two characters
+    /// or more, each a `char` child appended after this. A string of one
+    /// character is that `char` itself.
+    pub fn createClassString(allocator: Allocator) !*Node {
+        const node = try allocator.create(Node);
+        node.* = .{ .type = .class_string, .allocator = allocator };
+        return node;
+    }
+
+    /// Create a property of strings node (`\p{Emoji_Keycap_Sequence}`,
+    /// `v` only): `prop` is a `unicode/properties.zig` `StringProperty`.
+    pub fn createStringProperty(allocator: Allocator, prop: u8) !*Node {
+        const node = try allocator.create(Node);
+        node.* = .{ .type = .string_property, .allocator = allocator, .char_value = prop };
+        return node;
+    }
+
     /// Create a Unicode Script node (`\p{Script=Name}` / `\p{sc=Name}`).
     /// `script_index` is an index into `unicode/properties.zig`/`tables.zig`'s
     /// generated `SCRIPT_NAMES`/`SCRIPT_RANGES` arrays (not the
@@ -190,13 +209,14 @@ pub const Node = struct {
         return node;
     }
 
-    /// Create a `v`-mode class set operation node (`[A--B]` / `[A&&B]`).
-    /// `op` is `0` for difference (matches `A` but not `B`) or `1` for
-    /// intersection (matches both); `children[0]`/`children[1]` are the two
-    /// operand nodes (each a `char_class` node, for an ordinary or nested
-    /// `[...]` operand, or a `unicode_property`/`unicode_script`/
-    /// `unicode_script_extensions` node for a bare `\p{...}`/`\P{...}`
-    /// operand) -- append both via `appendChild` after calling this.
+    /// Create a `v`-mode class set operation node (`[A--B--C]` /
+    /// `[A&&B&&C]`). `op` is `0` for difference (matches `A` but not `B`) or
+    /// `1` for intersection (matches both), applied from left to right over
+    /// the children, two or more: the operands in order (each a `char_class`
+    /// node, for a nested `[...]`, a single character or a shorthand; a
+    /// nested `class_set_op`; or a `unicode_property`/`unicode_script`/
+    /// `unicode_script_extensions` node for a bare `\p{...}`/`\P{...}`)
+    /// -- append them via `appendChild` after calling this.
     /// `negated` is this whole operation's own `[^...]` negation (distinct
     /// from either operand's own negation, if it's a `[^...]` nested class).
     pub fn createClassSetOp(allocator: Allocator, op: ClassSetOp, negated: bool) !*Node {

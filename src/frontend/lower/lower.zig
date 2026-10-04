@@ -35,6 +35,7 @@ const charset_mod = @import("ir").charset;
 const properties = @import("unicode").properties;
 const casefold = @import("unicode").casefold;
 const fold_mod = @import("fold.zig");
+const build_options = @import("build_options");
 const Lexer = @import("../parser/lexer.zig").Lexer;
 const Parser = @import("../parser/parser.zig").Parser;
 
@@ -186,8 +187,9 @@ const Lowerer = struct {
             .dot => self.lowerDot(),
             .char_range => self.lowerByteRange(n),
             .unicode_property, .unicode_script, .unicode_script_extensions => self.lowerProperty(n),
-            .char_class => self.lowerClass(n),
-            .class_set_op => self.lowerClassSetOp(n),
+            .char_class => if (hasStrings(n)) self.lowerClassStrings(n) else self.lowerClass(n),
+            .class_set_op => if (hasStrings(n)) self.lowerClassStrings(n) else self.lowerClassSetOp(n),
+            .string_property => self.lowerClassStrings(n),
             else => error.InvalidPattern,
         };
     }
@@ -361,6 +363,288 @@ const Lowerer = struct {
         return self.make(.{ .char_set = .{ .set = set, .inverted = inverted, .encoding_hint = hint, .analysis_origin = origin } });
     }
 
+    // -------------------------------------------------------------------------
+    // Classes with strings (`v`: `\q{...}`, properties of strings; F5c)
+    // -------------------------------------------------------------------------
+
+    /// Whether a class has a `\q{...}` string that isn't one character or a
+    /// property of strings, at any depth. Every other class is lowered as a
+    /// set of code points, exactly as before F5c.
+    fn hasStrings(n: *const AstNode) bool {
+        return switch (n.type) {
+            .class_string, .string_property => true,
+            .char_class, .class_set_op => for (n.children.items) |child| {
+                if (hasStrings(child)) break true;
+            } else false,
+            else => false,
+        };
+    }
+
+    /// What a `v` class with strings holds: its single code points, its
+    /// strings of two code points or more (sorted, unique) and whether it
+    /// holds the empty string. Under `iv` the strings are simple-case-folded
+    /// (MaybeSimpleCaseFolding), so the set operations compare them folded.
+    const ClassStrings = struct {
+        chars: CharSet,
+        strings: []const []const u32,
+        empty: bool,
+    };
+
+    fn lessString(_: void, a: []const u32, b: []const u32) bool {
+        return std.mem.order(u32, a, b) == .lt;
+    }
+
+    /// `list` sorted, without duplicates. A property's part comes sorted
+    /// already (the generator sorts it): then there is nothing to do.
+    fn uniqueStrings(list: [][]const u32) []const []const u32 {
+        if (list.len < 2) return list;
+        for (1..list.len) |i| {
+            if (!lessString({}, list[i - 1], list[i])) break;
+        } else return list;
+        std.sort.heap([]const u32, list, {}, lessString);
+        var n: usize = 0;
+        for (list) |str| {
+            if (n > 0 and std.mem.eql(u32, list[n - 1], str)) continue;
+            list[n] = str;
+            n += 1;
+        }
+        return list[0..n];
+    }
+
+    /// The strings of `a` that are (`keep` true) or aren't in `b`; both
+    /// sorted and unique.
+    fn filterStrings(self: *Lowerer, a: []const []const u32, b: []const []const u32, keep: bool) LowerError![]const []const u32 {
+        var out: std.ArrayListUnmanaged([]const u32) = .empty;
+        var j: usize = 0;
+        for (a) |str| {
+            while (j < b.len and lessString({}, b[j], str)) j += 1;
+            const in_b = j < b.len and std.mem.eql(u32, b[j], str);
+            if (in_b == keep) try out.append(self.arena, str);
+        }
+        return out.items;
+    }
+
+    /// One string of a `\q{...}` or a property of strings, folded under `iv`.
+    fn foldedString(self: *Lowerer, cps: []const u32) LowerError![]const u32 {
+        const mode = self.fold orelse return cps;
+        const out = try self.arena.alloc(u32, cps.len);
+        for (cps, out) |cp, *o| o.* = casefold.canonicalize(cp, mode);
+        return out;
+    }
+
+    /// The value of a class, a set operation, a property of strings or one
+    /// of their members.
+    fn classStringsValue(self: *Lowerer, n: *const AstNode) LowerError!ClassStrings {
+        switch (n.type) {
+            .char_class => {
+                var ranges: std.ArrayListUnmanaged(Range) = .empty;
+                var strings: std.ArrayListUnmanaged([]const u32) = .empty;
+                var chars = try CharSet.fromRanges(self.arena, &.{});
+                var empty = false;
+                for (n.children.items) |child| switch (child.type) {
+                    .char => try ranges.append(self.arena, .{ .lo = child.char_value, .hi = child.char_value }),
+                    .char_range => {
+                        // Under `iv` a `\W` member is the complement of the
+                        // extended WordCharacters, not its ranges folded
+                        // (`classMembersFolded`); not with strings yet.
+                        if (child.not_word and self.fold != null) return error.UnsupportedFeature;
+                        try ranges.append(self.arena, .{ .lo = child.range_start, .hi = child.range_end });
+                    },
+                    .unicode_property, .unicode_script, .unicode_script_extensions => chars = try chars.unionWith(try self.propertyMembers(child), self.arena),
+                    .class_string => {
+                        if (child.children.items.len == 0) {
+                            empty = true;
+                            continue;
+                        }
+                        const cps = try self.arena.alloc(u32, child.children.items.len);
+                        for (child.children.items, cps) |c, *cp| cp.* = c.char_value;
+                        try strings.append(self.arena, try self.foldedString(cps));
+                    },
+                    .char_class, .class_set_op, .string_property => {
+                        const inner = try self.classStringsValue(child);
+                        chars = try chars.unionWith(inner.chars, self.arena);
+                        try strings.appendSlice(self.arena, inner.strings);
+                        empty = empty or inner.empty;
+                    },
+                    else => return error.InvalidPattern,
+                };
+                chars = try chars.unionWith(try CharSet.fromRanges(self.arena, ranges.items), self.arena);
+                if (n.inverted) {
+                    // MayContainStrings (the parser) keeps strings out of a
+                    // negated class.
+                    if (strings.items.len > 0 or empty) return error.InvalidPattern;
+                    // Under `iv` a negated class must be closed under the
+                    // folding (F7c-0).
+                    if (self.fold) |mode| if (!(try fold_mod.foldSet(self.arena, chars, mode)).eql(chars)) return error.UnsupportedFeature;
+                    chars = try chars.complement(self.arena);
+                }
+                return .{ .chars = chars, .strings = uniqueStrings(strings.items), .empty = empty };
+            },
+            .class_set_op => {
+                const operands = n.children.items;
+                if (operands.len < 2) return error.InvalidPattern;
+                const op: ast.ClassSetOp = @enumFromInt(n.char_value);
+                var acc = try self.classStringsOperand(operands[0]);
+                for (operands[1..]) |operand| {
+                    const right = try self.classStringsOperand(operand);
+                    acc = switch (op) {
+                        .intersection => .{
+                            .chars = try acc.chars.intersect(right.chars, self.arena),
+                            .strings = try self.filterStrings(acc.strings, right.strings, true),
+                            .empty = acc.empty and right.empty,
+                        },
+                        .difference => .{
+                            .chars = try acc.chars.difference(right.chars, self.arena),
+                            .strings = try self.filterStrings(acc.strings, right.strings, false),
+                            .empty = acc.empty and !right.empty,
+                        },
+                    };
+                }
+                if (n.inverted) {
+                    if (acc.strings.len > 0 or acc.empty) return error.InvalidPattern;
+                    acc.chars = try acc.chars.complement(self.arena);
+                }
+                return acc;
+            },
+            .string_property => {
+                const prop: properties.StringProperty = @enumFromInt(n.char_value);
+                // Without `-Dproperties_of_strings` only Emoji_Keycap_Sequence
+                // parses, and only its table is referenced (so linked).
+                const segments = if (build_options.properties_of_strings) properties.stringPropertySegments(prop) else blk: {
+                    if (prop != .Emoji_Keycap_Sequence) return error.InvalidPattern;
+                    break :blk properties.keycapSegments();
+                };
+                var ranges: std.ArrayListUnmanaged(Range) = .empty;
+                var strings: std.ArrayListUnmanaged([]const u32) = .empty;
+                for (segments) |seg| {
+                    for (seg.singles()) |r| try ranges.append(self.arena, .{ .lo = r.start, .hi = r.end });
+                    try strings.ensureUnusedCapacity(self.arena, seg.stringCount());
+                    for (0..seg.stringCount()) |i| {
+                        const cps = try self.arena.alloc(u32, seg.stringLen(i));
+                        seg.decode(i, cps);
+                        strings.appendAssumeCapacity(try self.foldedString(cps));
+                    }
+                }
+                return .{ .chars = try CharSet.fromRanges(self.arena, ranges.items), .strings = uniqueStrings(strings.items), .empty = false };
+            },
+            .unicode_property, .unicode_script, .unicode_script_extensions => return .{ .chars = try self.propertyMembers(n), .strings = &.{}, .empty = false },
+            else => return error.InvalidPattern,
+        }
+    }
+
+    /// An operand of `--`/`&&` with strings: under `iv` its code points must
+    /// be closed under the folding (F7c-0); its strings are folded already.
+    fn classStringsOperand(self: *Lowerer, n: *const AstNode) LowerError!ClassStrings {
+        const value = try self.classStringsValue(n);
+        if (self.fold) |mode| if (!(try fold_mod.foldSet(self.arena, value.chars, mode)).eql(value.chars)) return error.UnsupportedFeature;
+        return value;
+    }
+
+    /// A class with strings, as ECMA-262 compiles it (CompileAtom): the
+    /// strings longest first, then the single code points, then the empty
+    /// string, each alternative tried in that order. The strings are
+    /// factored by prefix (a trie): strings with different first code points
+    /// can't both match, and under one prefix the longer continuations still
+    /// come first, so the order is the same.
+    noinline fn lowerClassStrings(self: *Lowerer, n: *const AstNode) LowerError!*const Node {
+        if (self.v_fold and hasProperty(n)) return error.UnsupportedFeature;
+        const value = try self.classStringsValue(n);
+        var alts: std.ArrayListUnmanaged(*const Node) = .empty;
+        if (value.strings.len > 0) try self.appendTrie(&alts, value.strings, 0, 0);
+        if (!value.chars.isEmpty()) {
+            const f = try self.folded(value.chars, .set);
+            try alts.append(self.arena, try self.charSetNodeFrom(f.set, false, f.hint, .{ .property = hasProperty(n), .set_operation = true }));
+        }
+        if (value.empty) try alts.append(self.arena, try self.make(.empty));
+        return switch (alts.items.len) {
+            // No member left (`[\q{ab}&&a]`): never matches.
+            0 => self.charSetNodeFrom(try CharSet.fromRanges(self.arena, &.{}), false, .set, .{ .set_operation = true }),
+            1 => alts.items[0],
+            else => self.make(.{ .alt = alts.items }),
+        };
+    }
+
+    /// Past this many branching levels the trie stops factoring and lists
+    /// the rest of each string (`\q{a|aa|aaa|...}` would nest one level per
+    /// string); the order, longest first, is the same.
+    const max_trie_depth = 64;
+
+    /// The alternatives matching `strings` (sorted, unique) from code point
+    /// `at` on: one per first code point, the continuations under it, and
+    /// last a string that ends at `at` (the empty continuation).
+    fn appendTrie(self: *Lowerer, alts: *std.ArrayListUnmanaged(*const Node), strings: []const []const u32, at: usize, depth: usize) LowerError!void {
+        var ends = false;
+        var i: usize = 0;
+        if (depth >= max_trie_depth) {
+            // Flat: every remaining string, longest first.
+            const rest = try self.arena.dupe([]const u32, strings);
+            std.sort.heap([]const u32, rest, {}, longerFirst);
+            for (rest) |str| {
+                if (str.len == at) {
+                    ends = true;
+                    continue;
+                }
+                try alts.append(self.arena, try self.literalOf(str[at..]));
+            }
+            if (ends) try alts.append(self.arena, try self.make(.empty));
+            return;
+        }
+        while (i < strings.len) {
+            if (strings[i].len == at) {
+                // Sorted lexicographically, the string that ends here comes
+                // first among those sharing its prefix.
+                ends = true;
+                i += 1;
+                continue;
+            }
+            const first = strings[i][at];
+            var j = i + 1;
+            while (j < strings.len and strings[j].len > at and strings[j][at] == first) j += 1;
+            const group = strings[i..j];
+            // The prefix every string of the group shares from `at`.
+            var common: usize = 1;
+            prefix: while (true) : (common += 1) {
+                for (group) |str| {
+                    if (str.len <= at + common or str[at + common] != group[0][at + common]) break :prefix;
+                }
+            }
+            const head = try self.literalOf(group[0][at .. at + common]);
+            var inner: std.ArrayListUnmanaged(*const Node) = .empty;
+            try self.appendTrie(&inner, group, at + common, depth + 1);
+            const tail: ?*const Node = switch (inner.items.len) {
+                0 => null,
+                1 => if (inner.items[0].* == .empty) null else inner.items[0],
+                else => try self.make(.{ .alt = inner.items }),
+            };
+            try alts.append(self.arena, if (tail) |t| try self.make(.{ .seq = try self.arena.dupe(*const Node, &.{ head, t }) }) else head);
+            i = j;
+        }
+        if (ends) try alts.append(self.arena, try self.make(.empty));
+    }
+
+    fn longerFirst(_: void, a: []const u32, b: []const u32) bool {
+        return a.len > b.len;
+    }
+
+    /// The code points of `cps` in sequence, each as a literal is lowered
+    /// (under `i`, the set of its class when the executors don't fold it).
+    fn literalOf(self: *Lowerer, cps: []const u32) LowerError!*const Node {
+        var items: std.ArrayListUnmanaged(*const Node) = .empty;
+        var pending: std.ArrayListUnmanaged(hir.LitUnit) = .empty;
+        for (cps) |cp| {
+            const unit = try self.literalUnit(.{ .value = cp });
+            switch (unit.*) {
+                .literal => |lit| try pending.appendSlice(self.arena, lit.units),
+                else => {
+                    try self.flushLiteral(&items, &pending);
+                    try items.append(self.arena, unit);
+                },
+            }
+        }
+        try self.flushLiteral(&items, &pending);
+        return if (items.items.len == 1) items.items[0] else self.make(.{ .seq = items.items });
+    }
+
     /// Whether a class or a set-operation operand has a `\p`/`\P` member.
     fn hasProperty(n: *const AstNode) bool {
         return switch (n.type) {
@@ -441,6 +725,8 @@ const Lowerer = struct {
 
         for (children) |child| switch (child.type) {
             .unicode_property, .unicode_script, .unicode_script_extensions => return self.charSetNodeFrom(try self.classMembersAny(n), n.inverted, .set, .{ .property = true }),
+            // A union with a nested class (`v`): `[[a]b]`, `[a-z[0-9]_]`.
+            .char_class, .class_set_op => return self.charSetNodeFrom(try self.classMembersAny(n), n.inverted, .set, .{ .property = hasProperty(n), .set_operation = true }),
             else => {},
         };
         var needs_set = false;
@@ -498,6 +784,12 @@ const Lowerer = struct {
             .unicode_property, .unicode_script, .unicode_script_extensions => {
                 const p = try self.foldedProperty(child);
                 acc = if (acc) |a| try a.unionWith(p, self.arena) else p;
+            },
+            // A nested class (`iv`): closed under the folding, or
+            // UnsupportedFeature (`classSetOperand`).
+            .char_class, .class_set_op => {
+                const c = try self.classSetOperand(child);
+                acc = if (acc) |a| try a.unionWith(c, self.arena) else c;
             },
             else => return error.InvalidPattern,
         };
@@ -563,11 +855,15 @@ const Lowerer = struct {
                 }
             },
             .char_range => try literal.append(self.arena, .{ .lo = child.range_start, .hi = child.range_end }),
-            .unicode_property, .unicode_script, .unicode_script_extensions => try props.append(self.arena, child),
+            .unicode_property, .unicode_script, .unicode_script_extensions, .char_class, .class_set_op => try props.append(self.arena, child),
             else => return error.InvalidPattern,
         };
         var acc = try CharSet.fromRanges(self.arena, literal.items);
-        for (props.items) |p| acc = try acc.unionWith(try self.propertyMembers(p), self.arena);
+        for (props.items) |p| {
+            // A nested class (`v`) is its own set, with its own `[^...]`.
+            const set = if (p.type == .char_class or p.type == .class_set_op) try self.classSetOperand(p) else try self.propertyMembers(p);
+            acc = try acc.unionWith(set, self.arena);
+        }
         return acc;
     }
 
@@ -598,13 +894,18 @@ const Lowerer = struct {
         return CharSet.borrowed(@ptrCast(table));
     }
 
-    /// One operand of a `v` set operation: a class (its members, then its
-    /// own `[^...]` as a complement) or a bare `\p{...}`. Not folded: under
-    /// `iv` it must be closed under the folding (F7c-0).
+    /// One operand of a `v` set operation, or a nested class in a union: a
+    /// class (its members, then its own `[^...]` as a complement), a nested
+    /// set operation (likewise) or a bare `\p{...}`. Not folded: under `iv`
+    /// it must be closed under the folding (F7c-0).
     fn classSetOperand(self: *Lowerer, n: *const AstNode) LowerError!CharSet {
         const set = switch (n.type) {
             .char_class => blk: {
                 const members = try self.classMembers(n, false);
+                break :blk if (n.inverted) try members.complement(self.arena) else members;
+            },
+            .class_set_op => blk: {
+                const members = try self.classSetOpMembers(n);
                 break :blk if (n.inverted) try members.complement(self.arena) else members;
             },
             .unicode_property, .unicode_script, .unicode_script_extensions => try self.propertyMembers(n),
@@ -617,17 +918,21 @@ const Lowerer = struct {
         return set;
     }
 
-    /// `[A--B]` / `[A&&B]` without the outermost `[^...]` (the node's
-    /// `inverted`, applied by `charSetNode`).
+    /// `[A--B--C]` / `[A&&B&&C]` without the outermost `[^...]` (the node's
+    /// `inverted`, applied by `charSetNode`): the operator from left to right.
     fn classSetOpMembers(self: *Lowerer, n: *const AstNode) LowerError!CharSet {
-        if (n.children.items.len != 2) return error.InvalidPattern;
-        const left = try self.classSetOperand(n.children.items[0]);
-        const right = try self.classSetOperand(n.children.items[1]);
+        const operands = n.children.items;
+        if (operands.len < 2) return error.InvalidPattern;
         const op: ast.ClassSetOp = @enumFromInt(n.char_value);
-        return switch (op) {
-            .intersection => left.intersect(right, self.arena),
-            .difference => left.difference(right, self.arena),
-        };
+        var acc = try self.classSetOperand(operands[0]);
+        for (operands[1..]) |operand| {
+            const right = try self.classSetOperand(operand);
+            acc = switch (op) {
+                .intersection => try acc.intersect(right, self.arena),
+                .difference => try acc.difference(right, self.arena),
+            };
+        }
+        return acc;
     }
 };
 

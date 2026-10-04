@@ -20,6 +20,12 @@
     { "id": "t1_lu", "tier": "T1", "name": "\\p{General_Category=Lu} /u", "pattern": "\\p{General_Category=Lu}", "flags": "u", "corpus": "unicode_mixed", "short": "abc Ωμέγα", "engines": ["zregex", "v8", "rust"] },
     { "id": "t1_vset", "tier": "T1", "name": "[\\p{L}--[a-z]] /v", "pattern": "[\\p{L}--[a-z]]", "flags": "v", "corpus": "unicode_mixed", "short": "abc Ωμέγα", "engines": ["zregex", "v8"] },
     { "id": "t1_book_pL", "tier": "T1", "name": "book: \\p{L}+ /u", "pattern": "\\p{L}+", "flags": "u", "corpus": "book", "short": "said Elizabeth", "engines": ["zregex", "v8", "rust"] },
+    { "id": "t1_v_greek3", "tier": "T1", "name": "\\p{Script=Greek}{3,} /v", "pattern": "\\p{Script=Greek}{3,}", "flags": "v", "corpus": "unicode_mixed", "short": "abc λόγος", "engines": ["zregex", "v8"] },
+    { "id": "t1_v_diff4", "tier": "T1", "name": "[\\p{L}--[a-z]]{4} /v", "pattern": "[\\p{L}--[a-z]]{4}", "flags": "v", "corpus": "unicode_mixed", "short": "abc Ωμέγα", "engines": ["zregex", "v8"] },
+    { "id": "t1_v_lu5", "tier": "T1", "name": "\\b\\p{Lu}{5}\\b /v", "pattern": "\\b\\p{Lu}{5}\\b", "flags": "v", "corpus": "unicode_mixed", "short": "abc ABCDE", "engines": ["zregex", "v8"] },
+    { "id": "t1_v_word_emoji", "tier": "T1", "name": "[\\p{L}\\p{N}_]+\\u{1F600} /v", "pattern": "[\\p{L}\\p{N}_]+\\u{1F600}", "flags": "v", "corpus": "unicode_mixed", "short": "abc def😀", "engines": ["zregex", "v8"] },
+    { "id": "t1_v_cap_end", "tier": "T1", "name": "(\\p{Lu})(\\p{Ll}+)\\.$ /v", "pattern": "(\\p{Lu})(\\p{Ll}+)\\.$", "flags": "v", "corpus": "unicode_mixed", "short": "abc Done.", "engines": ["zregex", "v8"] },
+    { "id": "t1_v_rgi", "tier": "T1", "name": "\\p{RGI_Emoji}+ /v", "pattern": "\\p{RGI_Emoji}+", "flags": "v", "corpus": "emoji", "short": "abc 🇪🇸", "engines": ["zregex", "v8"] },
 
     { "id": "t2_backref", "tier": "T2", "name": "<(\\w+)>.*?<\\/\\1>", "pattern": "<(\\w+)>.*?<\\/\\1>", "flags": "", "corpus": "html", "short": "<b>bold</b>", "engines": ["zregex", "v8", "pcre2"] },
     { "id": "t2_lookahead", "tier": "T2", "name": "(?=.*[a-z])(?=.*[A-Z]).{8,}", "pattern": "(?=.*[a-z])(?=.*[A-Z]).{8,}", "flags": "", "corpus": "passwords", "short": "Secret123x", "engines": ["zregex", "v8", "pcre2"] },

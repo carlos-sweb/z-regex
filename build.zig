@@ -19,7 +19,7 @@ pub const layers = [_]Layer{
     .{ .name = "unicode", .root = "src/unicode/root.zig", .deps = &.{} },
     .{ .name = "utils", .root = "src/utils/root.zig", .deps = &.{} },
     .{ .name = "subject", .root = "src/subject/root.zig", .deps = &.{} },
-    .{ .name = "frontend", .root = "src/frontend/root.zig", .deps = &.{ "ir", "unicode" } },
+    .{ .name = "frontend", .root = "src/frontend/root.zig", .deps = &.{ "ir", "unicode", "build_options" } },
     .{ .name = "tier0", .root = "src/tier0/root.zig", .deps = &.{ "ir", "utils", "subject" } },
     .{ .name = "tier1", .root = "src/tier1/root.zig", .deps = &.{ "ir", "unicode", "utils", "subject", "tier0" } },
     // tier2 -> tier0 (F6a): lookaheads without captures run on T0's VM
@@ -30,8 +30,15 @@ pub const layers = [_]Layer{
 
 /// Generated modules a layer may import besides the layers above:
 /// `build_options` (`force_backtracker`, F4a(5): the second integration
-/// test binary runs every test on the backtracker).
+/// test binary runs every test on the backtracker; `properties_of_strings`,
+/// F5c 2c).
 const generated_modules = [_][]const u8{"build_options"};
+
+/// `-Dproperties_of_strings` (F5c 2c, default true): false leaves out the
+/// six properties of strings other than `Emoji_Keycap_Sequence` (they are
+/// UnsupportedFeature) and their table (~30 KB). Set by `build` before the
+/// modules are created.
+var properties_of_strings: bool = true;
 
 /// One build of the whole module graph (per target/optimize mode).
 const Modules = struct {
@@ -55,6 +62,7 @@ fn addModulesWith(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std
     var mods: Modules = .{ .by_name = .empty };
     const options = b.addOptions();
     options.addOption(bool, "force_backtracker", force_backtracker);
+    options.addOption(bool, "properties_of_strings", properties_of_strings);
     mods.by_name.put(b.allocator, generated_modules[0], options.createModule()) catch @panic("OOM");
     for (layers) |layer| {
         const opts: std.Build.Module.CreateOptions = .{
@@ -160,6 +168,7 @@ pub fn build(b: *std.Build) void {
     // Standard target and optimize options
     const target = b.standardTargetOptions(.{});
     const optimize = b.standardOptimizeOption(.{});
+    properties_of_strings = b.option(bool, "properties_of_strings", "The six properties of strings other than Emoji_Keycap_Sequence and their table (default true)") orelse true;
 
     // Module for the exported C ABI (src/c_api.zig). This is *not* a supported public
     // C/C++ API -- no headers or wrapper are shipped for it. It exists solely as the
@@ -439,9 +448,11 @@ pub fn build(b: *std.Build) void {
     //   one);
     // - t1diff: what the dispatcher routes from T1 to the VM, against the
     //   backtracker (UTF-16 discrepancies to stdout, for V8 arbitration);
-    // - lldiff: LookLinear on vs off on the backtracker.
+    // - lldiff: LookLinear on vs off on the backtracker;
+    // - dfadiff: T0 as routed (fast paths and the DFA, code unit and code
+    //   point) against the plain VM, all slots, every index.
     const safe_zregex = addModules(b, target, .ReleaseSafe, false).get("zregex");
-    for ([_][]const u8{ "pfdiff", "t1diff", "lldiff" }) |name| {
+    for ([_][]const u8{ "pfdiff", "t1diff", "lldiff", "dfadiff" }) |name| {
         const m = b.createModule(.{ .root_source_file = b.path(b.fmt("tools/{s}.zig", .{name})), .target = target, .optimize = .ReleaseSafe });
         m.addImport("zregex", safe_zregex);
         const run = b.addRunArtifact(b.addExecutable(.{ .name = name, .root_module = m }));

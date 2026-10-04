@@ -35,6 +35,11 @@
 # E0 (1b): `\k<name>` with duplicate names emits one BACK_REF per group of
 # that name: 3 of 699 outcomes changed, exactly `(?<a>x)|(?<a>y)\k<a>` under
 # "", `u` and `v` (BACK_REF 1 becomes BACK_REF 1; BACK_REF 2).
+#
+# The laxity under `v` (after 0.8.0): a `-` that isn't a range or `--`, an
+# unescaped `( ) { } / |` and a doubled reserved punctuator (`!!`, `^^`, ...)
+# are InvalidClassSetOperand under `v`: 2 of 699 outcomes changed, exactly
+# `[-a]+` and `^[\s\d\w-]+$` under `v`, both a SyntaxError in V8.
 1f65ed2fc157c741		5b2f5d	[/]
 0dcc096902c1f92d		5b2f2f5d	[//]
 a26f4e06b953761a		28612a29625c312b	(a*)b\\1+
@@ -213,7 +218,7 @@ edc129483a809436		5b5c642d5d2b	[\\d-]+
 error:InvalidClassSetOperand	v	5b2d2d305d2b	[--0]+
 554e2015bfc7b75c		5b2d615d2b	[-a]+
 554e2015bfc7b75c	u	5b2d615d2b	[-a]+
-554e2015bfc7b75c	v	5b2d615d2b	[-a]+
+error:InvalidClassSetOperand	v	5b2d615d2b	[-a]+
 9655df47b9035d02		5b2d2d5d2b	[--]+
 9655df47b9035d02	u	5b2d2d5d2b	[--]+
 error:InvalidClassSetOperand	v	5b2d2d5d2b	[--]+
@@ -289,7 +294,7 @@ e0bbbbac037dd6a4	u	5e5b5c735c535d2b24	^[\\s\\S]+$
 e0bbbbac037dd6a4	v	5e5b5c735c535d2b24	^[\\s\\S]+$
 8397a41b21b5caba		5e5b5c735c645c772d5d2b24	^[\\s\\d\\w-]+$
 8397a41b21b5caba	u	5e5b5c735c645c772d5d2b24	^[\\s\\d\\w-]+$
-8397a41b21b5caba	v	5e5b5c735c645c772d5d2b24	^[\\s\\d\\w-]+$
+error:InvalidClassSetOperand	v	5e5b5c735c645c772d5d2b24	^[\\s\\d\\w-]+$
 1c2e45c244aa7b6b		5e2e24	^.$
 1c2e45c244aa7b6b	u	5e2e24	^.$
 1c2e45c244aa7b6b	v	5e2e24	^.$

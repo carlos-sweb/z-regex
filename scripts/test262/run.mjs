@@ -89,6 +89,17 @@ const isHeavy = (g) => HEAVY_GROUPS.some((h) => g === h || g.startsWith(`${h}/`)
 
 const pinnedSha = fs.readFileSync(path.join(here, 'TEST262_SHA'), 'utf8').trim();
 const zregexFeatureGaps = JSON.parse(fs.readFileSync(path.join(here, 'features.json'), 'utf8'));
+// The tests of a skipped feature that run anyway (`v-subset.json`: the part of
+// `v` zregex implements, docs/LIMITATIONS.md), and `--with-feature NAME`,
+// which runs all of a skipped feature's tests (to measure it; not with a
+// baseline update).
+const featureSubsets = JSON.parse(fs.readFileSync(path.join(here, 'v-subset.json'), 'utf8'));
+const WITH_FEATURE = opt('--with-feature', null);
+if (WITH_FEATURE && (UPDATE || IMPROVE || CHECK)) {
+  console.error('--with-feature is for measuring; not with a baseline option');
+  process.exit(2);
+}
+const featureRuns = (feature, rel) => feature === WITH_FEATURE || (featureSubsets[feature] || []).includes(rel);
 const hostUnsupported = probeHostFeatures();
 
 function walk(dir, out) {
@@ -175,7 +186,7 @@ for (const rel of files) {
     const key = `${rel}|${mode}`;
     const skip = (status, detail, reason) => (results[key] = { status, reason, detail, execCalls: 0 });
     const hostGap = meta.features.find((f) => hostUnsupported.has(f));
-    const zregexGap = meta.features.find((f) => f in zregexFeatureGaps);
+    const zregexGap = meta.features.find((f) => f in zregexFeatureGaps && !featureRuns(f, rel));
     if (meta.unsupported) skip('harness_error', meta.unsupported);
     else if (meta.flags.includes('module') || meta.flags.includes('async')) {
       skip('skipped_host', `flags: ${meta.flags.join(', ')} not supported by the vm-based runner`, 'host_runner');

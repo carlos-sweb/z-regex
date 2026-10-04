@@ -25,9 +25,9 @@ const corpus = `${X}/corpus`;
 const { cases } = JSON.parse(fs.readFileSync('bench/compare/cases.json', 'utf8'));
 const TIMEOUT_MS = 5000;
 
-function run(cmd, args, timeout = 600000) {
+function run(cmd, args, timeout = 600000, cwd = undefined) {
   const t0 = Date.now();
-  const r = spawnSync(cmd, args, { encoding: 'utf8', timeout, maxBuffer: 64 << 20 });
+  const r = spawnSync(cmd, args, { encoding: 'utf8', timeout, maxBuffer: 64 << 20, cwd });
   const ms = Date.now() - t0;
   if (r.error && r.error.code === 'ETIMEDOUT') return { timeout: true, ms };
   if (r.status !== 0) throw new Error(`${cmd} ${args.join(' ')} failed: ${r.stderr}`);
@@ -50,7 +50,15 @@ const engines = {
 };
 const BASE = `${X}/bin/zregex_base_xbench`;
 const relabel = (out) => ({ ...out, engine: 'zregex_base', cases: out.cases.map((c) => ({ ...c, engine: 'zregex_base' })) });
-if (fs.existsSync(BASE)) engines.zregex_base = () => relabel(run(BASE, [corpus]));
+// Cases the base version can't compile (a feature added since): the base
+// runs from its own directory, with a cases.json without them.
+const BASE_SKIP = (process.env.XBENCH_BASE_SKIP ?? '').split(',').filter(Boolean);
+const baseCwd = path.resolve(`${X}/base-cwd`);
+if (fs.existsSync(BASE)) {
+  fs.mkdirSync(`${baseCwd}/bench/compare`, { recursive: true });
+  fs.writeFileSync(`${baseCwd}/bench/compare/cases.json`, JSON.stringify({ cases: cases.filter((c) => !BASE_SKIP.includes(c.id)) }));
+  engines.zregex_base = () => relabel(run(path.resolve(BASE), [path.resolve(corpus)], 600000, baseCwd));
+}
 
 function adversarial() {
   const out = [];
@@ -61,7 +69,7 @@ function adversarial() {
         out.push(r.timeout ? { engine, id: c.id, n, ms: r.ms, outcome: `timeout (> ${TIMEOUT_MS / 1000} s, killed)` } : { ...r, engine });
       };
       one('zregex', 'zig-out/bin/zregex_xbench', [corpus, '--adv', c.id, String(n)]);
-      if (fs.existsSync(BASE)) one('zregex_base', BASE, [corpus, '--adv', c.id, String(n)]);
+      if (fs.existsSync(BASE) && !BASE_SKIP.includes(c.id)) one('zregex_base', path.resolve(BASE), [path.resolve(corpus), '--adv', c.id, String(n)]);
       one('v8', 'node', ['bench/compare/v8_xbench.mjs', corpus, '--adv', c.id, String(n)]);
       one('pcre2_jit', `${X}/bin/pcre2_xbench`, ['adv', c.id, c.pattern, String(n), 'jit', c.adv_suffix ?? 'c']);
       one('pcre2_interp', `${X}/bin/pcre2_xbench`, ['adv', c.id, c.pattern, String(n), 'interp', c.adv_suffix ?? 'c']);

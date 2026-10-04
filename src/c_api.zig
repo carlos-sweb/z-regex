@@ -1114,10 +1114,10 @@ test "error name: zregex_named_group_index records InvalidGroup" {
     try expectLastError(.ZREGEXP_OK, "");
 }
 
-test "\\q{...} and RegExp modifiers are ZREGEXP_ERROR_UNSUPPORTED (E0)" {
+test "a backward lookbehind under v and RegExp modifiers are ZREGEXP_ERROR_UNSUPPORTED (E0)" {
     var opts = std.mem.zeroes(ZRegexOptions);
     opts.v = true;
-    try std.testing.expect(zregex_compile("[\\q{a}]", &opts) == null);
+    try std.testing.expect(zregex_compile("(?<=a+)b", &opts) == null);
     try expectLastError(.ZREGEXP_ERROR_UNSUPPORTED, "UnsupportedFeature");
     try std.testing.expect(zregex_compile("(?i:a)", null) == null);
     try expectLastError(.ZREGEXP_ERROR_UNSUPPORTED, "UnsupportedFeature");

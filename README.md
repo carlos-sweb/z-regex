@@ -4,7 +4,7 @@ An ECMA-262 regular expression engine in Zig, independent of the JavaScript engi
 
 [![Zig 0.16+](https://img.shields.io/badge/zig-0.16%2B-orange)](https://ziglang.org/)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
-[![test262](https://img.shields.io/badge/test262-2994%2F3017%20run%2C%20821%20skipped-blue)](#compatibility)
+[![test262](https://img.shields.io/badge/test262-3305%2F3328%20run%2C%20510%20skipped-blue)](#compatibility)
 [![T0](https://img.shields.io/badge/T0-complete-green)](docs/REGEX_TIERS_PLAN.md)
 
 ## What it is
@@ -26,16 +26,17 @@ An ECMA-262 regular expression engine in Zig, independent of the JavaScript engi
 
 ## Status
 
-- **T0 (regular patterns): complete.** A Pike VM without captures and a tagged VM with
-  captures, both linear in the input.
+- **T0 (regular patterns): complete.** Linear in the input: fast paths (literal, class run,
+  Shift-And), a forward and a reverse DFA built at compile time within a cap (since 0.8.0),
+  and a Pike VM without captures and a tagged VM with captures for the rest and for groups.
 - **T1 (Unicode: `u`/`v`, `\p{…}`, full case folding): in development (F5).** Since F5a, `u`
-  and `\p{…}` run on T0's linear VM (code-point mode); since F5b, so does case folding
-  under `i` (with and without `u`). `v` (F5c) still runs on the backtracker.
+  and `\p{…}` run on T0 in code-point mode (the DFA too since 0.8.0); since F5b, so does
+  case folding under `i` (with and without `u`); since F5c 2c-b, `v`.
 - **T2 (backreferences, lookaround): on the explicit-stack backtracker**, with a step budget.
   Lookbehind: fixed length without captures (F6b step 1), and outside `u`/`v` any other
   without a lookaround inside, captures and backreferences included (F6b(1)-(3)); the rest
   is `error.UnsupportedFeature`.
-- **test262: 2994 of the 3017 entries that run (99.2%); 821 are skipped**, most of them
+- **test262: 3305 of the 3328 entries that run (99.3%); 510 are skipped**, most of them
   features zregex doesn't implement (`v`, RegExp modifiers): see Compatibility.
 - **Divergences from V8** in the differential: 0 different results; 2 patterns hit the step
   limit (T2).
@@ -51,7 +52,7 @@ An ECMA-262 regular expression engine in Zig, independent of the JavaScript engi
 | Alternation, prefilters, fast paths | T0 | OK |
 | `u`, `\p{…}` | T1 | OK (T0's linear VM, F5a) |
 | Unicode case folding under `i` (with and without `u`) | T1 | OK (T0's linear VM, F5b) |
-| `v`, `\q{…}` | T1 | F5c (runs on the backtracker) |
+| `v`, `\q{…}`, properties of strings | T1 | OK (T0's VMs and DFA, F5c); `v` with `i`: see LIMITATIONS |
 | Case folding under `v` (`iv`) | T1 | Literals and classes as `iu` (F7c-0); properties, negated foldable classes and set operations on open operands: `error.UnsupportedFeature` |
 | Backreferences | T2 | OK (backtracker) |
 | Lookahead | T2 | OK (backtracker) |
@@ -67,7 +68,7 @@ same whichever runs it.
 With Zig 0.16. Add the dependency (this writes the hash into `build.zig.zon`):
 
 ```sh
-zig fetch --save https://github.com/carlos-sweb/z-regex/archive/refs/tags/v0.8.0.tar.gz
+zig fetch --save https://github.com/carlos-sweb/z-regex/archive/refs/tags/v0.9.0.tar.gz
 ```
 
 In `build.zig`:
@@ -207,19 +208,19 @@ against V8, Rust regex, PCRE2 and zig-regex.
 
 ## Compatibility
 
-- **test262: 2994 of the 3017 entries that run (99.2%)**, the same status with UTF-16 and
+- **test262: 3305 of the 3328 entries that run (99.3%)**, the same status with UTF-16 and
   WTF-8 subjects. Baseline: `scripts/test262/baseline.json`. The 23 that run and don't pass:
   4 lookbehind entries that are `UnsupportedFeature` (2 with a lookaround inside a backward
   lookbehind, `nested-lookaround`, a 1.x decision; 2 under `u`, `named-groups/lookbehind`),
   4 host (JS lexer) and 15 not extractable.
-- **821 test262 entries are skipped** and are not in 2994/3017:
+- **510 test262 entries are skipped** and are not in 3305/3328:
 
   | Skipped | Entries | Why |
   |---|---|---|
-  | `v` flag | 312 | Partial in zregex (F5c); the harness skips the feature |
+  | `v` flag | 1 | The 311 entries that pass run (`scripts/test262/v-subset.json`); the other is the host's |
   | RegExp modifiers (ES2025) | 377 | Not implemented, pending until further notice; the harness's Node (22) lacks them too |
   | Duplicate named groups | 24 | Implemented; the harness's Node lacks them. With Node 24 every `named-groups` entry passes except the variable-length lookbehind one |
-  | `RegExp.escape` | 40 | A host function; its tests don't exercise zregex |
+  | `RegExp.escape` | 40 | A built-in function of ECMA-262 (ES2025), not pattern syntax: its tests exercise the host's `RegExp.escape`, not matching. zregex has no `escape` helper (1.x) |
   | Legacy RegExp (Annex B statics) | 52 | Host |
   | Fail in V8 itself / host flag validation | 16 | Host |
 - **`differential-v8`** against `tests/differential/reference/diff-F7a.json`: 0 new, 0 gone,
@@ -262,9 +263,9 @@ The cross-engine benchmark: `bench/compare/prepare.sh`, then `node bench/compare
 
 ## Limitations
 
-- **T1 is incomplete (F5):** Unicode case folding, `v` and `\q{…}` run on the backtracker,
-  not on a linear executor (`u` and `\p{…}` alone run on the VM since F5a). Case folding of
-  non-ASCII ranges is partial.
+- **T1 is incomplete (F5):** `v` with `i` is `UnsupportedFeature` where `v`'s
+  MaybeSimpleCaseFolding differs from `iu` (LIMITATIONS). `u`, `\p{…}`, case folding and `v`
+  run on T0's VMs.
 - **T2 uses the current backtracker**, bounded by a step budget: a pathological pattern stops
   with `error.StepLimitExceeded` instead of an answer.
 - **Lookbehind (F6b, v0.6.0):** of fixed length without captures or
@@ -276,8 +277,8 @@ The cross-engine benchmark: `bench/compare/prepare.sh`, then `node bench/compare
 - **Valid syntax that isn't implemented is `error.UnsupportedFeature`** (C API
   `ZREGEXP_ERROR_UNSUPPORTED`), never a wrong result: a lookbehind matched backward (variable
   length, captures or backreferences inside) under `u`/`v` or with a lookaround inside,
-  and under `v` `\q{…}`, chained operations, a bare character as a set operand, a
-  union with a nested class, properties of strings. The table: [docs/LIMITATIONS.md](docs/LIMITATIONS.md).
+  and, in a build with `-Dproperties_of_strings=false`, the properties of strings other
+  than `Emoji_Keycap_Sequence`. The table: [docs/LIMITATIONS.md](docs/LIMITATIONS.md).
 - **RegExp modifiers (ES2025)**, `(?i:…)`, `(?-m:…)`: not implemented, pending until further
   notice; `(?i:a)` is `error.UnsupportedFeature`.
 - Patterns with a raw, non-UTF-8 byte (WTF-8 only) stay on the backtracker, as does a tagged
@@ -311,12 +312,18 @@ measurements: [docs/HISTORY.md](docs/HISTORY.md). How the engine works:
 - **v0.8.0: T0-A, the DFA on T0.** A forward and a reverse DFA built at compile time, within a
   cap, for T0's programs: without asserts, with `^`/`$`/`\b`/`\B`, and in code-point mode
   (`u`/`v`); API and results unchanged ([release notes](docs/RELEASE_NOTES_v0.8.0.md)).
+- **v0.9.0: F5c, `v` on T0.** `v` complete but for `v` with `i`'s MaybeSimpleCaseFolding:
+  invalid class set syntax rejected, bare operands, chained operators, nested unions,
+  `\q{…}` strings and the seven properties of strings; `v` patterns run on T0's VMs and DFA;
+  test262 3305/3328; API unchanged ([release notes](docs/RELEASE_NOTES_v0.9.0.md)).
 - **To 1.0** ([docs/plans/ROADMAP_1.0.md](docs/plans/ROADMAP_1.0.md)): E0 (v0.5.1) → E1, full
   F6b (v0.6.0) → F7c: API freeze and documentation (v0.7.0, done) → T0 throughput
   (v0.7.1, done) → a DFA for T0 ([docs/plans/T0-A.md](docs/plans/T0-A.md)) and the full
-  benchmark (v0.8.0, done) → 1–3 months of production use → v1.0.0 with the same API. RegExp modifiers: pending until further notice.
+  benchmark (v0.8.0, done) → F5c, `v` on T0 (v0.9.0, done) → 1–3 months of production use →
+  v1.0.0 with the same API. RegExp modifiers: pending until further notice.
 - **F5, T1 (Unicode):** F5a done (`u` and `\p{…}` on the VM, every UCD property name);
-  F5b done (full case folding under `i`); F5c (full `v`) pending.
+  F5b done (full case folding under `i`); F5c done in v0.9.0 but for `v` with `i`'s
+  MaybeSimpleCaseFolding (`UnsupportedFeature` where it differs from `iu`).
 - **F6a, T2 without lookbehind: done** (explicit-stack backtracker, capture trail,
   LookLinear; F6a(1)–(3)).
 - **F6b, lookbehind: closed in v0.6.0.** B′ (fixed length without captures, forward) and

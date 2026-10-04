@@ -10,7 +10,7 @@ The 19 declarations at the root of the `zregex` module:
 
 | Symbol | What it is |
 |---|---|
-| `version` | The package version, a string (`"0.7.1"`). |
+| `version` | The package version, a string (`"0.9.0"`). |
 | `Regex` | A compiled pattern: `compile`, `compileWithOptions`, `deinit`, `matchFull`, `test_`, `find`, `findAt`, `findFrom`, `findAll`, `execAt`, `iterator`, `advanceIndex`, `replace`, `replaceAll`, `getPattern`, `groupCount`, `slotCount`. |
 | `CompileOptions` | The flags: `case_insensitive` (`i`), `multiline` (`m`), `dot_all` (`s`), `sticky` (`y`), `unicode` (`u`), `v`, and `possessive` (an extension: `*+`, `++`, `?+`). The four diagnostic fields are outside the contract (section 2). |
 | `RegexError` | What `Regex.compile`, the byte-offset methods and the one-shot functions fail with (section 3). |

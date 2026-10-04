@@ -131,6 +131,13 @@ reference run, not against zero:
 | `skipped_host` | not zregex's to pass; the `reason` field says why (see below) |
 | `skipped_feature` | feature zregex doesn't implement yet (`features.json`, with the phase that re-enables it) |
 
+**Feature subsets (`v-subset.json`).** A test of a skipped feature runs anyway when its
+file is listed under that feature in `v-subset.json`. For `regexp-v-flag` (F5c)
+the list holds the 181 files (311 entries) that pass whole, measured with
+`run.mjs --with-feature regexp-v-flag` (which runs all of a skipped feature's tests and
+writes no baseline). Of the 314 entries with the feature, at that measurement: 313 pass
+(311 of the engine suite, 2 of the host suite); 1 is the host's (`uv` flags).
+
 `skipped_host` reasons (grep `results.json` by `reason` to re-enable them on
 a newer Node):
 

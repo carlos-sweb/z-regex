@@ -1,6 +1,6 @@
 # Architecture
 
-How zregex turns a pattern into a match, as of F7c. This is the reference; the directory
+How zregex turns a pattern into a match, as of 0.8.0. This is the reference; the directory
 tree with one line per file is in [PROJECT_STRUCTURE.md](PROJECT_STRUCTURE.md), what the
 engine supports in [LIMITATIONS.md](LIMITATIONS.md), and the reasoning behind the tiers
 in [REGEX_TIERS_PLAN.md](REGEX_TIERS_PLAN.md).
@@ -8,8 +8,9 @@ in [REGEX_TIERS_PLAN.md](REGEX_TIERS_PLAN.md).
 ## Overview
 
 ```
-pattern ──► frontend ──────────────────► HIR ──┬─► tier0: Thompson program ──► Pike VM (plain or tagged)
-            lexer → parser (AST) → lower       │
+pattern ──► frontend ──────────────────► HIR ──┬─► tier0: Thompson program ──► fast paths (literal, class run, Shift-And)
+            lexer → parser (AST) → lower       │                               ──► DFA (forward + reverse), within a cap
+                                               │                               ──► Pike VM (plain or tagged)
                                                └─► tier2: code generator ──► bytecode ──► explicit-stack backtracker
                                                                                                │
                                                                     LookLinear: a lookahead ◄──┘
@@ -21,15 +22,20 @@ pattern ──► frontend ─────────────────�
   `CharSet` (sorted code point ranges) and case folding already applied to sets. The AST
   is freed when compilation ends.
 - **Two executors, chosen per pattern at compile time** (`src/compile.zig`, `route`):
-  - **T0**, a Pike VM that runs in O(subject × program), for patterns without
-    backreferences or lookarounds. It has two forms: a plain VM for patterns without
-    capture groups and a tagged VM with capture slots (two passes, D5).
+  - **T0**, for patterns without backreferences or lookarounds, linear in the subject. A
+    Thompson program, searched by the first that applies: a fast path (a literal, a class
+    run, Shift-And for a fixed sequence), the DFA built at compile time (forward and
+    reverse, within a cap), or a Pike VM in O(subject × program). The Pike VM has two
+    forms: a plain VM for patterns without capture groups and a tagged VM with capture
+    slots (two passes, D5); with groups, the fast paths and the DFA give the match bounds
+    and the tagged VM fills the groups over the span.
   - **T2**, a backtracker over bytecode, for everything else. It keeps its pending
     alternatives on a heap stack, never on the native stack.
 - **The backtracker's program is always built**; T0's only when the pattern routes there.
-  Every execution of a pattern with a T0 program goes to the VM.
+  Every execution of a pattern with a T0 program stays on T0 (fast path, DFA or VM).
 - **T1** (Unicode data, large counted repeats) has no executor of its own: its patterns run
-  on T0's VM in code-point mode when the VM takes them (`u`, `\p{…}`, Unicode case folding),
+  on T0 in code-point mode when T0 takes them (`u`, `\p{…}`, Unicode case folding; the DFA
+  too, in code-point mode),
   on the backtracker otherwise. `src/tier1/` is an empty layer kept for that tier.
 
 ## Modules and layers
@@ -45,7 +51,7 @@ each one may import, and `zig build check-layers` checks the sources against it
 | `utils` | — | Bit sets, dynamic buffers, pools, the shared step `Budget`, debug helpers |
 | `subject` | — | `Subject`: WTF-8 bytes or UTF-16 code units, positions and decoding in both directions |
 | `frontend` | `ir`, `unicode` | Lexer, parser (AST), lowering to the HIR and set folding |
-| `tier0` | `ir`, `utils`, `subject` | Thompson program, Pike VM (plain and tagged), prefilters |
+| `tier0` | `ir`, `utils`, `subject` | Thompson program, prefilters and fast paths (`prefilter.zig`, Shift-And in `shiftand.zig`), the DFA (`dfa.zig`), Pike VM (plain and tagged) |
 | `tier1` | `ir`, `unicode`, `utils`, `subject`, `tier0` | Empty (see above) |
 | `tier2` | `ir`, `unicode`, `utils`, `subject`, `tier0` | Bytecode format, code generator, backtracker |
 | `zregex` (`src/main.zig`) | all of the above | The public API: `regex.zig`, `compile.zig`, `analysis/`. `c_api.zig` is a separate root built on `zregex` |
@@ -78,9 +84,20 @@ ranges. `tier2` imports `tier0` for LookLinear (below).
 5. **Code generation** (`tier2/codegen/generator.zig`): HIR → bytecode, always. A program
    is at most 16 MiB (`PatternTooLarge`). Under the backtracker, a lookahead without
    captures also gets a T0 program (a `LinearSite`) for LookLinear.
-6. **T0 program** (`tier0/compile.zig`, `prefilter.zig`), when routed: a Thompson NFA whose
-   split order is ECMA-262's backtracking priority, plus exact prefilters (anchored,
-   literal, class run, first-character skip) in code-unit mode.
+6. **T0 program** (`tier0/compile.zig`), when routed: a Thompson NFA whose split order is
+   ECMA-262's backtracking priority, plus:
+   - **prefilters and fast paths** (`prefilter.zig`), in code-unit mode: anchored, literal,
+     class run, Shift-And for a straight line of 1 to 64 ASCII characters and classes
+     (`shiftand.zig`), and the skips `first` (first character) and `inner` (the run
+     before a required inner literal);
+   - **the DFA** (`dfa.zig`, T0-A), built here, at compile time (not lazily), for every
+     program it can take: a forward DFA that finds the end of the leftmost-first match and
+     a reverse DFA that finds its start, over equivalence classes of the decoded value (a
+     128-entry table for ASCII, a binary search over the range cuts for the rest). With
+     `^`, `$`, `\b` or `\B` the states also hold the context of one side (`Ctx` tables).
+     A `u`/`v` program gets it in code-point mode. The cap is 1,024 states (forward and
+     reverse together) and 32,768 cells; a program above it gets no DFA. In code-unit mode
+     a program the literal, class-run or Shift-And path serves whole gets none either.
 
 The result is a `Regex`: the backtracker's `CompileResult` (bytecode, `CharSet` table,
 named groups), the optional T0 `Program`, the pattern slice, `sticky` and the facade's
@@ -94,10 +111,18 @@ with a WTF-8 subject and byte offsets.
 
 - **Positions.** Indices are in the subject's units. Under `u`/`v` an index inside a
   surrogate pair starts at the pair (`Subject.charStart`).
-- **T0's VM** (`tier0/pikevm.zig`, `pikevm_tagged.zig`): threads ordered by priority, the
-  leftmost-first match ECMA-262's backtracking would find, in O(subject × program). The
-  tagged VM finds the match's end in a first pass and its captures in a second (D5). It
-  ignores `ExecLimits`: it can't blow up.
+- **T0** (`tier0/pikevm.zig`, `exec`), in this order:
+  1. a fast path (literal, class run, Shift-And), code-unit mode only;
+  2. the DFA, when the program has one built for the execution's mode
+     (`tier0/dfa.zig`): the forward DFA finds the end (with the `first` or `inner` skip
+     while nothing is alive), the reverse DFA from there the start; sticky runs the
+     forward one only;
+  3. otherwise the Pike VM: threads ordered by priority, the leftmost-first match
+     ECMA-262's backtracking would find, in O(subject × program).
+
+  With groups, the tagged VM (`pikevm_tagged.zig`) fills the captures over the bounds
+  the first step gave (or finds the end in a first pass and the captures in a second,
+  D5). T0 ignores `ExecLimits`: it can't blow up.
 - **The backtracker** (`tier2/executor/backtrack.zig`, `core.zig`): runs the bytecode with
   a heap stack of choicepoints (`Scratch.choices`), a capture trail undone to each
   choicepoint's height, zero-progress loop guards and a fast path for simple stars. One
@@ -162,9 +187,10 @@ pins the output of the code generator.
 | Parser fuzzing | `tests/fuzz_*.zig` | `zig build test-fuzz-stress` |
 | test262 | `scripts/test262/` (Node + koffi over the C API) | `zig build test262`, `test262-wtf8` |
 | Against V8 | `scripts/test262/differential.mjs`, `lbdiff-v8.mjs`, `ivdiff.mjs` | `zig build differential-v8`, `lbdiff-v8`, `ivdiff` |
-| Internal differentials | `tools/{pfdiff,t1diff,lldiff,lbdiff}.zig` over `tests/corpus/` | `zig build pfdiff`, `t1diff`, `lldiff`, `lbdiff` |
+| Internal differentials | `tools/{pfdiff,t1diff,lldiff,lbdiff,dfadiff}.zig` over `tests/corpus/` | `zig build pfdiff`, `t1diff`, `lldiff`, `lbdiff`, `dfadiff` |
 | All of it | `scripts/gate.sh` | the gate every phase closes with |
 
 The internal differentials compare two executors that must agree: T0's prefilters and VMs
-against the backtracker (`pfdiff`, `t1diff`), LookLinear against the backtracker's own
+against the backtracker (`pfdiff`, `t1diff`), T0 as routed (fast paths and DFA, both
+modes) against the plain VM (`dfadiff`), LookLinear against the backtracker's own
 lookahead (`lldiff`), and each lookbehind against a forward oracle (`lbdiff`).

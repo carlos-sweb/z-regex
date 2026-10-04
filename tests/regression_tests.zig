@@ -403,11 +403,121 @@ test "F7c-4b: mixed operators and non-atom operands in a v class are a SyntaxErr
         var re = try zregex.Regex.compileWithOptions(testing.allocator, p, v);
         re.deinit();
     }
-    // Also valid, not implemented: a bare character or shorthand as the
-    // right operand (bug B, F5c) and a chain of one operator (F5c). The
-    // opposite of the rows above: valid syntax zregex doesn't run yet.
+    // A bare character or shorthand as the right operand (bug B) and a
+    // chain of one operator: UnsupportedFeature until F5c 1.1.
     for ([_][]const u8{ "[a--b]", "[a&&b]", "[[a]&&b]", "[\\p{L}--a]", "[\\w--\\d]", "[[a-z]--b]", "[a--b--c]" }) |p| {
-        try testing.expectError(error.UnsupportedFeature, zregex.Regex.compileWithOptions(testing.allocator, p, v));
+        var re = try zregex.Regex.compileWithOptions(testing.allocator, p, v);
+        re.deinit();
+    }
+}
+
+test "F5c 1.1: bare operands, chained operators and nested unions under v" {
+    const v: zregex.CompileOptions = .{ .v = true };
+    const In = struct { []const u8, bool };
+    // Each row: whole-input matches as V8 (Node 22) gives them.
+    const cases = [_]struct { []const u8, []const In }{
+        // A bare character or shorthand operand (bug B).
+        .{ "[\\p{L}--a]", &.{ .{ "a", false }, .{ "b", true }, .{ "5", false } } },
+        .{ "[\\w--\\d]", &.{ .{ "a", true }, .{ "5", false }, .{ "_", true }, .{ "-", false } } },
+        .{ "[a--b]", &.{ .{ "a", true }, .{ "b", false } } },
+        .{ "[\\d--5]", &.{ .{ "4", true }, .{ "5", false }, .{ "6", true } } },
+        .{ "[a&&a]", &.{ .{ "a", true }, .{ "b", false } } },
+        .{ "[\\w&&\\d]", &.{ .{ "a", false }, .{ "7", true } } },
+        .{ "[_&&_]", &.{ .{ "_", true }, .{ "a", false } } },
+        .{ "[[a-z]--a]", &.{ .{ "a", false }, .{ "b", true } } },
+        .{ "[[a-z]&&\\d]", &.{ .{ "a", false }, .{ "1", false } } },
+        .{ "[^\\w--\\d]", &.{ .{ "a", false }, .{ "5", true }, .{ "-", true } } },
+        .{ "[\\d--\\b]", &.{ .{ "1", true }, .{ "\x08", false } } },
+        .{ "[a&&\\&]", &.{ .{ "a", false }, .{ "&", false } } },
+        .{ "[\\&&&\\&]", &.{ .{ "&", true }, .{ "a", false } } },
+        .{ "[a--\\-]", &.{ .{ "a", true }, .{ "-", false } } },
+        // A chain of one operator, from left to right.
+        .{ "[a--b--c]", &.{ .{ "a", true }, .{ "b", false }, .{ "c", false } } },
+        .{ "[\\w&&\\d&&[0-5]]", &.{ .{ "3", true }, .{ "7", false }, .{ "a", false } } },
+        .{ "[\\p{L}--[a-z]--\\p{Lu}]", &.{ .{ "a", false }, .{ "B", false }, .{ "\u{e9}", true } } },
+        .{ "[[a-z]--[b]--[c]--d]", &.{ .{ "a", true }, .{ "b", false }, .{ "c", false }, .{ "d", false }, .{ "e", true } } },
+        // A union with nested classes.
+        .{ "[[a][b]]", &.{ .{ "a", true }, .{ "b", true }, .{ "c", false } } },
+        .{ "[[a]b]", &.{ .{ "a", true }, .{ "b", true }, .{ "c", false } } },
+        .{ "[a[b]]", &.{ .{ "a", true }, .{ "b", true }, .{ "c", false } } },
+        .{ "[[a]]", &.{ .{ "a", true }, .{ "b", false } } },
+        .{ "[^[a]]", &.{ .{ "a", false }, .{ "b", true } } },
+        .{ "[[^a]]", &.{ .{ "a", false }, .{ "b", true } } },
+        .{ "[^[^a]]", &.{ .{ "a", true }, .{ "b", false } } },
+        .{ "[a-z[0-9]_]", &.{ .{ "Z", false }, .{ "_", true }, .{ "9", true }, .{ "a", true }, .{ "-", false } } },
+        .{ "[[a--b]]", &.{ .{ "a", true }, .{ "b", false } } },
+        .{ "[\\d[a]]", &.{ .{ "1", true }, .{ "a", true }, .{ "b", false } } },
+        .{ "[\\p{Lu}[a]]", &.{ .{ "A", true }, .{ "a", true }, .{ "b", false } } },
+        .{ "[[[a]]]", &.{ .{ "a", true }, .{ "b", false } } },
+        .{ "[[a][^a]]", &.{ .{ "a", true }, .{ "b", true } } },
+        // A nested operation as an operand: InvalidPattern before F5c 1.1.
+        .{ "[[[a]--[b]]--[c]]", &.{ .{ "a", true }, .{ "b", false } } },
+        .{ "[[a]--[[b]--[c]]]", &.{ .{ "a", true }, .{ "b", false } } },
+        .{ "[[a]&&[[a]&&[a]]]", &.{ .{ "a", true }, .{ "b", false } } },
+        .{ "[[[a-z]--[b]]&&[a-c]]", &.{ .{ "a", true }, .{ "b", false }, .{ "c", true }, .{ "d", false } } },
+        .{ "[[a-c]--[[b][c]]]", &.{ .{ "a", true }, .{ "b", false }, .{ "c", false } } },
+    };
+    for (cases) |c| {
+        var re = try zregex.Regex.compileWithOptions(testing.allocator, c[0], v);
+        defer re.deinit();
+        for (c[1]) |in| {
+            if (try re.matchFull(in[0]) != in[1]) {
+                std.debug.print("/{s}/v on \"{s}\": expected {}\n", .{ c[0], in[0], in[1] });
+                return error.TestUnexpectedResult;
+            }
+        }
+    }
+    // Still a SyntaxError (V8 too): `&&` followed by `&`, an operand that
+    // is a list or a range, a union before an operator, a mix.
+    const Bad = struct { []const u8, anyerror };
+    for ([_]Bad{
+        .{ "[a&&&b]", error.InvalidClassSetOperand },
+        .{ "[[a]&&&[b]]", error.InvalidClassSetOperand },
+        .{ "[_&&_&&]", error.InvalidClassSetOperand },
+        .{ "[a&&&]", error.InvalidClassSetOperand },
+        .{ "[\\d&&&]", error.InvalidClassSetOperand },
+        .{ "[a--b-c]", error.InvalidClassSetOperand },
+        .{ "[a&&b-c]", error.InvalidClassSetOperand },
+        .{ "[[a]--b[c]]", error.InvalidClassSetOperand },
+        .{ "[a--[b]c]", error.InvalidClassSetOperand },
+        .{ "[a--b--]", error.InvalidClassSetOperand },
+        .{ "[a---b]", error.InvalidClassSetOperand },
+        .{ "[[a][b]--[c]]", error.InvalidClassSetOperand },
+        .{ "[[a-z--b]c]", error.InvalidClassSetOperand },
+        .{ "[a--b&&c--d]", error.MixedClassSetOperators },
+        .{ "[[a]&&[b]&&[c]--[d]]", error.MixedClassSetOperators },
+        .{ "[[a]-b]", error.InvalidClassSetOperand },
+        .{ "[a--b", error.UnexpectedToken },
+    }) |c| {
+        try testing.expectError(c[1], zregex.Regex.compileWithOptions(testing.allocator, c[0], v));
+    }
+    // Under `iv` an operand must be closed under the folding (F7c-0): `a`
+    // isn't (its class is {a, A}), `\d` is.
+    const iv: zregex.CompileOptions = .{ .v = true, .case_insensitive = true };
+    for ([_][]const u8{ "[a--b]", "[[a]b]", "[\\w--\\d]" }) |p| {
+        try testing.expectError(error.UnsupportedFeature, zregex.Regex.compileWithOptions(testing.allocator, p, iv));
+    }
+    {
+        var re = try zregex.Regex.compileWithOptions(testing.allocator, "[\\d--5]", iv);
+        defer re.deinit();
+        try testing.expect(try re.matchFull("4"));
+        try testing.expect(!try re.matchFull("5"));
+    }
+    // A chain of 10,000 operands: the node is n-ary, so neither the parser,
+    // the lowering nor `deinit` recurses per operand.
+    {
+        var buf: std.ArrayListUnmanaged(u8) = .empty;
+        defer buf.deinit(testing.allocator);
+        try buf.appendSlice(testing.allocator, "[\\p{L}");
+        for (0..10_000) |i| {
+            try buf.appendSlice(testing.allocator, "--");
+            try buf.append(testing.allocator, @intCast('a' + i % 26));
+        }
+        try buf.append(testing.allocator, ']');
+        var re = try zregex.Regex.compileWithOptions(testing.allocator, buf.items, v);
+        defer re.deinit();
+        try testing.expect(try re.matchFull("A"));
+        try testing.expect(!try re.matchFull("q"));
     }
 }
 
@@ -1153,21 +1263,237 @@ test "F7b(6): the VM's set cache doesn't mix the letters of an i literal" {
     }
 }
 
+test "v: class set syntax the spec forbids, and the reserved-punctuator escapes" {
+    const v: zregex.CompileOptions = .{ .v = true };
+    const u: zregex.CompileOptions = .{ .unicode = true };
+    // test262's breaking-change-from-u-to-v 01-28 but 03 and 09 (already
+    // errors), and the lone hyphens of the corpora: a SyntaxError under `v`
+    // (ClassSetSyntaxCharacter, ClassSetReservedDoublePunctuator), valid
+    // with `u` and without flags.
+    const rejected = [_][]const u8{
+        "[(]",  "[)]",  "[{]",  "[}]",  "[/]",   "[-]",   "[|]",  "[!!]", "[##]",   "[$$]",
+        "[%%]", "[**]", "[++]", "[,,]", "[..]",  "[::]",  "[;;]", "[<<]", "[==]",   "[>>]",
+        "[??]", "[@@]", "[``]", "[~~]", "[^^^]", "[_^^]", "[-a]", "[a-]", "[\\d-]", "[a-z-]",
+    };
+    // Inside a nested operand too (not valid with `u`: the `]` after `[[(]`).
+    try testing.expectError(error.InvalidClassSetOperand, zregex.Regex.compileWithOptions(testing.allocator, "[[(]--[a]]", v));
+    for (rejected) |p| {
+        try testing.expectError(error.InvalidClassSetOperand, zregex.Regex.compileWithOptions(testing.allocator, p, v));
+        for ([_]zregex.CompileOptions{ .{}, u }) |o| {
+            var re = try zregex.Regex.compileWithOptions(testing.allocator, p, o);
+            re.deinit();
+        }
+    }
+    // A ClassSetReservedPunctuator escaped is the character under `v`; with
+    // `u` it stays InvalidEscape, without flags an identity escape.
+    const punct = "&!#%,:;<=>@`~";
+    for (punct) |c| {
+        const p = [_]u8{ '[', '\\', c, ']' };
+        var re = try zregex.Regex.compileWithOptions(testing.allocator, &p, v);
+        defer re.deinit();
+        const s = [_]u8{c};
+        try testing.expect(try re.matchFull(&s));
+        try testing.expect(!try re.matchFull("x"));
+        try testing.expectError(error.InvalidEscape, zregex.Regex.compileWithOptions(testing.allocator, &p, u));
+        var plain = try zregex.Regex.compileWithOptions(testing.allocator, &p, .{});
+        plain.deinit();
+    }
+    // Still valid under `v`.
+    for ([_][]const u8{ "[a-z]", "[[a]&&[b]]", "[!]", "[a!b]", "[^^]", "[&]", "[a&b]", "[\\(]", "[\\-]", "[a^b]", "[;]", "[\\{\\}]" }) |p| {
+        var re = try zregex.Regex.compileWithOptions(testing.allocator, p, v);
+        re.deinit();
+    }
+}
+
+test "F5c 2a/2b: \\q{...} strings and Emoji_Keycap_Sequence under v" {
+    const v: zregex.CompileOptions = .{ .v = true };
+    const iv: zregex.CompileOptions = .{ .v = true, .case_insensitive = true };
+    // Each row: the first match as V8 (Node 22) gives it, null for none. A
+    // class with strings tries them longest first, then its single code
+    // points, then the empty string (ECMA-262's CompileAtom).
+    const cases = [_]struct { []const u8, zregex.CompileOptions, []const u8, ?[]const u8 }{
+        .{ "[\\q{ab}]", v, "xabx", "ab" },
+        .{ "[\\q{ab|abc}]", v, "abc", "abc" },
+        .{ "[\\q{abc|ab}]", v, "abd", "ab" },
+        .{ "[\\q{ab|a}]b", v, "ab", "ab" },
+        .{ "[\\q{}]", v, "x", "" },
+        .{ "^[\\q{}]$", v, "", "" },
+        .{ "[\\q{}a]", v, "ba", "" },
+        .{ "[\\q{}a]", v, "a", "a" },
+        .{ "[\\q{ab|}]", v, "ab", "ab" },
+        .{ "[\\q{ab|}--\\q{}]", v, "x", null },
+        .{ "[\\q{AB}--\\q{ab}]", iv, "ab", null },
+        .{ "[\\q{AB}&&\\q{ab}]", iv, "aB", "aB" },
+        .{ "[\\q{abc}]+", v, "abcabcab", "abcabc" },
+        .{ "[\\q{a|abc|ab}x]", v, "abcx", "abc" },
+        .{ "[\\q{AB}]", iv, "xab", "ab" },
+        .{ "[\\q{ab|Abc}]", iv, "ABC", "ABC" },
+        .{ "[[\\q{abc|ab}]--\\q{abc}]", v, "abc", "ab" },
+        .{ "[\\q{abc}&&a]", v, "abc", null },
+        .{ "[\\q{abc|x}&&\\q{abc}]", v, "xabc", "abc" },
+        .{ "[\\q{a|ab}--\\q{ab}]+", v, "aab", "aa" },
+        .{ "[\\q{ab|}&&\\q{|cd}]", v, "ab", "" },
+        .{ "[^\\q{a}]", v, "ab", "b" },
+        .{ "[^[\\q{ab}&&a]]", v, "ab", "a" },
+        .{ "[\\q{a\\|b}]", v, "a|b", "a|b" },
+        .{ "[\\q{\u{1f600}a|\u{1f600}}]", v, "\u{1f600}\u{1f600}a", "\u{1f600}" },
+        .{ "[\\q{abc|abd|ab|a}]", v, "abd", "abd" },
+        .{ "[\\q{ab}[cd]]", v, "xcab", "c" },
+        .{ "(?<=[\\q{ab}])c", v, "abc", "c" },
+        .{ "x[\\q{}]*y", v, "xy", "xy" },
+        .{ "^(?:[\\q{ab}]|c)+$", v, "abcab", "abcab" },
+        .{ "\\p{Emoji_Keycap_Sequence}", v, "a1\u{fe0f}\u{20e3}", "1\u{fe0f}\u{20e3}" },
+        .{ "[\\d--\\p{Emoji_Keycap_Sequence}]", v, "1\u{fe0f}\u{20e3}", "1" },
+        .{ "[\\p{Emoji_Keycap_Sequence}--\\q{1\\uFE0F\\u20E3}]", v, "1\u{fe0f}\u{20e3}2\u{fe0f}\u{20e3}", "2\u{fe0f}\u{20e3}" },
+        .{ "[\\p{Emoji_Keycap_Sequence}\\d]+", v, "71\u{fe0f}\u{20e3}x", "71\u{fe0f}\u{20e3}" },
+        .{ "\\p{Emoji_Keycap_Sequence}", iv, "#\u{fe0f}\u{20e3}", "#\u{fe0f}\u{20e3}" },
+        // The Kelvin sign under `iv`: `\q{K}` is the character K, so it
+        // matches U+212A like `[K]` (ECMA-262). V8 (Node 22) matches it with
+        // `[K]` but not with `[\q{K}]` (docs/LIMITATIONS.md).
+        .{ "[\\q{K}]", iv, "\u{212a}", "\u{212a}" },
+        .{ "[K]", iv, "\u{212a}", "\u{212a}" },
+    };
+    for (cases) |c| {
+        var re = try zregex.Regex.compileWithOptions(testing.allocator, c[0], c[1]);
+        defer re.deinit();
+        const m = try re.find(c[2]);
+        defer if (m) |mm| mm.deinit();
+        const got: ?[]const u8 = if (m) |mm| mm.group(c[2]) else null;
+        if (c[3] == null and got == null) continue;
+        if (c[3] == null or got == null or !std.mem.eql(u8, c[3].?, got.?)) {
+            std.debug.print("/{s}/ on \"{s}\": expected {?s}, got {?s}\n", .{ c[0], c[2], c[3], got });
+            return error.TestUnexpectedResult;
+        }
+    }
+    // The 12 strings of Emoji_Keycap_Sequence (Unicode 17.0), each whole.
+    {
+        var re = try zregex.Regex.compileWithOptions(testing.allocator, "^\\p{Emoji_Keycap_Sequence}$", v);
+        defer re.deinit();
+        for ("#*0123456789") |c| {
+            var s: [7]u8 = undefined;
+            s[0] = c;
+            @memcpy(s[1..], "\u{fe0f}\u{20e3}");
+            try testing.expect(try re.matchFull(&s));
+            try testing.expect(!try re.matchFull(&[_]u8{c}));
+        }
+        try testing.expect(!try re.matchFull("a\u{fe0f}\u{20e3}"));
+    }
+    // SyntaxErrors (V8 too). MayContainStrings: a negated class whose
+    // contents may contain strings, `InvalidClassSetOperand`.
+    const Bad = struct { []const u8, zregex.CompileOptions, anyerror };
+    for ([_]Bad{
+        .{ "[^\\q{ab}]", v, error.InvalidClassSetOperand },
+        .{ "[^\\q{}]", v, error.InvalidClassSetOperand },
+        .{ "[^\\q{ab}--\\q{ab}]", v, error.InvalidClassSetOperand },
+        .{ "[^[[\\q{ab}]]]", v, error.InvalidClassSetOperand },
+        .{ "[^\\p{Emoji_Keycap_Sequence}]", v, error.InvalidClassSetOperand },
+        .{ "[^[\\p{Emoji_Keycap_Sequence}&&\\q{ab}]]", v, error.InvalidClassSetOperand },
+        .{ "[\\q{(}]", v, error.InvalidClassSetOperand },
+        .{ "[\\q{a-b}]", v, error.InvalidClassSetOperand },
+        .{ "[\\q{\\d}]", v, error.InvalidClassSetOperand },
+        .{ "[\\q{a!!}]", v, error.InvalidClassSetOperand },
+        .{ "[\\q{\\q{a}}]", v, error.InvalidClassSetOperand },
+        .{ "[\\q{a}-b]", v, error.InvalidClassSetOperand },
+        .{ "[\\q{a|b", v, error.UnmatchedBracket },
+        .{ "\\q{ab}", v, error.InvalidEscape },
+        .{ "[\\q{ab}]", .{ .unicode = true }, error.InvalidEscape },
+        .{ "\\P{Emoji_Keycap_Sequence}", v, error.UnknownUnicodeProperty },
+        .{ "\\p{Emoji_Keycap_Sequence}", .{ .unicode = true }, error.UnknownUnicodeProperty },
+    }) |c| {
+        try testing.expectError(c[2], zregex.Regex.compileWithOptions(testing.allocator, c[0], c[1]));
+    }
+    // Valid (V8 too): a `\q{...}` of single characters, an intersection
+    // with an operand that can't hold strings, `\q` without `v`.
+    for ([_]struct { []const u8, zregex.CompileOptions }{
+        .{ "[^\\q{a}]", v },
+        .{ "[^\\q{a|b}]", v },
+        .{ "[^[\\q{ab}&&a]]", v },
+        .{ "[^[a--\\q{ab}]]", v },
+        .{ "[^[\\p{Emoji_Keycap_Sequence}&&\\q{a}]]", v },
+        .{ "[\\q{ab}]", .{} },
+    }) |c| {
+        var re = try zregex.Regex.compileWithOptions(testing.allocator, c[0], c[1]);
+        re.deinit();
+    }
+    // A long `\q{a|aa|aaa|...}` nests one trie level per string; past
+    // `max_trie_depth` the rest is listed flat, longest first.
+    {
+        var buf: std.ArrayListUnmanaged(u8) = .empty;
+        defer buf.deinit(testing.allocator);
+        try buf.appendSlice(testing.allocator, "^[\\q{");
+        for (1..301) |n| {
+            if (n > 1) try buf.append(testing.allocator, '|');
+            try buf.appendNTimes(testing.allocator, 'a', n);
+        }
+        try buf.appendSlice(testing.allocator, "}]$");
+        var re = try zregex.Regex.compileWithOptions(testing.allocator, buf.items, v);
+        defer re.deinit();
+        try testing.expect(try re.matchFull("a" ** 300));
+        try testing.expect(try re.matchFull("a" ** 150));
+        try testing.expect(!try re.matchFull("a" ** 301));
+    }
+}
+
+test "F5c 2c-a: the properties of strings under v" {
+    const v: zregex.CompileOptions = .{ .v = true };
+    const iv: zregex.CompileOptions = .{ .v = true, .case_insensitive = true };
+    // Each row: the first match as V8 (Node 22) gives it, null for none.
+    const cases = [_]struct { []const u8, zregex.CompileOptions, []const u8, ?[]const u8 }{
+        .{ "^\\p{Basic_Emoji}$", v, "\u{231a}", "\u{231a}" },
+        .{ "^\\p{Basic_Emoji}$", v, "\u{1f170}\u{fe0f}", "\u{1f170}\u{fe0f}" },
+        .{ "^\\p{Basic_Emoji}$", v, "a", null },
+        .{ "^\\p{RGI_Emoji_Modifier_Sequence}$", v, "\u{1f44d}\u{1f3fd}", "\u{1f44d}\u{1f3fd}" },
+        .{ "^\\p{RGI_Emoji_Modifier_Sequence}$", v, "\u{1f44d}", null },
+        .{ "^\\p{RGI_Emoji_Flag_Sequence}$", v, "\u{1f1ea}\u{1f1f8}", "\u{1f1ea}\u{1f1f8}" },
+        .{ "^\\p{RGI_Emoji_Flag_Sequence}$", v, "\u{1f1ea}", null },
+        .{ "^\\p{RGI_Emoji_Tag_Sequence}$", v, "\u{1f3f4}\u{e0067}\u{e0062}\u{e0073}\u{e0063}\u{e0074}\u{e007f}", "\u{1f3f4}\u{e0067}\u{e0062}\u{e0073}\u{e0063}\u{e0074}\u{e007f}" },
+        .{ "^\\p{RGI_Emoji_ZWJ_Sequence}$", v, "\u{1f468}\u{200d}\u{1f469}\u{200d}\u{1f467}\u{200d}\u{1f466}", "\u{1f468}\u{200d}\u{1f469}\u{200d}\u{1f467}\u{200d}\u{1f466}" },
+        .{ "^\\p{RGI_Emoji_ZWJ_Sequence}$", v, "\u{1f468}", null },
+        .{ "^\\p{RGI_Emoji}+$", v, "\u{231a}\u{1f1ea}\u{1f1f8}1\u{fe0f}\u{20e3}\u{1f468}\u{200d}\u{1f469}\u{200d}\u{1f467}\u{200d}\u{1f466}", "\u{231a}\u{1f1ea}\u{1f1f8}1\u{fe0f}\u{20e3}\u{1f468}\u{200d}\u{1f469}\u{200d}\u{1f467}\u{200d}\u{1f466}" },
+        .{ "\\p{RGI_Emoji}", v, "x\u{1f468}\u{200d}\u{1f469}\u{200d}\u{1f467}y", "\u{1f468}\u{200d}\u{1f469}\u{200d}\u{1f467}" },
+        .{ "[\\p{RGI_Emoji}--\\p{RGI_Emoji_Flag_Sequence}]", v, "\u{1f1ea}\u{1f1f8}", null },
+        .{ "[\\p{RGI_Emoji}&&\\p{RGI_Emoji_Flag_Sequence}]", v, "a\u{1f1ea}\u{1f1f8}", "\u{1f1ea}\u{1f1f8}" },
+        .{ "[\\p{RGI_Emoji}--\\q{\u{1f1ea}\u{1f1f8}}]", v, "\u{1f1ea}\u{1f1f8}", null },
+        // `iv`: the strings fold with the simple case folding (U+24C2 and
+        // U+24DC, the circled M).
+        .{ "^\\p{RGI_Emoji}$", iv, "\u{24dc}\u{fe0f}", "\u{24dc}\u{fe0f}" },
+        .{ "^\\p{RGI_Emoji}$", iv, "\u{24c2}\u{fe0f}", "\u{24c2}\u{fe0f}" },
+        .{ "^\\p{RGI_Emoji}$", v, "\u{24dc}\u{fe0f}", null },
+        .{ "^\\p{Basic_Emoji}$", iv, "\u{24dc}\u{fe0f}", "\u{24dc}\u{fe0f}" },
+        .{ "^\\p{RGI_Emoji_Tag_Sequence}$", iv, "\u{1f3f4}\u{e0067}\u{e0062}\u{e0065}\u{e006e}\u{e0067}\u{e007f}", "\u{1f3f4}\u{e0067}\u{e0062}\u{e0065}\u{e006e}\u{e0067}\u{e007f}" },
+        .{ "^[\\p{RGI_Emoji}--\\q{\u{24c2}\u{fe0f}}]$", iv, "\u{24dc}\u{fe0f}", null },
+        .{ "^\\p{RGI_Emoji}$", iv, "\u{1f170}\u{fe0f}", "\u{1f170}\u{fe0f}" },
+    };
+    for (cases) |c| {
+        var re = try zregex.Regex.compileWithOptions(testing.allocator, c[0], c[1]);
+        defer re.deinit();
+        const m = try re.find(c[2]);
+        defer if (m) |mm| mm.deinit();
+        const got: ?[]const u8 = if (m) |mm| mm.group(c[2]) else null;
+        if (c[3] == null and got == null) continue;
+        if (c[3] == null or got == null or !std.mem.eql(u8, c[3].?, got.?)) {
+            std.debug.print("/{s}/ on \"{s}\": expected {?s}, got {?s}\n", .{ c[0], c[2], c[3], got });
+            return error.TestUnexpectedResult;
+        }
+    }
+    // MayContainStrings: every property of strings may, so a negated class
+    // with one is a SyntaxError; `\P{...}` and `u` are SyntaxErrors too.
+    const names = [_][]const u8{ "Emoji_Keycap_Sequence", "Basic_Emoji", "RGI_Emoji_Modifier_Sequence", "RGI_Emoji_Flag_Sequence", "RGI_Emoji_Tag_Sequence", "RGI_Emoji_ZWJ_Sequence", "RGI_Emoji" };
+    var buf: [64]u8 = undefined;
+    for (names) |name| {
+        try testing.expectError(error.InvalidClassSetOperand, zregex.Regex.compileWithOptions(testing.allocator, try std.fmt.bufPrint(&buf, "[^\\p{{{s}}}]", .{name}), v));
+        try testing.expectError(error.UnknownUnicodeProperty, zregex.Regex.compileWithOptions(testing.allocator, try std.fmt.bufPrint(&buf, "\\P{{{s}}}", .{name}), v));
+        try testing.expectError(error.UnknownUnicodeProperty, zregex.Regex.compileWithOptions(testing.allocator, try std.fmt.bufPrint(&buf, "\\p{{{s}}}", .{name}), .{ .unicode = true }));
+    }
+}
+
 test "E0: valid syntax that isn't implemented is UnsupportedFeature, never a wrong result" {
-    // `/^[\q{abc|d}]$/v` used to read `\q` as the letter q and match "q",
-    // "|" and "a" but not "abc". Every row: V8 12.4 accepts the pattern.
+    // Every row: V8 12.4 accepts the pattern. (`\q{...}`, which until
+    // E0 read `\q` as the letter q, compiles since F5c 2a; the properties
+    // of strings since F5c 2b and 2c-a.)
     const v: zregex.CompileOptions = .{ .v = true };
     const cases = [_]struct { []const u8, zregex.CompileOptions }{
-        .{ "^[\\q{abc|d}]$", v },
-        .{ "[\\q{a}]", v },
-        .{ "[\\p{L}--\\d]", v }, // bug B: a shorthand operand
-        .{ "[\\p{L}--a]", v }, // bug B: a bare character operand
-        .{ "[[a][b]]", v }, // a union with nested classes
-        .{ "[a[b]]", v },
-        .{ "[[a]--[b]--[c]]", v }, // the same operator chained
-        .{ "[[a]&&[b]&&[c]]", v },
-        .{ "\\p{RGI_Emoji}", v }, // a property of strings
-        .{ "[\\p{Basic_Emoji}]", v },
+        .{ "(?<=a+)b", v }, // a lookbehind matched backward under `v`
         .{ "(?i:a)", .{} }, // RegExp modifiers (ES2025)
         .{ "(?-m:^a)", .{ .multiline = true } },
         .{ "(?i-s:a.)", .{ .unicode = true } },

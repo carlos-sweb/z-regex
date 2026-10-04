@@ -24,14 +24,16 @@ llegue en 1.x solo quita casos de error y nunca añade errores nuevos: es aditiv
 | **E0** | Errores honestos: `\q{…}` bajo `v` y los demás casos válidos no implementados dan `UnsupportedFeature`, y `v` aplica los early errors de `u`. `\k<nombre>` con nombres duplicados mira el grupo que participó (hallado con Node 24). Badge y README honestos. D2: medir test262 con Node 24 | 2–3 | v0.5.1 |
 | **E1** | P1 (inventario de opcodes que consumen) → P2 (oráculo sin V8) → P3 (spike, decide si se sigue) → F6b completo. LookLinear hacia atrás, a 1.x | 13–17 | v0.6.0 |
 | **F7c** (antes E3) | API (namespace `internal`, quitar `Optimizer`, `opt_level` y `LOOP`, contrato en `docs/API.md`), `v` con `i` honesto, documentación (`ARCHITECTURE.md`, `PROJECT_STRUCTURE.md`, `KNOWN_LIMITATIONS.md` dividido en `LIMITATIONS.md` e `HISTORY.md`), benchmarks re-medidos, gate. Plan: `docs/plans/F7c.md` | 7–9 | **v0.7.0** |
-| **Producción** | 1–3 meses de uso real sobre v0.7.0 (0.7.x con arreglos), sin cambios de API | — | — |
+| **T0 J+C+B** | Rendimiento de T0 sin cambios de API: `x+` sin cuerpo duplicado (J), Shift-And (C), salto al literal interno (B). Planes: `T0-J.md`, `T0-CB.md` | — | **v0.7.1** |
+| **T0-A** | El DFA de T0 (ida e inverso, en compilación, con tope), con asserts y en code point, sin cambios de API. Planes: `T0-A.md`, `T0-A-precheck.md` | — | **v0.8.0** |
+| **Producción** | 1–3 meses de uso real sobre v0.8.0 (0.8.x con arreglos), sin cambios de API | — | — |
 | **1.0** | Si la producción no pide cambios de API: la misma API, con el freeze ya en vigor desde 0.7.0 | — | **v1.0.0** |
-| 1.1+ | Bug B y encadenado de `v`, LookLinear hacia atrás, laxitud de sintaxis bajo `v`, lookbehind hacia atrás bajo `u`/`v`, lookarounds anidados en un lookbehind hacia atrás | — | — |
+| 1.1+ | LookLinear hacia atrás, lookbehind hacia atrás bajo `u`/`v`, lookarounds anidados en un lookbehind hacia atrás | — | — |
 
 **E2 (modificadores ES2025) no se hace:** decisión del 2026-09-29, pendientes hasta nuevo
 aviso (`docs/plans/F7.md`, Decisiones 4). Desde E0 son `UnsupportedFeature`.
 
-**Secuencia:** F7c → v0.7.0 → producción (1–3 meses) → v1.0.0. **Hasta v0.7.0:** 22–29 días de trabajo.
+**Secuencia:** F7c → v0.7.0 → T0 J+C+B → v0.7.1 → T0-A → v0.8.0 → producción (1–3 meses) → v1.0.0. **Hasta v0.7.0:** 22–29 días de trabajo. Lo que queda tras 1.0: `ROADMAP_COMPLETE.md`.
 
 ## Por qué este orden
 
