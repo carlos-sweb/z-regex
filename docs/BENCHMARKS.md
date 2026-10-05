@@ -1,4 +1,4 @@
-# Benchmarks: z-regex against V8, Rust regex, PCRE2 and zig-regex
+# Benchmarks: z-regex against V8, Rust regex, PCRE2, zig-regex and zoptia0regex
 
 **v0.9.0, after F5c (`v` on T0).** What this measures: z-regex 0.9.0 (measured on commit
 `b751bef` plus the bench cases of the release commit: the same engine code, before the
@@ -111,6 +111,11 @@ no `v`)**
   170 µs, `[\p{L}--[a-z]]{4}` 9.8 → 110 µs), and 10.4 ms for `\p{RGI_Emoji}+`, which 0.8.0
   rejected. An accepted cost: it is paid once per compiled pattern.
 
+**Against zoptia0regex** (a port of Go's `regexp`, in a run of its own: "Against
+zoptia0regex"): z-regex is ahead on 19 of 21 T0/T1 cases with execAt (8–22× where the DFA or a
+fast path runs, 2.4–4.8× on T1), even on two; zoptia0regex is ahead on short inputs with
+groups (2.4–4.5×) and compiles faster on every case (1.3–25×).
+
 ## Setup
 
 | | |
@@ -122,6 +127,7 @@ no `v`)**
 | Rust regex | 1.13.1 (rustc 1.94.1 (e408947bf 2026-03-25)), release, LTO |
 | PCRE2 | 10.42, 8-bit library, JIT and interpreter |
 | zig-regex | 0.1.1 (zig-utils/zig-regex, 173b298), the last release that builds with Zig 0.16 (v0.2.x needs 0.17-dev); built `native` by `setup_zigregex.sh` |
+| zoptia0regex | zoptia/zoptia0regex at `8e8f225` (no tags), a port of Go's `regexp`; ReleaseFast, `-mcpu=x86_64_v3`, built by `setup_zoptia.sh`; measured in a run of its own ("Against zoptia0regex") |
 
 **The previous publication** (0.8.0) was measured on the same kind of host and the same CPU
 model; what changed in z-regex since then is measured here against 0.8.0 in the same rounds:
@@ -584,6 +590,88 @@ the host, not the code. Only the two columns of the same run are compared.
 - **Within ±10%:** every other T0, `u` and T2 case, short inputs included
   (`(\d{3})-(\d{4})` dense 0.96, short 0.95–0.96), and the adversarial runs.
 - **Worse by more than 10%:** none.
+
+### Against zoptia0regex
+
+[zoptia0regex](https://github.com/zoptia/zoptia0regex) is a port of Go's `regexp` to Zig 0.16:
+RE2 syntax, leftmost-first, linear time (one-pass, Pike VM and bitstate engines, a SIMD
+first-byte prefilter), without backreferences, lookaround or properties of strings.
+
+**How it was measured.**
+- **A run of its own:** 10 interleaved rounds of z-regex 0.9.0 (`d5a92c9`) and zoptia0regex
+  (`8e8f225`) alone (`XBENCH_ENGINES=zregex,zoptia`), both ReleaseFast with `x86_64_v3`. Its
+  absolute numbers are not comparable with the tables above, a different run of this shared
+  host; only the two columns of this section are compared.
+- **zoptia's "execAt":** zoptia0regex has no search from an index, so its "execAt" is its
+  `matchesScratch` iterator: every match with its groups, a warm `Scratch`, no allocation.
+  That is what z-regex's `execAt` loop does.
+- **The other metrics:** findAll is `findAllIndex` (allocating, bounds only), and the short
+  input is one `findIndexScratch`.
+- **Patterns:** six cases are given to zoptia in RE2 syntax (`zoptia_pattern` in `cases.json`),
+  the same language:
+  - `\p{Greek}` for `\p{Script=Greek}`;
+  - `\p{Lu}` for `\p{General_Category=Lu}`;
+  - `[^\P{L}a-z]` for `[\p{L}--[a-z]]`;
+  - `\x{1F600}` for `\u{1F600}`.
+
+  The match counts are identical on all 21 cases.
+- **Not run by zoptia0regex:** T2, `\p{RGI_Emoji}` and `(?=(a+)+b)`.
+
+#### Best round; ratio > 1: z-regex ahead
+
+| Case | Tier | execAt MB/s z-regex | zoptia | ratio | findAll MB/s z-regex | zoptia | ratio | ns short z-regex | zoptia | ratio | µs compile z-regex | zoptia | ratio |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| literal hello | T0 | 20791.8 | 2017.7 | 10.30 | 15747.5 | 1952.5 | 8.07 | 12 | 9 | 0.77 | 1.13 | 0.63 | 0.56 |
+| [a-z]+ | T0 | 323.1 | 38.5 | 8.39 | 111.2 | 37.1 | 3.00 | 9 | 58 | 6.10 | 0.86 | 0.44 | 0.51 |
+| \d{3}-\d{4} (sparse) | T0 | 1151.7 | 730.0 | 1.58 | 858.0 | 700.6 | 1.22 | 15 | 60 | 3.91 | 1.51 | 1.00 | 0.66 |
+| \d{3}-\d{4} (dense) | T0 | 747.0 | 36.8 | 20.27 | 378.7 | 36.8 | 10.28 | 15 | 61 | 4.10 | 1.51 | 1.01 | 0.67 |
+| email | T0 | 942.1 | 42.8 | 22.00 | 716.6 | 42.6 | 16.83 | 35 | 197 | 5.63 | 7.40 | 1.46 | 0.20 |
+| (\d{3})-(\d{4}) (sparse) | T0 | 609.8 | 558.7 | 1.09 | 500.8 | 584.8 | 0.86 | 162 | 68 | 0.42 | 1.91 | 1.49 | 0.78 |
+| (\d{3})-(\d{4}) (dense) | T0 | 179.3 | 28.8 | 6.23 | 135.7 | 31.6 | 4.30 | 163 | 68 | 0.42 | 1.92 | 1.28 | 0.67 |
+| (?:(a)\|b)*c | T0 | 36.6 | 20.5 | 1.79 | 32.1 | 22.1 | 1.45 | 282 | 104 | 0.37 | 4.32 | 1.07 | 0.25 |
+| book: Darcy | T0 | 20952.2 | 10851.5 | 1.93 | 12280.4 | 10631.5 | 1.16 | 12 | 10 | 0.77 | 1.07 | 0.62 | 0.58 |
+| book: [A-Z][a-z]+ | T0 | 933.2 | 79.1 | 11.79 | 564.8 | 80.0 | 7.06 | 27 | 117 | 4.36 | 2.94 | 0.63 | 0.21 |
+| book: (Mr\|Mrs\|Miss)\.? ([A-Z][a-z]+) | T0 | 1348.6 | 1389.0 | 0.97 | 1102.7 | 1481.4 | 0.74 | 399 | 89 | 0.22 | 14.88 | 2.58 | 0.17 |
+| \p{L}+ /u | T1 | 116.4 | 44.2 | 2.63 | 69.5 | 42.0 | 1.65 | 79 | 103 | 1.30 | 19.85 | 5.70 | 0.29 |
+| \p{Script=Greek}+ /u | T1 | 265.1 | 81.0 | 3.27 | 213.1 | 80.7 | 2.64 | 80 | 128 | 1.61 | 3.09 | 0.82 | 0.27 |
+| \p{General_Category=Lu} /u | T1 | 205.1 | 59.3 | 3.46 | 128.4 | 62.4 | 2.06 | 33 | 79 | 2.42 | 20.81 | 9.60 | 0.46 |
+| [\p{L}--[a-z]] /v | T1 | 91.1 | 34.2 | 2.66 | 41.4 | 32.1 | 1.29 | 32 | 68 | 2.15 | 22.68 | 16.51 | 0.73 |
+| book: \p{L}+ /u | T1 | 125.6 | 37.5 | 3.35 | 62.4 | 35.7 | 1.75 | 18 | 52 | 2.83 | 19.32 | 5.68 | 0.29 |
+| \p{Script=Greek}{3,} /v | T1 | 266.0 | 80.5 | 3.31 | 220.1 | 79.7 | 2.76 | 63 | 114 | 1.82 | 4.60 | 1.00 | 0.22 |
+| [\p{L}--[a-z]]{4} /v | T1 | 180.8 | 51.9 | 3.48 | 137.5 | 51.0 | 2.70 | 65 | 105 | 1.61 | 82.16 | 11.57 | 0.14 |
+| \b\p{Lu}{5}\b /v | T1 | 271.9 | 113.7 | 2.39 | 269.0 | 113.1 | 2.38 | 21 | 117 | 5.56 | 121.75 | 4.75 | 0.04 |
+| [\p{L}\p{N}_]+\u{1F600} /v | T1 | 248.3 | 58.7 | 4.23 | 247.1 | 58.8 | 4.20 | 37 | 129 | 3.51 | 32.84 | 15.66 | 0.48 |
+| (\p{Lu})(\p{Ll}+)\.$ /v | T1 | 282.9 | 58.7 | 4.82 | 283.2 | 64.6 | 4.38 | 195 | 112 | 0.57 | 72.79 | 13.78 | 0.19 |
+
+| Adversarial | n | z-regex | zoptia0regex |
+|---|---|---|---|
+| (a+)+b on a^n c | 20 | 0.002 (no match) | 0.003 (no match) |
+| (a+)+b on a^n c | 25 | 0.001 (no match) | 0.005 (no match) |
+| (a+)+b on a^n c | 30 | 0.001 (no match) | 0.006 (no match) |
+| (a+)+b on a^n c | 40 | 0.001 (no match) | 0.006 (no match) |
+| (a+)+b on a^n cb | 20 | 0.001 (no match) | 0.003 (no match) |
+| (a+)+b on a^n cb | 25 | 0.001 (no match) | 0.005 (no match) |
+| (a+)+b on a^n cb | 30 | 0.001 (no match) | 0.006 (no match) |
+| (a+)+b on a^n cb | 40 | 0.001 (no match) | 0.006 (no match) |
+
+- **Throughput:** z-regex is ahead on 19 of the 21 cases (execAt).
+  - 8–22× where it runs the DFA or a fast path (the e-mail 22×, `\d{3}-\d{4}` dense 20×,
+    the book's `[A-Z][a-z]+` 12×, the literal `hello` 10×) and zoptia runs its Pike VM.
+  - 2.4–4.8× on T1.
+  - Even on `(\d{3})-(\d{4})` sparse (1.09) and the book's title pattern (0.97). On those two,
+    zoptia's findAll is ahead (0.86 and 0.74): it only collects the bounds.
+- **Short inputs:** zoptia is ahead with groups, 2.4–4.5× (`(\d{3})-(\d{4})` 68 ns against
+  162, the title pattern 89 against 399): the tagged VM's fixed cost per search, as against
+  V8. It is also slightly ahead on the literals (9–10 ns against 12). z-regex is ahead
+  on every other case, 1.3–6.1×.
+- **Compile time:** zoptia is faster on every case, 1.3–25×. The widest gap is
+  `\b\p{Lu}{5}\b /v`, 122 µs against 4.75: z-regex builds its DFA at compile time.
+- **Bytes per compiled pattern:**
+  - T0: zoptia uses 872–6,866 B where z-regex uses 135–3,284.
+  - T1: zoptia uses ~15.8 KB for most cases where z-regex uses 22–32 KB.
+  - Exceptions: `\p{Script=Greek}{3,}` (5,036 B against 2,223) and `(\p{Lu})(\p{Ll}+)\.$`
+    (42,220 against 30,608).
+- **Adversarial:** `(a+)+b` is linear on both, a few µs at any n.
 
 ### `u`/`v` on the DFA: four patterns of T0-A's phase 3 (0.8.0)
 

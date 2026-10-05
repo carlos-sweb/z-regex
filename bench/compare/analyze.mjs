@@ -2,9 +2,14 @@
 // and prints the Markdown tables of docs/BENCHMARKS.md (one per tier and
 // metric; the best round, with min–max: since F7-0 the best round is the
 // estimator, ~4% p90 between two series of 10 against ~20% for the median).
-// With a `zregex_base` engine (run.mjs), a table of z-regex against it.
+// With a `zregex_base` engine (run.mjs), a table of z-regex against it; with
+// a `zoptia` engine, a table of z-regex against zoptia0regex.
 //
 //   node bench/compare/analyze.mjs
+//
+// XBENCH_ROUNDS: the rounds' directory (default zig-out/xbench/rounds);
+// XBENCH_RESULTS: the JSON to write (default bench/results.json; the tables
+// then go next to it, .md, instead of zig-out/xbench/tables.md).
 import fs from 'node:fs';
 import path from 'node:path';
 import { execSync } from 'node:child_process';
@@ -14,7 +19,10 @@ const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..')
 process.chdir(root);
 const X = 'zig-out/xbench';
 const { cases } = JSON.parse(fs.readFileSync('bench/compare/cases.json', 'utf8'));
-const rounds = fs.readdirSync(`${X}/rounds`).filter((f) => f.endsWith('.json')).map((f) => JSON.parse(fs.readFileSync(`${X}/rounds/${f}`, 'utf8')));
+const ROUNDS = process.env.XBENCH_ROUNDS ?? `${X}/rounds`;
+const RESULTS = process.env.XBENCH_RESULTS ?? 'bench/results.json';
+const TABLES = process.env.XBENCH_RESULTS ? RESULTS.replace(/\.json$/, '') + '.md' : `${X}/tables.md`;
+const rounds = fs.readdirSync(ROUNDS).filter((f) => f.endsWith('.json')).map((f) => JSON.parse(fs.readFileSync(`${ROUNDS}/${f}`, 'utf8')));
 
 const sh = (c) => { try { return execSync(c, { encoding: 'utf8' }).trim(); } catch { return null; } };
 const machine = {
@@ -33,6 +41,7 @@ const machine = {
   pcre2: sh('pcre2-config --version'),
   zig_regex: '0.1.1 (zig-utils/zig-regex, 173b298)',
   zregex: rounds[0]?.engines?.zregex?.version ?? null,
+  zoptia0regex: rounds[0]?.engines?.zoptia ? `zoptia/zoptia0regex ${rounds[0].engines.zoptia.version}` : undefined,
   cc: sh('cc --version | head -1'),
 };
 
@@ -83,7 +92,7 @@ for (const c of cases.filter((x) => !x.adversarial)) {
   if (new Set(Object.values(counts)).size > 1) mismatches.push({ id: c.id, counts });
 }
 
-fs.writeFileSync('bench/results.json', JSON.stringify({ generated: new Date().toISOString(), rounds: rounds.length, machine, summary, adversarial: advSummary, zigregex_scaling: scaling, notes, match_count_mismatches: mismatches }, null, 1) + '\n');
+fs.writeFileSync(RESULTS, JSON.stringify({ generated: new Date().toISOString(), rounds: rounds.length, machine, summary, adversarial: advSummary, zigregex_scaling: scaling, notes, match_count_mismatches: mismatches }, null, 1) + '\n');
 
 // ---------------------------------------------------------------- tables
 const fmt = (s, digits) => (s ? `${s.best.toFixed(digits)} (${s.min.toFixed(digits)}–${s.max.toFixed(digits)})` : '—');
@@ -92,8 +101,8 @@ const cell = (e, id, m, d) => {
   if (n) return 'unsupported';
   return fmt(summary[e]?.[id]?.[m], d);
 };
-const tiers = { T0: ['zregex', 'v8', 'v8_cold', 'rust', 'zigregex'], T1: ['zregex', 'v8', 'v8_cold', 'rust'], T2: ['zregex', 'v8', 'v8_cold', 'pcre2_jit', 'pcre2_interp'] };
-const label = { zregex: 'z-regex', v8: 'V8 (warm)', v8_cold: 'V8 (cold)', rust: 'Rust regex', zigregex: 'zig-regex', pcre2_jit: 'PCRE2 (JIT)', pcre2_interp: 'PCRE2 (interp.)' };
+const tiers = { T0: ['zregex', 'v8', 'v8_cold', 'rust', 'zigregex', 'zoptia'], T1: ['zregex', 'v8', 'v8_cold', 'rust', 'zoptia'], T2: ['zregex', 'v8', 'v8_cold', 'pcre2_jit', 'pcre2_interp'] };
+const label = { zregex: 'z-regex', v8: 'V8 (warm)', v8_cold: 'V8 (cold)', rust: 'Rust regex', zigregex: 'zig-regex', zoptia: 'zoptia0regex', pcre2_jit: 'PCRE2 (JIT)', pcre2_interp: 'PCRE2 (interp.)' };
 const metrics = [
   ['findall_mbps', 'findAll MB/s (allocating wrapper; V8 cold: new RegExp + first pass)', 1],
   ['execat_mbps', 'execAt MB/s (engine loop, no per-match allocation where the API allows)', 1],
@@ -116,9 +125,10 @@ for (const [tier, engines] of Object.entries(tiers)) {
     }
   }
 }
-md += `\n#### Adversarial: ms until the engine answers or gives up (best round; outcome)\n\n| Case | n | ${['zregex', 'v8', 'pcre2_jit', 'pcre2_interp'].map((e) => label[e]).join(' | ')} |\n|---|---|---|---|---|---|\n`;
+const advCols = ['zregex', 'v8', 'pcre2_jit', 'pcre2_interp', 'zoptia'].filter((e) => advSummary.some((x) => x.engine === e));
+md += `\n#### Adversarial: ms until the engine answers or gives up (best round; outcome)\n\n| Case | n | ${advCols.map((e) => label[e]).join(' | ')} |\n|---|---|${advCols.map(() => '---').join('|')}|\n`;
 for (const c of cases.filter((x) => x.adversarial)) for (const n of c.adversarial) {
-  const row = ['zregex', 'v8', 'pcre2_jit', 'pcre2_interp'].map((e) => {
+  const row = advCols.map((e) => {
     const a = advSummary.find((x) => x.engine === e && x.id === c.id && x.n === n);
     return a ? `${a.ms.best.toFixed(3)} (${a.outcomes.join(', ')})` : '—';
   });
@@ -139,7 +149,16 @@ if (summary.zregex_base) {
     md += `| ${c.name.replaceAll('|', '\\|')} | ${n} | ${f('zregex')} | ${f('zregex_base')} |\n`;
   }
 }
+if (summary.zoptia) {
+  md += `\n#### z-regex ${machine.zregex} against zoptia0regex ${rounds[0].engines.zoptia.version}, same rounds (best round; ratio > 1: z-regex ahead)\n\n| Case | Tier | execAt MB/s z-regex | zoptia | ratio | findAll MB/s z-regex | zoptia | ratio | ns short z-regex | zoptia | ratio | µs compile z-regex | zoptia | ratio |\n|---|---|---|---|---|---|---|---|---|---|---|---|---|---|\n`;
+  const r = (a, b, hi) => (a && b ? (hi ? a.best / b.best : b.best / a.best).toFixed(2) : '—');
+  const v = (s, d) => (s ? s.best.toFixed(d) : '—');
+  for (const c of cases.filter((x) => !x.adversarial && x.engines.includes('zoptia'))) {
+    const z = summary.zregex?.[c.id] ?? {}, o = summary.zoptia?.[c.id] ?? {};
+    md += `| ${c.name.replaceAll('|', '\\|')} | ${c.tier} | ${v(z.execat_mbps, 1)} | ${v(o.execat_mbps, 1)} | ${r(z.execat_mbps, o.execat_mbps, true)} | ${v(z.findall_mbps, 1)} | ${v(o.findall_mbps, 1)} | ${r(z.findall_mbps, o.findall_mbps, true)} | ${v(z.short_ns, 0)} | ${v(o.short_ns, 0)} | ${r(z.short_ns, o.short_ns, false)} | ${v(z.compile_us, 2)} | ${v(o.compile_us, 2)} | ${r(z.compile_us, o.compile_us, false)} |\n`;
+  }
+}
 if (mismatches.length) md += `\n**Match-count mismatches:** ${JSON.stringify(mismatches)}\n`;
 else md += `\nMatch counts: identical across every engine that runs a case.\n`;
-fs.writeFileSync(`${X}/tables.md`, md);
+fs.writeFileSync(TABLES, md);
 console.log(md);
