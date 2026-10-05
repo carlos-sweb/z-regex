@@ -204,7 +204,7 @@ is a breaking change and how a symbol is deprecated.
 ## Performance
 
 T0 runs in O(n·m), without ReDoS. See [docs/BENCHMARKS.md](docs/BENCHMARKS.md) for numbers
-against V8, Rust regex, PCRE2 and zig-regex.
+against V8, Rust regex, PCRE2, zig-regex and zoptia0regex.
 
 ## Compatibility
 

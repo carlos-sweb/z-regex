@@ -13,6 +13,11 @@
 // published one) runs in the same rounds when
 // zig-out/xbench/bin/zregex_base_xbench exists: engine `zregex_base`, the
 // same cases and adversarial runs, so two versions compare on one machine.
+//
+// zoptia0regex (setup_zoptia.sh) runs when its binary exists. Two
+// environment variables narrow a run: XBENCH_ENGINES (comma-separated engine
+// names, e.g. zregex,zoptia; the adversarial runs follow it) and
+// XBENCH_ROUNDS (the rounds' directory, default zig-out/xbench/rounds).
 import fs from 'node:fs';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
@@ -48,6 +53,8 @@ const engines = {
   }),
   zigregex: () => run(`${X}/zigregex/zigregex_xbench`, [corpus, 'bench/compare/cases.json', '--no-findall']),
 };
+const ZOPTIA = `${X}/zoptia/zoptia_xbench`;
+if (fs.existsSync(ZOPTIA)) engines.zoptia = () => run(ZOPTIA, [corpus, 'bench/compare/cases.json']);
 const BASE = `${X}/bin/zregex_base_xbench`;
 const relabel = (out) => ({ ...out, engine: 'zregex_base', cases: out.cases.map((c) => ({ ...c, engine: 'zregex_base' })) });
 // Cases the base version can't compile (a feature added since): the base
@@ -60,11 +67,17 @@ if (fs.existsSync(BASE)) {
   engines.zregex_base = () => relabel(run(path.resolve(BASE), [path.resolve(corpus)], 600000, baseCwd));
 }
 
+const ONLY = (process.env.XBENCH_ENGINES ?? '').split(',').filter(Boolean);
+const wanted = (e) => !ONLY.length || ONLY.includes(e);
+for (const e of Object.keys(engines)) if (!wanted(e)) delete engines[e];
+const ROUNDS = process.env.XBENCH_ROUNDS ?? `${X}/rounds`;
+
 function adversarial() {
   const out = [];
   for (const c of cases.filter((x) => x.adversarial)) {
     for (const n of c.adversarial) {
       const one = (engine, cmd, args) => {
+        if (!wanted(engine === 'pcre2_jit' || engine === 'pcre2_interp' ? 'pcre2' : engine)) return;
         const r = run(cmd, args, TIMEOUT_MS);
         out.push(r.timeout ? { engine, id: c.id, n, ms: r.ms, outcome: `timeout (> ${TIMEOUT_MS / 1000} s, killed)` } : { ...r, engine });
       };
@@ -73,6 +86,7 @@ function adversarial() {
       one('v8', 'node', ['bench/compare/v8_xbench.mjs', corpus, '--adv', c.id, String(n)]);
       one('pcre2_jit', `${X}/bin/pcre2_xbench`, ['adv', c.id, c.pattern, String(n), 'jit', c.adv_suffix ?? 'c']);
       one('pcre2_interp', `${X}/bin/pcre2_xbench`, ['adv', c.id, c.pattern, String(n), 'interp', c.adv_suffix ?? 'c']);
+      if (engines.zoptia && c.engines.includes('zoptia')) one('zoptia', ZOPTIA, [corpus, 'bench/compare/cases.json', '--adv', c.id, String(n)]);
     }
   }
   return out;
@@ -94,7 +108,7 @@ if (process.argv[2] === '--scaling') {
   console.log(JSON.stringify(res));
 } else {
   const rounds = Number(process.argv[2] || 10);
-  fs.mkdirSync(`${X}/rounds`, { recursive: true });
+  fs.mkdirSync(ROUNDS, { recursive: true });
   const names = Object.keys(engines);
   for (let r = 1; r <= rounds; r++) {
     const order = names.slice(r % names.length).concat(names.slice(0, r % names.length));
@@ -104,7 +118,7 @@ if (process.argv[2] === '--scaling') {
       console.error(`round ${r}: ${e} done ${new Date().toISOString().slice(11, 19)}`);
     }
     result.adversarial = adversarial();
-    fs.writeFileSync(`${X}/rounds/round_${r}.json`, JSON.stringify(result));
+    fs.writeFileSync(`${ROUNDS}/round_${r}.json`, JSON.stringify(result));
     console.error(`round ${r} written`);
   }
 }
