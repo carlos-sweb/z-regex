@@ -30,7 +30,7 @@ var scratch: new.Scratch = undefined;
 var stats: struct { runs: usize = 0, found: usize = 0, steplimit: usize = 0, bt_diffs: usize = 0, plain_diffs: usize = 0 } = .{};
 const Kind = std.meta.Tag(new.internal.tier0.prefilter.Prefilter.Kind);
 /// Programs routed per prefilter kind, in `Kind`'s order.
-var kinds = [_]usize{0} ** std.meta.fields(Kind).len;
+var kinds: [@typeInfo(Kind).@"enum".field_values.len]usize = @splat(0);
 
 fn run(re: *new.Regex, subj: new.Subject, i: usize) Out {
     var buf: [256]?usize = undefined;
@@ -319,7 +319,7 @@ pub fn main(init: std.process.Init) !void {
                 defer fe.deinit();
                 if (new.internal.tier0.check(fe.root) != null) routed_tagged += 1;
             }
-            kinds[@intFromEnum(std.meta.activeTag(t0.prefilter.kind))] += 1;
+            kinds[@backingInt(std.meta.activeTag(t0.prefilter.kind))] += 1;
             var ob = o;
             ob.force_tier = .expert;
             var bt = try new.Regex.compileWithOptions(gpa, pat, ob);
@@ -343,6 +343,6 @@ pub fn main(init: std.process.Init) !void {
         }
     }
     std.debug.print("tagged programs {d}; routed {d} (", .{ routed_tagged, routed });
-    inline for (std.meta.fields(Kind), 0..) |f, k| std.debug.print("{s}{s} {d}", .{ if (k == 0) "" else ", ", f.name, kinds[k] });
+    inline for (@typeInfo(Kind).@"enum".field_names, 0..) |field_name, k| std.debug.print("{s}{s} {d}", .{ if (k == 0) "" else ", ", field_name, kinds[k] });
     std.debug.print("); runs {d}, matched {d}, bt StepLimit {d}; DISCREPANCIES (bounds) vs backtracker {d}, vs plain VM {d}\n", .{ stats.runs, stats.found, stats.steplimit, stats.bt_diffs, stats.plain_diffs });
 }

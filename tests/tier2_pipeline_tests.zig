@@ -257,8 +257,8 @@ test "CodeGenerator: simple character" {
     var p = try testProgram("a", .{});
     defer p.deinit();
     // CHAR32 'a', MATCH
-    try std.testing.expectEqual(@intFromEnum(Opcode.CHAR32), p.code[0]);
-    try std.testing.expectEqual(@intFromEnum(Opcode.MATCH), p.code[p.code.len - 1]);
+    try std.testing.expectEqual(@backingInt(Opcode.CHAR32), p.code[0]);
+    try std.testing.expectEqual(@backingInt(Opcode.MATCH), p.code[p.code.len - 1]);
 }
 
 test "CodeGenerator: a literal is one CHAR32 per character" {
@@ -270,7 +270,7 @@ test "CodeGenerator: a literal is one CHAR32 per character" {
 test "CodeGenerator: alternation starts with SPLIT" {
     var p = try testProgram("a|b", .{});
     defer p.deinit();
-    try std.testing.expectEqual(@intFromEnum(Opcode.SPLIT), p.code[0]);
+    try std.testing.expectEqual(@backingInt(Opcode.SPLIT), p.code[0]);
 }
 
 test "CodeGenerator: quantifiers" {
@@ -284,16 +284,16 @@ test "CodeGenerator: quantifiers" {
 test "CodeGenerator: group" {
     var p = try testProgram("(ab)", .{});
     defer p.deinit();
-    try std.testing.expectEqual(@intFromEnum(Opcode.SAVE_START), p.code[0]);
+    try std.testing.expectEqual(@backingInt(Opcode.SAVE_START), p.code[0]);
 }
 
 test "CodeGenerator: anchors follow the scope's m flag" {
     var p = try testProgram("^a$", .{});
     defer p.deinit();
-    try std.testing.expectEqual(@intFromEnum(Opcode.STRING_START), p.code[0]);
+    try std.testing.expectEqual(@backingInt(Opcode.STRING_START), p.code[0]);
     var m = try testProgram("^a$", .{ .multiline = true });
     defer m.deinit();
-    try std.testing.expectEqual(@intFromEnum(Opcode.LINE_START), m.code[0]);
+    try std.testing.expectEqual(@backingInt(Opcode.LINE_START), m.code[0]);
 }
 
 test "CodeGenerator: dot excludes newline by default" {
@@ -301,7 +301,7 @@ test "CodeGenerator: dot excludes newline by default" {
     defer p.deinit();
     // Without dot_all, '.' must exclude '\n' (matches JS default): CHAR now
     // means "any Unicode scalar value except newline" (decoded at match time).
-    try std.testing.expectEqual(@intFromEnum(Opcode.CHAR), p.code[0]);
+    try std.testing.expectEqual(@backingInt(Opcode.CHAR), p.code[0]);
 }
 
 test "CodeGenerator: dot matches newline with dot_all" {
@@ -309,7 +309,7 @@ test "CodeGenerator: dot matches newline with dot_all" {
     defer p.deinit();
     // With dot_all, '.' matches newline too, so it compiles to the dedicated
     // CHAR_ANY opcode instead of the newline-excluding CHAR opcode.
-    try std.testing.expectEqual(@intFromEnum(Opcode.CHAR_ANY), p.code[0]);
+    try std.testing.expectEqual(@backingInt(Opcode.CHAR_ANY), p.code[0]);
 }
 
 test "CodeGenerator: every iteration of a quantified group clears its captures, a? and a{0,1} alike (F7a(4))" {

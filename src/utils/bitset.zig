@@ -9,7 +9,7 @@ const Allocator = std.mem.Allocator;
 
 /// Fixed-size bit set for ASCII characters (0-255)
 pub const BitSet256 = struct {
-    bits: [4]u64 = [_]u64{0} ** 4, // 4 * 64 = 256 bits
+    bits: [4]u64 = @splat(0), // 4 * 64 = 256 bits
 
     const Self = @This();
 
@@ -20,7 +20,7 @@ pub const BitSet256 = struct {
 
     /// Initialize with all bits set
     pub fn initFull() Self {
-        return .{ .bits = [_]u64{~@as(u64, 0)} ** 4 };
+        return .{ .bits = @splat(~@as(u64, 0)) };
     }
 
     /// Set a bit at the specified index
@@ -55,12 +55,12 @@ pub const BitSet256 = struct {
 
     /// Clear all bits
     pub fn clearAll(self: *Self) void {
-        self.bits = [_]u64{0} ** 4;
+        self.bits = @splat(0);
     }
 
     /// Set all bits
     pub fn setAll(self: *Self) void {
-        self.bits = [_]u64{~@as(u64, 0)} ** 4;
+        self.bits = @splat(~@as(u64, 0));
     }
 
     /// Union with another bit set (self |= other)

@@ -215,11 +215,11 @@ fn firstOf(prog: *const Program) ?First {
 fn firstOfWith(prog: *const Program, comptime scan: usize) ?First {
     // Built as bit sets (whole ranges per word, popcount to count), turned
     // into the lookup tables at the end.
-    var utf8 = Bits.initEmpty();
-    var utf16 = Bits.initEmpty();
+    var utf8 = Bits.empty;
+    var utf16 = Bits.empty;
     var high = false;
     // Depth-first over the epsilon closure of pc 0, asserts passed over.
-    var seen = std.StaticBitSet(scan).initEmpty();
+    var seen = std.StaticBitSet(scan).empty;
     // Each visited pc pops one entry and pushes at most two: the depth
     // stays within n + 1 (it was `scan`, one short at n = scan; F4b(1)).
     var stack: [2 * scan + 1]u32 = undefined;
@@ -342,11 +342,11 @@ fn innerOf(gpa: Allocator, prog: *const Program) Allocator.Error!?Inner {
 /// `min_prefix` is left 0 (`minPrefix` fills it).
 fn innerAt(prog: *const Program, l: u32) ?Inner {
     const c = prog.insts[l].char;
-    var utf8 = Bits.initEmpty();
-    var utf16 = Bits.initEmpty();
+    var utf8 = Bits.empty;
+    var utf16 = Bits.empty;
     var high = false;
     var consumes = false;
-    var seen = std.StaticBitSet(max_scan).initEmpty();
+    var seen = std.StaticBitSet(max_scan).empty;
     var stack: [2 * max_scan + 1]u32 = undefined;
     stack[0] = 0;
     var sp: usize = 1;
@@ -513,7 +513,7 @@ pub fn findLiteralWith(comptime Unit: type, comptime W: ?usize, haystack: []cons
     const len = haystack.len;
     if (start > len or n > len - start) return null;
     const V = @Vector(w, Unit);
-    const Mask = std.meta.Int(.unsigned, w);
+    const Mask = @Int(.unsigned, w);
     const first: V = @splat(needle[0]);
     const last: V = @splat(needle[n - 1]);
     var i = start;
@@ -815,7 +815,8 @@ test "findLiteral: fixed edge cases, against std.mem.indexOfPos" {
     try expectSame(u8, "hello", 5, "lo");
     try expectSame(u8, "hello", 6, "lo");
     // Multibyte literals in WTF-8, and the same text in UTF-16.
-    const text = "x\u{E9}\u{20AC}y\u{E9}\u{20AC}" ** 20;
+    const unit = "x\u{E9}\u{20AC}y\u{E9}\u{20AC}";
+    const text = &@as([20 * unit.len]u8, @bitCast(@as([20][unit.len]u8, @splat(unit.*))));
     try expectSame(u8, text, 0, "\u{E9}\u{20AC}");
     try expectSame(u8, text, 4, "\u{E9}\u{20AC}");
     const t16 = std.unicode.utf8ToUtf16LeStringLiteral(text);
@@ -890,7 +891,7 @@ test "expand gives the table isSet gives (F7b(6))" {
     var prng = std.Random.DefaultPrng.init(0x7b6);
     const rnd = prng.random();
     for (0..64) |_| {
-        var bits = Bits.initEmpty();
+        var bits = Bits.empty;
         for (0..rnd.uintLessThan(usize, 256)) |_| bits.set(rnd.int(u8));
         var table: [256]bool = undefined;
         expand(bits, &table);

@@ -1454,6 +1454,8 @@ test "code points: groups, empty matches, an index inside a pair" {
 }
 
 test "code points: the cap, and allocation failure" {
+    // Disable backing-allocator resizing so failure indices remain deterministic.
+    var backing = testing.FailingAllocator.init(testing.allocator, .{ .resize_fail_index = 0 });
     const a = litCp(&.{0x1F600});
     const b_ = lit("b");
     const ab: hir.Node = .{ .alt = &.{ &a, &b_ } };
@@ -1472,7 +1474,7 @@ test "code points: the cap, and allocation failure" {
     for ([_]*const hir.Node{ &run, &scoped }) |root| {
         const p = try compile_mod.compileWith(testing.allocator, root, .{ .code_point = true, .dfa = false });
         defer p.deinit(testing.allocator);
-        try testing.checkAllAllocationFailures(testing.allocator, struct {
+        try testing.checkAllAllocationFailures(backing.allocator(), struct {
             fn f(gpa: Allocator, prog: *const Program) !void {
                 const d = (try build(gpa, prog, .code_point)).?;
                 d.deinit(gpa);

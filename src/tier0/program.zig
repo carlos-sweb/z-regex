@@ -52,7 +52,7 @@ pub const Set = struct {
     ascii: [2]u64,
 
     pub fn init(gpa: Allocator, set: CharSet) Allocator.Error!Set {
-        var bits = std.bit_set.IntegerBitSet(128).initEmpty();
+        var bits = std.bit_set.IntegerBitSet(128).empty;
         for (set.ranges) |r| {
             if (r.lo >= 128) break;
             bits.setRangeValue(.{ .start = r.lo, .end = @as(usize, @min(r.hi, 127)) + 1 }, true);

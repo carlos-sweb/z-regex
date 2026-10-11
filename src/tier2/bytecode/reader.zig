@@ -38,7 +38,7 @@ pub const BytecodeReader = struct {
     /// Peek at the next opcode without advancing
     pub fn peekOpcode(self: Self) ?Opcode {
         if (self.offset >= self.bytecode.len) return null;
-        return @enumFromInt(self.bytecode[self.offset]);
+        return @fromBackingInt(@intCast(self.bytecode[self.offset]));
     }
 
     /// Read the next instruction

@@ -296,8 +296,8 @@ fn isParseError(err: anyerror) bool {
     // parser and also after it (a lookbehind of variable length), where
     // analyze classifies the pattern.
     if (err == error.UnsupportedFeature) return false;
-    inline for (@typeInfo(zregex.internal.ParseError).error_set.?) |e| {
-        if (err == @field(anyerror, e.name)) return true;
+    inline for (@typeInfo(zregex.internal.ParseError).error_set.error_names.?) |name| {
+        if (err == @field(anyerror, name)) return true;
     }
     return false;
 }

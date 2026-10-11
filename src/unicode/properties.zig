@@ -165,7 +165,7 @@ pub fn resolveUnicodeProperty(raw_name: []const u8) ?UnicodeProperty {
 /// Whether `cat` is a General_Category value (major, minor, `LC`, `Cn`)
 /// rather than a binary property.
 pub fn isGeneralCategory(cat: UnicodeProperty) bool {
-    return @intFromEnum(cat) <= @intFromEnum(UnicodeProperty.Cs) or cat == .LC or cat == .Cn;
+    return @backingInt(cat) <= @backingInt(UnicodeProperty.Cs) or cat == .LC or cat == .Cn;
 }
 
 /// If `raw_name` has a `Script=`/`sc=` prefix (JS's syntax for
@@ -657,8 +657,8 @@ test "properties: isInCategory binary properties" {
 }
 
 test "properties: propertyRanges agrees with isInCategory at every range edge" {
-    inline for (@typeInfo(UnicodeProperty).@"enum".fields) |f| {
-        const cat: UnicodeProperty = @enumFromInt(f.value);
+    inline for (@typeInfo(UnicodeProperty).@"enum".field_values) |value| {
+        const cat: UnicodeProperty = @fromBackingInt(@intCast(value));
         const ranges = propertyRanges(cat);
         for (ranges, 0..) |r, i| {
             try std.testing.expect(r.start <= r.end);
@@ -682,7 +682,7 @@ test "properties: every range table is sorted with no overlapping or adjacent ra
             }
         }
     };
-    inline for (@typeInfo(UnicodeProperty).@"enum".fields) |f| try Check.run(propertyRanges(@enumFromInt(f.value)));
+    inline for (@typeInfo(UnicodeProperty).@"enum".field_values) |value| try Check.run(propertyRanges(@fromBackingInt(@intCast(value))));
     for (tables.SCRIPT_RANGES) |t| try Check.run(t);
     for (tables.SCRIPT_EXTENSIONS_RANGES) |t| try Check.run(t);
 }

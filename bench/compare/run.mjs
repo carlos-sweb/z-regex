@@ -35,6 +35,7 @@ function run(cmd, args, timeout = 600000, cwd = undefined) {
   const r = spawnSync(cmd, args, { encoding: 'utf8', timeout, maxBuffer: 64 << 20, cwd });
   const ms = Date.now() - t0;
   if (r.error && r.error.code === 'ETIMEDOUT') return { timeout: true, ms };
+  if (r.error) throw r.error;
   if (r.status !== 0) throw new Error(`${cmd} ${args.join(' ')} failed: ${r.stderr}`);
   return JSON.parse(r.stdout);
 }

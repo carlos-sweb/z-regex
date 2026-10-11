@@ -11,6 +11,7 @@
 // XBENCH_RESULTS: the JSON to write (default bench/results.json; the tables
 // then go next to it, .md, instead of zig-out/xbench/tables.md).
 import fs from 'node:fs';
+import { createHash } from 'node:crypto';
 import path from 'node:path';
 import { execSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
@@ -25,15 +26,49 @@ const TABLES = process.env.XBENCH_RESULTS ? RESULTS.replace(/\.json$/, '') + '.m
 const rounds = fs.readdirSync(ROUNDS).filter((f) => f.endsWith('.json')).map((f) => JSON.parse(fs.readFileSync(`${ROUNDS}/${f}`, 'utf8')));
 
 const sh = (c) => { try { return execSync(c, { encoding: 'utf8' }).trim(); } catch { return null; } };
+const cpuMetadata = sh('lscpu --json');
+if (!cpuMetadata) throw new Error('CPU metadata unavailable; allow the required child processes and rerun the analyzer.');
+const cpuInfo = JSON.parse(cpuMetadata).lscpu;
+const cpuField = (name) => cpuInfo.find((entry) => entry.field === name)?.data;
+const readOptional = (file) => fs.existsSync(file) ? fs.readFileSync(file, 'utf8').trim() : null;
+const memoryKb = Number(fs.readFileSync('/proc/meminfo', 'utf8').match(/^MemTotal:\s+(\d+)/m)?.[1]);
+const binaryPaths = {
+  zregex: 'zig-out/bin/zregex_xbench',
+  zregex_base: 'zig-out/xbench/bin/zregex_base_xbench',
+  rust: 'bench/compare/rust/target/release/rust_xbench',
+  pcre2: 'zig-out/xbench/bin/pcre2_xbench',
+  zigregex: 'zig-out/xbench/zigregex/zigregex_xbench',
+  zoptia: 'zig-out/xbench/zoptia/zoptia_xbench',
+};
+const binaryHashes = Object.fromEntries(Object.entries(binaryPaths)
+  .filter(([, file]) => fs.existsSync(file))
+  .map(([engine, file]) => [engine, createHash('sha256').update(fs.readFileSync(file)).digest('hex')]));
 const machine = {
   cpu: sh("lscpu | sed -n 's/^Model name: *//p'"),
-  cores: Number(sh('nproc')),
+  cores: Number(cpuField('Core(s) per socket:')) * Number(cpuField('Socket(s):')),
+  available_cpus: Number(sh('nproc')),
   threads_per_core: Number(sh("lscpu | sed -n 's/^Thread(s) per core: *//p'")),
   hypervisor: sh("lscpu | sed -n 's/^Hypervisor vendor: *//p'"),
-  ram: sh("free -h | awk '/Mem:/{print $2}'"),
+  physical_cores: Number(cpuField('Core(s) per socket:')) * Number(cpuField('Socket(s):')),
+  logical_cpus: Number(cpuField('CPU(s):')),
+  cpu_frequency_driver: readOptional('/sys/devices/system/cpu/cpu0/cpufreq/scaling_driver'),
+  cpu_frequency_governor: readOptional('/sys/devices/system/cpu/cpu0/cpufreq/scaling_governor'),
+  ram: `${(memoryKb / (1024 * 1024)).toFixed(2)} GiB`,
+  ram_bytes: memoryKb * 1024,
+  os: fs.readFileSync('/etc/os-release', 'utf8').match(/^PRETTY_NAME="(.*)"/m)?.[1] ?? null,
   kernel: sh('uname -r'),
-  shared_container: true,
+  shared_container: fs.existsSync('/.dockerenv') || fs.existsSync('/run/.containerenv'),
+  source_base_revision: sh('git rev-parse HEAD'),
+  source_dirty: Boolean(sh('git status --porcelain --untracked-files=no')),
+  target_cpu: 'x86_64_v3',
+  optimize: 'ReleaseFast',
+  binary_sha256: binaryHashes,
   zig: sh('zig version'),
+  baseline_zig: process.env.XBENCH_BASE_ZIG ?? null,
+  baseline_version: rounds[0]?.engines?.zregex_base?.version ?? null,
+  cpu_affinity: sh("sed -n 's/^Cpus_allowed_list:[[:space:]]*//p' /proc/self/status"),
+  corpus_sha256: Object.fromEntries(fs.readdirSync(`${X}/corpus`).filter((f) => f.endsWith('.txt')).sort()
+    .map((f) => [f, createHash('sha256').update(fs.readFileSync(`${X}/corpus/${f}`)).digest('hex')])),
   node: process.version,
   v8: process.versions.v8,
   rustc: sh('rustc --version'),
@@ -87,9 +122,16 @@ try { scaling = JSON.parse(fs.readFileSync(`${X}/zigregex-scaling.json`, 'utf8')
 
 // Match counts must agree across engines (same semantics on these inputs).
 const mismatches = [];
-for (const c of cases.filter((x) => !x.adversarial)) {
-  const counts = Object.fromEntries(Object.keys(data).map((e) => [e, notes[`${e}/${c.id}/matches`]]).filter(([, v]) => v !== undefined));
-  if (new Set(Object.values(counts)).size > 1) mismatches.push({ id: c.id, counts });
+for (const round of rounds) for (const c of cases.filter((x) => !x.adversarial)) {
+  const counts = {};
+  for (const [engine, out] of Object.entries(round.engines)) {
+    for (const result of out.cases.filter((x) => x.id === c.id && !x.error)) {
+      const key = result.engine ?? engine;
+      if (result.matches !== undefined) counts[key] = result.matches;
+      if (result.exec_matches !== undefined) counts[`${key}/exec`] = result.exec_matches;
+    }
+  }
+  if (new Set(Object.values(counts)).size > 1) mismatches.push({ round: round.round, id: c.id, counts });
 }
 
 fs.writeFileSync(RESULTS, JSON.stringify({ generated: new Date().toISOString(), rounds: rounds.length, machine, summary, adversarial: advSummary, zigregex_scaling: scaling, notes, match_count_mismatches: mismatches }, null, 1) + '\n');

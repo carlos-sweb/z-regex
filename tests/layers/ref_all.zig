@@ -6,7 +6,7 @@
 //! the address of every non-generic function so its body is analyzed -- so
 //! that, compiled in a module with only its allowed imports, any forbidden
 //! import in reachable code fails the build. (`std.testing.refAllDecls` is
-//! not recursive, and Zig 0.16 has no `refAllDeclsRecursive`.)
+//! not recursive, and Zig 0.17 has no `refAllDeclsRecursive`.)
 
 const std = @import("std");
 
@@ -24,13 +24,13 @@ fn visit(comptime T: type, comptime seen: []const type) []const type {
         .@"struct", .@"enum", .@"union", .@"opaque" => {},
         else => return done,
     }
-    for (std.meta.declarations(T)) |d| {
-        const v = @field(T, d.name);
+    for (std.meta.declarations(T)) |decl_name| {
+        const v = @field(T, decl_name);
         const V = @TypeOf(v);
         if (V == type) {
             done = visit(v, done);
         } else switch (@typeInfo(V)) {
-            .@"fn" => |f| if (!f.is_generic and f.calling_convention != .@"inline") {
+            .@"fn" => |f| if (!f.is_generic and f.attrs.@"callconv" != .@"inline") {
                 _ = &v;
             },
             else => {},

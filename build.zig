@@ -331,7 +331,7 @@ pub fn build(b: *std.Build) void {
         .root_module = snapshot_update_module,
     });
     const run_snapshot_update = b.addRunArtifact(snapshot_update_exe);
-    run_snapshot_update.addArg(b.pathFromRoot("tests/snapshots/bytecode.txt"));
+    run_snapshot_update.addFileArg2(b.path("tests/snapshots/bytecode.txt"), .{ .make_absolute = true });
     run_snapshot_update.has_side_effects = true;
     const snapshot_update_step = b.step("update-bytecode-snapshot", "Rewrite tests/snapshots/bytecode.txt for the current compiler");
     snapshot_update_step.dependOn(&run_snapshot_update.step);
@@ -425,7 +425,7 @@ pub fn build(b: *std.Build) void {
     const f0c_module = b.createModule(.{ .root_source_file = b.path("tools/f0c.zig"), .target = target, .optimize = .ReleaseSafe });
     f0c_module.addImport("zregex", addModules(b, target, .ReleaseSafe, false).get("zregex"));
     const run_f0c = b.addRunArtifact(b.addExecutable(.{ .name = "f0c", .root_module = f0c_module }));
-    if (b.args) |a| run_f0c.addArgs(a);
+    run_f0c.addPassthruArgs();
     const f0c_step = b.step("f0c", "Tier histogram of a regex corpus (scripts/f0c/extract.mjs output)");
     f0c_step.dependOn(&run_f0c.step);
 
@@ -458,7 +458,7 @@ pub fn build(b: *std.Build) void {
         const run = b.addRunArtifact(b.addExecutable(.{ .name = name, .root_module = m }));
         run.setCwd(b.path("."));
         run.has_side_effects = true;
-        if (b.args) |a| run.addArgs(a);
+        run.addPassthruArgs();
         b.step(name, b.fmt("Internal differential {s} (scripts/gate.sh; files after --)", .{name})).dependOn(&run.step);
     }
 

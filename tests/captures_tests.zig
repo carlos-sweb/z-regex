@@ -278,8 +278,10 @@ test "\\k<name> resolves after the parse: forward and self references" {
 }
 
 test "group names: no leak on any allocation failure" {
+    // Disable backing-allocator resizing so failure indices remain deterministic.
+    var backing = testing.FailingAllocator.init(testing.allocator, .{ .resize_fail_index = 0 });
     for ([_][]const u8{ "\\k<a>(?<a>b)(?<\\u{03C0}>c)\\k<\xCF\x80>", "(?<a>x)|(?<a>y)\\k<a>", "(?<a>(?<b>x)\\k<b>)" }) |p| {
-        try testing.checkAllAllocationFailures(testing.allocator, struct {
+        try testing.checkAllAllocationFailures(backing.allocator(), struct {
             fn run(a: std.mem.Allocator, pattern: []const u8) !void {
                 var re = try zregex.Regex.compile(a, pattern);
                 re.deinit();

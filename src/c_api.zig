@@ -213,7 +213,7 @@ export fn zregex_default_options() ZRegexOptions {
         .v = false,
         .max_recursion_depth = 1000,
         .max_steps = 1000000,
-        .reserved = [_]u32{0} ** 4,
+        .reserved = @splat(0),
     };
 }
 
@@ -853,15 +853,15 @@ test "the error codes of the API contract (docs/API.md)" {
         .{ .names = &.{"UnsupportedFeature"}, .code = .ZREGEXP_ERROR_UNSUPPORTED },
     };
     inline for (.{ regex.RegexError, regex.ExecError }) |E| {
-        inline for (@typeInfo(E).error_set.?) |e| {
+        inline for (@typeInfo(E).error_set.error_names.?) |name| {
             const want: Code = comptime blk: {
                 @setEvalBranchQuota(100_000);
                 for (table) |row| for (row.names) |n| {
-                    if (std.mem.eql(u8, n, e.name)) break :blk row.code;
+                    if (std.mem.eql(u8, n, name)) break :blk row.code;
                 };
                 break :blk .ZREGEXP_ERROR_UNKNOWN;
             };
-            try std.testing.expectEqual(want, zigErrorToC(@as(anyerror, @field(anyerror, e.name))));
+            try std.testing.expectEqual(want, zigErrorToC(@as(anyerror, @field(anyerror, name))));
         }
     }
 }

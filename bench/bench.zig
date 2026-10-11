@@ -93,7 +93,7 @@ const Gen = struct {
 const InputKind = enum { prose, prose_hello, phones_sparse, digits_dense, emails, unicode_mixed, unicode_ascii, html, prices, ab_runs };
 
 fn makeInput(gpa: Allocator, kind: InputKind) ![]u8 {
-    var g = Gen.init(gpa, 0x5eed_0000 + @as(u64, @intFromEnum(kind)));
+    var g = Gen.init(gpa, 0x5eed_0000 + @as(u64, @backingInt(kind)));
     const greek = [_][]const u8{ "λόγος", "αλφα", "Ωμέγα", "κόσμε" };
     const cyr = [_][]const u8{ "привет", "Москва", "слово" };
     const cjk = [_][]const u8{ "漢字", "日本語", "中文" };
@@ -223,12 +223,12 @@ fn engineOptions(base: zregex.CompileOptions, e: Engine) zregex.CompileOptions {
 /// §7.2's overhead cases (reviewer closure 6): per `execAt`, short and long.
 const overhead_cases = [_]struct { name: []const u8, pattern: []const u8, input: []const u8 }{
     .{ .name = "/abc/ on \"xabc\" (5 B)", .pattern = "abc", .input = "xabc" },
-    .{ .name = "/abc/ on 2 KB", .pattern = "abc", .input = "x" ** 1000 ++ "abc" ++ "y" ** 1000 },
+    .{ .name = "/abc/ on 2 KB", .pattern = "abc", .input = @as([1000]u8, @splat('x')) ++ "abc" ++ @as([1000]u8, @splat('y')) },
     .{ .name = "/\\d{3}-\\d{4}/ on \"tel 555-1234\"", .pattern = "\\d{3}-\\d{4}", .input = "tel 555-1234" },
-    .{ .name = "/[a-z]+@[a-z]+/ on 2 KB", .pattern = "[a-z]+@[a-z]+", .input = "1 " ** 500 ++ "ab@cd" ++ " 2" ** 500 },
+    .{ .name = "/[a-z]+@[a-z]+/ on 2 KB", .pattern = "[a-z]+@[a-z]+", .input = @as([1000]u8, @bitCast(@as([500][2]u8, @splat("1 ".*)))) ++ "ab@cd" ++ @as([1000]u8, @bitCast(@as([500][2]u8, @splat(" 2".*)))) },
     // F4b: groups, on the tagged VM.
     .{ .name = "/(\\d{3})-(\\d{4})/ on \"tel 555-1234\"", .pattern = "(\\d{3})-(\\d{4})", .input = "tel 555-1234" },
-    .{ .name = "/(\\w+)@(\\w+)\\.com/ on 2 KB", .pattern = "(\\w+)@(\\w+)\\.com", .input = "1 " ** 500 ++ "ab@cd.com" ++ " 2" ** 500 },
+    .{ .name = "/(\\w+)@(\\w+)\\.com/ on 2 KB", .pattern = "(\\w+)@(\\w+)\\.com", .input = @as([1000]u8, @bitCast(@as([500][2]u8, @splat("1 ".*)))) ++ "ab@cd.com" ++ @as([1000]u8, @bitCast(@as([500][2]u8, @splat(" 2".*)))) },
     .{ .name = "/(?:(a)|b)*c/ on \"ababc\"", .pattern = "(?:(a)|b)*c", .input = "ababc" },
 };
 
@@ -246,8 +246,8 @@ const compile_cases = [_]struct { name: []const u8, pattern: []const u8 }{
 
 const Adversarial = struct { name: []const u8, pattern: []const u8, input: []const u8 };
 const adversarial_cases = [_]Adversarial{
-    .{ .name = "(a+)+b", .pattern = "(a+)+b", .input = "a" ** 40 ++ "c" },
-    .{ .name = "(a|aa)*c", .pattern = "(a|aa)*c", .input = "a" ** 40 ++ "b" },
+    .{ .name = "(a+)+b", .pattern = "(a+)+b", .input = @as([40]u8, @splat('a')) ++ "c" },
+    .{ .name = "(a|aa)*c", .pattern = "(a|aa)*c", .input = @as([40]u8, @splat('a')) ++ "b" },
 };
 
 // ------------------------------------------------------------------ timing

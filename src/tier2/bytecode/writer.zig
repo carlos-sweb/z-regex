@@ -105,7 +105,7 @@ pub const BytecodeWriter = struct {
     /// Emit CHAR_CLASS or CHAR_CLASS_INV with inline bit table
     pub fn emitCharClass(self: *Self, opcode: Opcode, table: *const [32]u8) !void {
         // Emit opcode
-        try self.code.append(@intFromEnum(opcode));
+        try self.code.append(@backingInt(opcode));
         // Emit 32-byte bit table
         try self.code.appendSlice(table);
     }

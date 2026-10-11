@@ -9,7 +9,7 @@ const std = @import("std");
 /// Cada bit representa si un carácter está en el conjunto
 pub const BitTable = struct {
     /// 256 bits = 32 bytes
-    bits: [32]u8 = [_]u8{0} ** 32,
+    bits: [32]u8 = @splat(0),
 
     const Self = @This();
 

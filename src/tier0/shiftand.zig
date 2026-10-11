@@ -164,10 +164,10 @@ test "predicate: rejects loops, alternation, asserts, non-ASCII, empty, > 64" {
     try testing.expectEqual(null, try ofRoot(&wide));
     const empty: hir.Node = .{ .seq = &.{} };
     try testing.expectEqual(null, try ofRoot(&empty));
-    const n64 = lit("a" ** 64);
+    const n64 = lit(&@as([64]u8, @splat('a')));
     const s64 = (try ofRoot(&n64)).?;
     s64.deinit(testing.allocator);
-    const n65 = lit("a" ** 65);
+    const n65 = lit(&@as([65]u8, @splat('a')));
     try testing.expectEqual(null, try ofRoot(&n65));
 }
 

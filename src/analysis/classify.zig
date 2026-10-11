@@ -37,7 +37,7 @@ pub const Tier = enum(u2) {
     expert = 2,
 
     fn max(a: Tier, b: Tier) Tier {
-        return if (@intFromEnum(a) >= @intFromEnum(b)) a else b;
+        return if (@backingInt(a) >= @backingInt(b)) a else b;
     }
 };
 
@@ -181,7 +181,7 @@ pub const Analysis = struct {
     /// The features responsible for `min_tier` (the ones at that tier).
     /// Empty when the pattern is unclassifiable.
     pub fn reasons(self: Analysis) FeatureSet {
-        var out = FeatureSet.initEmpty();
+        var out = FeatureSet.empty;
         const t = self.min_tier orelse return out;
         var it = self.features.iterator();
         while (it.next()) |f| {
@@ -267,12 +267,12 @@ fn parseFailure(err: anyerror) Allocator.Error!Analysis {
 }
 
 fn unclassifiable(reason: Unclassifiable) Analysis {
-    return .{ .features = FeatureSet.initEmpty(), .min_tier = null, .unclassifiable = reason };
+    return .{ .features = FeatureSet.empty, .min_tier = null, .unclassifiable = reason };
 }
 
 const Walker = struct {
     flags: Flags,
-    features: FeatureSet = FeatureSet.initEmpty(),
+    features: FeatureSet = FeatureSet.empty,
     /// Any literal or class member >= U+0080, or any `\p`/`\P`. A class is
     /// judged by its members before its own `[^...]` (`[^a]` is ASCII
     /// content); a negated shorthand spliced into a class (`[\W]`) has members

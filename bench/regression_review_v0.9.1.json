@@ -1,0 +1,2050 @@
+{
+ "release": "0.9.1",
+ "status": "No additional regression confirmed above the repository threshold. Three previously investigated migration gaps remain open.",
+ "full_benchmark_rounds": 10,
+ "full_benchmark_flags": [
+  {
+   "case": "t1_vset",
+   "metric": "compile_us",
+   "additional_time_percent": 39.39487496140783
+  },
+  {
+   "case": "t0_email",
+   "metric": "short_ns",
+   "additional_time_percent": 10.162141779788834
+  }
+ ],
+ "isolated_probe": {
+  "generated": "2026-10-11T15:43:17.088920+00:00",
+  "cpu_affinity": "2",
+  "method": "30 alternating process pairs per case; unchanged original benchmark binaries and corpus; each compile_us sample is the original harness median of 21 compilations",
+  "binary_sha256": {
+   "base": "1a98167533aacca18bc0b83373f3edfe69a7a836d156b97761410ba84607fed5",
+   "current": "9c455d2a604f9d49f52adacdbadd560851338ba599f1b43f892e537376e0fabe"
+  },
+  "cases": {
+   "t1_vset": {
+    "samples": {
+     "base": [
+      {
+       "id": "t1_vset",
+       "route": "DFA",
+       "findall_mbps": 34.932,
+       "execat_mbps": 71.41,
+       "iter_mbps": 70.764,
+       "matches": 309431,
+       "exec_matches": 309431,
+       "short_ns": 47.98,
+       "compile_us": 34.715,
+       "bytes": 28250
+      },
+      {
+       "id": "t1_vset",
+       "route": "DFA",
+       "findall_mbps": 34.974,
+       "execat_mbps": 71.14,
+       "iter_mbps": 70.48,
+       "matches": 309431,
+       "exec_matches": 309431,
+       "short_ns": 48.52,
+       "compile_us": 33.442,
+       "bytes": 28250
+      },
+      {
+       "id": "t1_vset",
+       "route": "DFA",
+       "findall_mbps": 34.363,
+       "execat_mbps": 70.189,
+       "iter_mbps": 70.832,
+       "matches": 309431,
+       "exec_matches": 309431,
+       "short_ns": 48.06,
+       "compile_us": 33.327,
+       "bytes": 28250
+      },
+      {
+       "id": "t1_vset",
+       "route": "DFA",
+       "findall_mbps": 34.537,
+       "execat_mbps": 71.4,
+       "iter_mbps": 71.064,
+       "matches": 309431,
+       "exec_matches": 309431,
+       "short_ns": 48.09,
+       "compile_us": 33.205,
+       "bytes": 28250
+      },
+      {
+       "id": "t1_vset",
+       "route": "DFA",
+       "findall_mbps": 35.106,
+       "execat_mbps": 71.401,
+       "iter_mbps": 71.252,
+       "matches": 309431,
+       "exec_matches": 309431,
+       "short_ns": 49.12,
+       "compile_us": 33.314,
+       "bytes": 28250
+      },
+      {
+       "id": "t1_vset",
+       "route": "DFA",
+       "findall_mbps": 34.664,
+       "execat_mbps": 70.771,
+       "iter_mbps": 70.862,
+       "matches": 309431,
+       "exec_matches": 309431,
+       "short_ns": 47.71,
+       "compile_us": 34.582,
+       "bytes": 28250
+      },
+      {
+       "id": "t1_vset",
+       "route": "DFA",
+       "findall_mbps": 34.69,
+       "execat_mbps": 68.416,
+       "iter_mbps": 70.774,
+       "matches": 309431,
+       "exec_matches": 309431,
+       "short_ns": 47.97,
+       "compile_us": 34.016,
+       "bytes": 28250
+      },
+      {
+       "id": "t1_vset",
+       "route": "DFA",
+       "findall_mbps": 34.232,
+       "execat_mbps": 70.505,
+       "iter_mbps": 71.115,
+       "matches": 309431,
+       "exec_matches": 309431,
+       "short_ns": 49.17,
+       "compile_us": 33.328,
+       "bytes": 28250
+      },
+      {
+       "id": "t1_vset",
+       "route": "DFA",
+       "findall_mbps": 34.156,
+       "execat_mbps": 67.859,
+       "iter_mbps": 69.137,
+       "matches": 309431,
+       "exec_matches": 309431,
+       "short_ns": 49.68,
+       "compile_us": 33.177,
+       "bytes": 28250
+      },
+      {
+       "id": "t1_vset",
+       "route": "DFA",
+       "findall_mbps": 35.464,
+       "execat_mbps": 71.514,
+       "iter_mbps": 67.538,
+       "matches": 309431,
+       "exec_matches": 309431,
+       "short_ns": 48.19,
+       "compile_us": 33.194,
+       "bytes": 28250
+      },
+      {
+       "id": "t1_vset",
+       "route": "DFA",
+       "findall_mbps": 34.745,
+       "execat_mbps": 71.541,
+       "iter_mbps": 70.963,
+       "matches": 309431,
+       "exec_matches": 309431,
+       "short_ns": 49.02,
+       "compile_us": 33.246,
+       "bytes": 28250
+      },
+      {
+       "id": "t1_vset",
+       "route": "DFA",
+       "findall_mbps": 33.709,
+       "execat_mbps": 68.177,
+       "iter_mbps": 70.305,
+       "matches": 309431,
+       "exec_matches": 309431,
+       "short_ns": 49.17,
+       "compile_us": 33.458,
+       "bytes": 28250
+      },
+      {
+       "id": "t1_vset",
+       "route": "DFA",
+       "findall_mbps": 34.532,
+       "execat_mbps": 69.418,
+       "iter_mbps": 71.015,
+       "matches": 309431,
+       "exec_matches": 309431,
+       "short_ns": 48.12,
+       "compile_us": 33.216,
+       "bytes": 28250
+      },
+      {
+       "id": "t1_vset",
+       "route": "DFA",
+       "findall_mbps": 34.455,
+       "execat_mbps": 68.111,
+       "iter_mbps": 68.797,
+       "matches": 309431,
+       "exec_matches": 309431,
+       "short_ns": 49.11,
+       "compile_us": 33.148,
+       "bytes": 28250
+      },
+      {
+       "id": "t1_vset",
+       "route": "DFA",
+       "findall_mbps": 34.8,
+       "execat_mbps": 69.611,
+       "iter_mbps": 70.121,
+       "matches": 309431,
+       "exec_matches": 309431,
+       "short_ns": 47.53,
+       "compile_us": 34.182,
+       "bytes": 28250
+      },
+      {
+       "id": "t1_vset",
+       "route": "DFA",
+       "findall_mbps": 34.48,
+       "execat_mbps": 68.999,
+       "iter_mbps": 67.928,
+       "matches": 309431,
+       "exec_matches": 309431,
+       "short_ns": 48.6,
+       "compile_us": 33.251,
+       "bytes": 28250
+      },
+      {
+       "id": "t1_vset",
+       "route": "DFA",
+       "findall_mbps": 33.804,
+       "execat_mbps": 69.623,
+       "iter_mbps": 66.746,
+       "matches": 309431,
+       "exec_matches": 309431,
+       "short_ns": 49.88,
+       "compile_us": 33.15,
+       "bytes": 28250
+      },
+      {
+       "id": "t1_vset",
+       "route": "DFA",
+       "findall_mbps": 35.078,
+       "execat_mbps": 71.679,
+       "iter_mbps": 70.945,
+       "matches": 309431,
+       "exec_matches": 309431,
+       "short_ns": 49.61,
+       "compile_us": 33.13,
+       "bytes": 28250
+      },
+      {
+       "id": "t1_vset",
+       "route": "DFA",
+       "findall_mbps": 35.127,
+       "execat_mbps": 71.93,
+       "iter_mbps": 71.387,
+       "matches": 309431,
+       "exec_matches": 309431,
+       "short_ns": 48.11,
+       "compile_us": 34.426,
+       "bytes": 28250
+      },
+      {
+       "id": "t1_vset",
+       "route": "DFA",
+       "findall_mbps": 34.877,
+       "execat_mbps": 71.181,
+       "iter_mbps": 70.178,
+       "matches": 309431,
+       "exec_matches": 309431,
+       "short_ns": 49.78,
+       "compile_us": 34.028,
+       "bytes": 28250
+      },
+      {
+       "id": "t1_vset",
+       "route": "DFA",
+       "findall_mbps": 32.343,
+       "execat_mbps": 67.327,
+       "iter_mbps": 68.638,
+       "matches": 309431,
+       "exec_matches": 309431,
+       "short_ns": 48.56,
+       "compile_us": 51.512,
+       "bytes": 28250
+      },
+      {
+       "id": "t1_vset",
+       "route": "DFA",
+       "findall_mbps": 32.191,
+       "execat_mbps": 66.407,
+       "iter_mbps": 66.519,
+       "matches": 309431,
+       "exec_matches": 309431,
+       "short_ns": 49.73,
+       "compile_us": 33.992,
+       "bytes": 28250
+      },
+      {
+       "id": "t1_vset",
+       "route": "DFA",
+       "findall_mbps": 33.482,
+       "execat_mbps": 69.121,
+       "iter_mbps": 69.067,
+       "matches": 309431,
+       "exec_matches": 309431,
+       "short_ns": 48.3,
+       "compile_us": 33.127,
+       "bytes": 28250
+      },
+      {
+       "id": "t1_vset",
+       "route": "DFA",
+       "findall_mbps": 22.517,
+       "execat_mbps": 38.645,
+       "iter_mbps": 38.019,
+       "matches": 309431,
+       "exec_matches": 309431,
+       "short_ns": 89.21,
+       "compile_us": 33.187,
+       "bytes": 28250
+      },
+      {
+       "id": "t1_vset",
+       "route": "DFA",
+       "findall_mbps": 21.296,
+       "execat_mbps": 65.481,
+       "iter_mbps": 52.6,
+       "matches": 309431,
+       "exec_matches": 309431,
+       "short_ns": 52.44,
+       "compile_us": 58.922,
+       "bytes": 28250
+      },
+      {
+       "id": "t1_vset",
+       "route": "DFA",
+       "findall_mbps": 30.47,
+       "execat_mbps": 60.053,
+       "iter_mbps": 63.6,
+       "matches": 309431,
+       "exec_matches": 309431,
+       "short_ns": 50.58,
+       "compile_us": 61.506,
+       "bytes": 28250
+      },
+      {
+       "id": "t1_vset",
+       "route": "DFA",
+       "findall_mbps": 33.621,
+       "execat_mbps": 66.714,
+       "iter_mbps": 63.82,
+       "matches": 309431,
+       "exec_matches": 309431,
+       "short_ns": 52.42,
+       "compile_us": 34.047,
+       "bytes": 28250
+      },
+      {
+       "id": "t1_vset",
+       "route": "DFA",
+       "findall_mbps": 31.135,
+       "execat_mbps": 67.338,
+       "iter_mbps": 67.764,
+       "matches": 309431,
+       "exec_matches": 309431,
+       "short_ns": 50.84,
+       "compile_us": 34.415,
+       "bytes": 28250
+      },
+      {
+       "id": "t1_vset",
+       "route": "DFA",
+       "findall_mbps": 33.615,
+       "execat_mbps": 68.949,
+       "iter_mbps": 68.071,
+       "matches": 309431,
+       "exec_matches": 309431,
+       "short_ns": 48.11,
+       "compile_us": 34.09,
+       "bytes": 28250
+      },
+      {
+       "id": "t1_vset",
+       "route": "DFA",
+       "findall_mbps": 29.397,
+       "execat_mbps": 57.072,
+       "iter_mbps": 63.451,
+       "matches": 309431,
+       "exec_matches": 309431,
+       "short_ns": 53.95,
+       "compile_us": 58.021,
+       "bytes": 28250
+      }
+     ],
+     "current": [
+      {
+       "id": "t1_vset",
+       "route": "DFA",
+       "findall_mbps": 34.753,
+       "execat_mbps": 70.571,
+       "iter_mbps": 70.759,
+       "matches": 309431,
+       "exec_matches": 309431,
+       "short_ns": 47.63,
+       "compile_us": 32.26,
+       "bytes": 28250
+      },
+      {
+       "id": "t1_vset",
+       "route": "DFA",
+       "findall_mbps": 34.623,
+       "execat_mbps": 69.959,
+       "iter_mbps": 45.021,
+       "matches": 309431,
+       "exec_matches": 309431,
+       "short_ns": 48.46,
+       "compile_us": 32.274,
+       "bytes": 28250
+      },
+      {
+       "id": "t1_vset",
+       "route": "DFA",
+       "findall_mbps": 34.594,
+       "execat_mbps": 71.012,
+       "iter_mbps": 70.599,
+       "matches": 309431,
+       "exec_matches": 309431,
+       "short_ns": 48.66,
+       "compile_us": 32.357,
+       "bytes": 28250
+      },
+      {
+       "id": "t1_vset",
+       "route": "DFA",
+       "findall_mbps": 34.728,
+       "execat_mbps": 70.479,
+       "iter_mbps": 70.48,
+       "matches": 309431,
+       "exec_matches": 309431,
+       "short_ns": 48.12,
+       "compile_us": 33.154,
+       "bytes": 28250
+      },
+      {
+       "id": "t1_vset",
+       "route": "DFA",
+       "findall_mbps": 35.359,
+       "execat_mbps": 70.817,
+       "iter_mbps": 70.609,
+       "matches": 309431,
+       "exec_matches": 309431,
+       "short_ns": 47.29,
+       "compile_us": 32.277,
+       "bytes": 28250
+      },
+      {
+       "id": "t1_vset",
+       "route": "DFA",
+       "findall_mbps": 34.922,
+       "execat_mbps": 70.775,
+       "iter_mbps": 69.346,
+       "matches": 309431,
+       "exec_matches": 309431,
+       "short_ns": 47.62,
+       "compile_us": 32.426,
+       "bytes": 28250
+      },
+      {
+       "id": "t1_vset",
+       "route": "DFA",
+       "findall_mbps": 34.583,
+       "execat_mbps": 71.028,
+       "iter_mbps": 70.55,
+       "matches": 309431,
+       "exec_matches": 309431,
+       "short_ns": 47.72,
+       "compile_us": 32.945,
+       "bytes": 28250
+      },
+      {
+       "id": "t1_vset",
+       "route": "DFA",
+       "findall_mbps": 34.572,
+       "execat_mbps": 70.102,
+       "iter_mbps": 70.142,
+       "matches": 309431,
+       "exec_matches": 309431,
+       "short_ns": 47.8,
+       "compile_us": 32.269,
+       "bytes": 28250
+      },
+      {
+       "id": "t1_vset",
+       "route": "DFA",
+       "findall_mbps": 34.952,
+       "execat_mbps": 71.764,
+       "iter_mbps": 71.51,
+       "matches": 309431,
+       "exec_matches": 309431,
+       "short_ns": 46.36,
+       "compile_us": 32.175,
+       "bytes": 28250
+      },
+      {
+       "id": "t1_vset",
+       "route": "DFA",
+       "findall_mbps": 35.81,
+       "execat_mbps": 72.221,
+       "iter_mbps": 73.027,
+       "matches": 309431,
+       "exec_matches": 309431,
+       "short_ns": 46.87,
+       "compile_us": 32.071,
+       "bytes": 28250
+      },
+      {
+       "id": "t1_vset",
+       "route": "DFA",
+       "findall_mbps": 34.927,
+       "execat_mbps": 69.732,
+       "iter_mbps": 70.604,
+       "matches": 309431,
+       "exec_matches": 309431,
+       "short_ns": 46.23,
+       "compile_us": 32.215,
+       "bytes": 28250
+      },
+      {
+       "id": "t1_vset",
+       "route": "DFA",
+       "findall_mbps": 34.655,
+       "execat_mbps": 67.662,
+       "iter_mbps": 67.247,
+       "matches": 309431,
+       "exec_matches": 309431,
+       "short_ns": 48.25,
+       "compile_us": 32.122,
+       "bytes": 28250
+      },
+      {
+       "id": "t1_vset",
+       "route": "DFA",
+       "findall_mbps": 33.626,
+       "execat_mbps": 68.076,
+       "iter_mbps": 66.809,
+       "matches": 309431,
+       "exec_matches": 309431,
+       "short_ns": 52.21,
+       "compile_us": 32.251,
+       "bytes": 28250
+      },
+      {
+       "id": "t1_vset",
+       "route": "DFA",
+       "findall_mbps": 33.675,
+       "execat_mbps": 70.055,
+       "iter_mbps": 69.68,
+       "matches": 309431,
+       "exec_matches": 309431,
+       "short_ns": 47.33,
+       "compile_us": 32.248,
+       "bytes": 28250
+      },
+      {
+       "id": "t1_vset",
+       "route": "DFA",
+       "findall_mbps": 34.61,
+       "execat_mbps": 69.596,
+       "iter_mbps": 69.008,
+       "matches": 309431,
+       "exec_matches": 309431,
+       "short_ns": 49.4,
+       "compile_us": 33.18,
+       "bytes": 28250
+      },
+      {
+       "id": "t1_vset",
+       "route": "DFA",
+       "findall_mbps": 33.52,
+       "execat_mbps": 70.621,
+       "iter_mbps": 67.602,
+       "matches": 309431,
+       "exec_matches": 309431,
+       "short_ns": 48.79,
+       "compile_us": 33.953,
+       "bytes": 28250
+      },
+      {
+       "id": "t1_vset",
+       "route": "DFA",
+       "findall_mbps": 33.738,
+       "execat_mbps": 68.181,
+       "iter_mbps": 68.976,
+       "matches": 309431,
+       "exec_matches": 309431,
+       "short_ns": 48.02,
+       "compile_us": 32.212,
+       "bytes": 28250
+      },
+      {
+       "id": "t1_vset",
+       "route": "DFA",
+       "findall_mbps": 35.142,
+       "execat_mbps": 71.418,
+       "iter_mbps": 71.515,
+       "matches": 309431,
+       "exec_matches": 309431,
+       "short_ns": 47.9,
+       "compile_us": 32.374,
+       "bytes": 28250
+      },
+      {
+       "id": "t1_vset",
+       "route": "DFA",
+       "findall_mbps": 27.503,
+       "execat_mbps": 42.536,
+       "iter_mbps": 68.165,
+       "matches": 309431,
+       "exec_matches": 309431,
+       "short_ns": 48.87,
+       "compile_us": 32.233,
+       "bytes": 28250
+      },
+      {
+       "id": "t1_vset",
+       "route": "DFA",
+       "findall_mbps": 32.443,
+       "execat_mbps": 67.128,
+       "iter_mbps": 67.314,
+       "matches": 309431,
+       "exec_matches": 309431,
+       "short_ns": 48.89,
+       "compile_us": 53.045,
+       "bytes": 28250
+      },
+      {
+       "id": "t1_vset",
+       "route": "DFA",
+       "findall_mbps": 34.18,
+       "execat_mbps": 69.901,
+       "iter_mbps": 69.651,
+       "matches": 309431,
+       "exec_matches": 309431,
+       "short_ns": 47.53,
+       "compile_us": 32.421,
+       "bytes": 28250
+      },
+      {
+       "id": "t1_vset",
+       "route": "DFA",
+       "findall_mbps": 35.073,
+       "execat_mbps": 70.727,
+       "iter_mbps": 64.853,
+       "matches": 309431,
+       "exec_matches": 309431,
+       "short_ns": 53.96,
+       "compile_us": 33.722,
+       "bytes": 28250
+      },
+      {
+       "id": "t1_vset",
+       "route": "DFA",
+       "findall_mbps": 33.109,
+       "execat_mbps": 68.234,
+       "iter_mbps": 65.637,
+       "matches": 309431,
+       "exec_matches": 309431,
+       "short_ns": 50.08,
+       "compile_us": 33.326,
+       "bytes": 28250
+      },
+      {
+       "id": "t1_vset",
+       "route": "DFA",
+       "findall_mbps": 32.511,
+       "execat_mbps": 65.812,
+       "iter_mbps": 66.877,
+       "matches": 309431,
+       "exec_matches": 309431,
+       "short_ns": 51.59,
+       "compile_us": 36.264,
+       "bytes": 28250
+      },
+      {
+       "id": "t1_vset",
+       "route": "DFA",
+       "findall_mbps": 31.794,
+       "execat_mbps": 66.461,
+       "iter_mbps": 66.02,
+       "matches": 309431,
+       "exec_matches": 309431,
+       "short_ns": 50.45,
+       "compile_us": 33.204,
+       "bytes": 28250
+      },
+      {
+       "id": "t1_vset",
+       "route": "DFA",
+       "findall_mbps": 32.073,
+       "execat_mbps": 64.08,
+       "iter_mbps": 62.345,
+       "matches": 309431,
+       "exec_matches": 309431,
+       "short_ns": 54.7,
+       "compile_us": 50.154,
+       "bytes": 28250
+      },
+      {
+       "id": "t1_vset",
+       "route": "DFA",
+       "findall_mbps": 28.755,
+       "execat_mbps": 56.086,
+       "iter_mbps": 66.486,
+       "matches": 309431,
+       "exec_matches": 309431,
+       "short_ns": 50.78,
+       "compile_us": 33.893,
+       "bytes": 28250
+      },
+      {
+       "id": "t1_vset",
+       "route": "DFA",
+       "findall_mbps": 31.175,
+       "execat_mbps": 63.695,
+       "iter_mbps": 57.611,
+       "matches": 309431,
+       "exec_matches": 309431,
+       "short_ns": 51.59,
+       "compile_us": 33.801,
+       "bytes": 28250
+      },
+      {
+       "id": "t1_vset",
+       "route": "DFA",
+       "findall_mbps": 35.262,
+       "execat_mbps": 67.217,
+       "iter_mbps": 66.047,
+       "matches": 309431,
+       "exec_matches": 309431,
+       "short_ns": 53.66,
+       "compile_us": 32.107,
+       "bytes": 28250
+      },
+      {
+       "id": "t1_vset",
+       "route": "DFA",
+       "findall_mbps": 34.322,
+       "execat_mbps": 60.601,
+       "iter_mbps": 59.009,
+       "matches": 309431,
+       "exec_matches": 309431,
+       "short_ns": 82.63,
+       "compile_us": 33.141,
+       "bytes": 28250
+      }
+     ]
+    },
+    "summary": {
+     "compile_us": {
+      "base": {
+       "best": 33.127,
+       "median": 33.45,
+       "min": 33.127,
+       "max": 61.506,
+       "n": 30
+      },
+      "current": {
+       "best": 32.071,
+       "median": 32.3975,
+       "min": 32.071,
+       "max": 53.045,
+       "n": 30
+      },
+      "additional_time_percent": {
+       "best": -3.1877320614604576,
+       "median": -3.146487294469358
+      }
+     },
+     "execat_mbps": {
+      "base": {
+       "best": 71.93,
+       "median": 69.2695,
+       "min": 38.645,
+       "max": 71.93,
+       "n": 30
+      },
+      "current": {
+       "best": 72.221,
+       "median": 69.81649999999999,
+       "min": 42.536,
+       "max": 72.221,
+       "n": 30
+      },
+      "additional_time_percent": {
+       "best": -0.40292989573669225,
+       "median": -0.7834824146154551
+      }
+     },
+     "iter_mbps": {
+      "base": {
+       "best": 71.387,
+       "median": 69.62899999999999,
+       "min": 38.019,
+       "max": 71.387,
+       "n": 30
+      },
+      "current": {
+       "best": 73.027,
+       "median": 68.57050000000001,
+       "min": 45.021,
+       "max": 73.027,
+       "n": 30
+      },
+      "additional_time_percent": {
+       "best": -2.245744724553933,
+       "median": 1.543666737153715
+      }
+     },
+     "findall_mbps": {
+      "base": {
+       "best": 35.464,
+       "median": 34.409,
+       "min": 21.296,
+       "max": 35.464,
+       "n": 30
+      },
+      "current": {
+       "best": 35.81,
+       "median": 34.5775,
+       "min": 27.503,
+       "max": 35.81,
+       "n": 30
+      },
+      "additional_time_percent": {
+       "best": -0.9662105557107004,
+       "median": -0.48731111271781424
+      }
+     },
+     "short_ns": {
+      "base": {
+       "best": 47.53,
+       "median": 49.065,
+       "min": 47.53,
+       "max": 89.21,
+       "n": 30
+      },
+      "current": {
+       "best": 46.23,
+       "median": 48.56,
+       "min": 46.23,
+       "max": 82.63,
+       "n": 30
+      },
+      "additional_time_percent": {
+       "best": -2.7351146644224777,
+       "median": -1.0292469173545205
+      }
+     }
+    }
+   },
+   "t0_email": {
+    "samples": {
+     "base": [
+      {
+       "id": "t0_email",
+       "route": "DFA",
+       "findall_mbps": 694.41,
+       "execat_mbps": 944.101,
+       "iter_mbps": 949.207,
+       "matches": 7167,
+       "exec_matches": 7167,
+       "short_ns": 57.84,
+       "compile_us": 10.549,
+       "bytes": 2165
+      },
+      {
+       "id": "t0_email",
+       "route": "DFA",
+       "findall_mbps": 750.604,
+       "execat_mbps": 937.132,
+       "iter_mbps": 950.368,
+       "matches": 7167,
+       "exec_matches": 7167,
+       "short_ns": 60.6,
+       "compile_us": 10.112,
+       "bytes": 2165
+      },
+      {
+       "id": "t0_email",
+       "route": "DFA",
+       "findall_mbps": 647.87,
+       "execat_mbps": 971.963,
+       "iter_mbps": 935.689,
+       "matches": 7167,
+       "exec_matches": 7167,
+       "short_ns": 56.98,
+       "compile_us": 10.322,
+       "bytes": 2165
+      },
+      {
+       "id": "t0_email",
+       "route": "DFA",
+       "findall_mbps": 703.558,
+       "execat_mbps": 1000.461,
+       "iter_mbps": 914.119,
+       "matches": 7167,
+       "exec_matches": 7167,
+       "short_ns": 58.91,
+       "compile_us": 10.27,
+       "bytes": 2165
+      },
+      {
+       "id": "t0_email",
+       "route": "DFA",
+       "findall_mbps": 672.928,
+       "execat_mbps": 967.413,
+       "iter_mbps": 943.251,
+       "matches": 7167,
+       "exec_matches": 7167,
+       "short_ns": 57.34,
+       "compile_us": 10.421,
+       "bytes": 2165
+      },
+      {
+       "id": "t0_email",
+       "route": "DFA",
+       "findall_mbps": 730.324,
+       "execat_mbps": 966.241,
+       "iter_mbps": 981.571,
+       "matches": 7167,
+       "exec_matches": 7167,
+       "short_ns": 58.18,
+       "compile_us": 10.079,
+       "bytes": 2165
+      },
+      {
+       "id": "t0_email",
+       "route": "DFA",
+       "findall_mbps": 723.877,
+       "execat_mbps": 971.077,
+       "iter_mbps": 968.153,
+       "matches": 7167,
+       "exec_matches": 7167,
+       "short_ns": 55.95,
+       "compile_us": 13.473,
+       "bytes": 2165
+      },
+      {
+       "id": "t0_email",
+       "route": "DFA",
+       "findall_mbps": 721.37,
+       "execat_mbps": 898.608,
+       "iter_mbps": 941.096,
+       "matches": 7167,
+       "exec_matches": 7167,
+       "short_ns": 61.06,
+       "compile_us": 10.072,
+       "bytes": 2165
+      },
+      {
+       "id": "t0_email",
+       "route": "DFA",
+       "findall_mbps": 687.083,
+       "execat_mbps": 938.483,
+       "iter_mbps": 943.415,
+       "matches": 7167,
+       "exec_matches": 7167,
+       "short_ns": 66.44,
+       "compile_us": 10.094,
+       "bytes": 2165
+      },
+      {
+       "id": "t0_email",
+       "route": "DFA",
+       "findall_mbps": 690.647,
+       "execat_mbps": 770.533,
+       "iter_mbps": 819.789,
+       "matches": 7167,
+       "exec_matches": 7167,
+       "short_ns": 63.85,
+       "compile_us": 10.458,
+       "bytes": 2165
+      },
+      {
+       "id": "t0_email",
+       "route": "DFA",
+       "findall_mbps": 700.408,
+       "execat_mbps": 955.078,
+       "iter_mbps": 953.312,
+       "matches": 7167,
+       "exec_matches": 7167,
+       "short_ns": 56.79,
+       "compile_us": 10.389,
+       "bytes": 2165
+      },
+      {
+       "id": "t0_email",
+       "route": "DFA",
+       "findall_mbps": 752.892,
+       "execat_mbps": 995.045,
+       "iter_mbps": 983.632,
+       "matches": 7167,
+       "exec_matches": 7167,
+       "short_ns": 54.23,
+       "compile_us": 10.11,
+       "bytes": 2165
+      },
+      {
+       "id": "t0_email",
+       "route": "DFA",
+       "findall_mbps": 723.514,
+       "execat_mbps": 965.034,
+       "iter_mbps": 965.291,
+       "matches": 7167,
+       "exec_matches": 7167,
+       "short_ns": 54.66,
+       "compile_us": 10.013,
+       "bytes": 2165
+      },
+      {
+       "id": "t0_email",
+       "route": "DFA",
+       "findall_mbps": 659.558,
+       "execat_mbps": 898.875,
+       "iter_mbps": 903.911,
+       "matches": 7167,
+       "exec_matches": 7167,
+       "short_ns": 58.93,
+       "compile_us": 10.079,
+       "bytes": 2165
+      },
+      {
+       "id": "t0_email",
+       "route": "DFA",
+       "findall_mbps": 703.07,
+       "execat_mbps": 856.009,
+       "iter_mbps": 923.207,
+       "matches": 7167,
+       "exec_matches": 7167,
+       "short_ns": 65.29,
+       "compile_us": 10.435,
+       "bytes": 2165
+      },
+      {
+       "id": "t0_email",
+       "route": "DFA",
+       "findall_mbps": 731.752,
+       "execat_mbps": 914.445,
+       "iter_mbps": 899.994,
+       "matches": 7167,
+       "exec_matches": 7167,
+       "short_ns": 60.27,
+       "compile_us": 10.264,
+       "bytes": 2165
+      },
+      {
+       "id": "t0_email",
+       "route": "DFA",
+       "findall_mbps": 727.835,
+       "execat_mbps": 972.371,
+       "iter_mbps": 974.233,
+       "matches": 7167,
+       "exec_matches": 7167,
+       "short_ns": 55.82,
+       "compile_us": 10.275,
+       "bytes": 2165
+      },
+      {
+       "id": "t0_email",
+       "route": "DFA",
+       "findall_mbps": 712.378,
+       "execat_mbps": 915.992,
+       "iter_mbps": 914.262,
+       "matches": 7167,
+       "exec_matches": 7167,
+       "short_ns": 64.53,
+       "compile_us": 10.278,
+       "bytes": 2165
+      },
+      {
+       "id": "t0_email",
+       "route": "DFA",
+       "findall_mbps": 734.499,
+       "execat_mbps": 998.28,
+       "iter_mbps": 739.608,
+       "matches": 7167,
+       "exec_matches": 7167,
+       "short_ns": 56.12,
+       "compile_us": 10.344,
+       "bytes": 2165
+      },
+      {
+       "id": "t0_email",
+       "route": "DFA",
+       "findall_mbps": 738.222,
+       "execat_mbps": 969.503,
+       "iter_mbps": 995.766,
+       "matches": 7167,
+       "exec_matches": 7167,
+       "short_ns": 56.84,
+       "compile_us": 10.34,
+       "bytes": 2165
+      },
+      {
+       "id": "t0_email",
+       "route": "DFA",
+       "findall_mbps": 736.958,
+       "execat_mbps": 966.842,
+       "iter_mbps": 962.916,
+       "matches": 7167,
+       "exec_matches": 7167,
+       "short_ns": 54.97,
+       "compile_us": 10.331,
+       "bytes": 2165
+      },
+      {
+       "id": "t0_email",
+       "route": "DFA",
+       "findall_mbps": 733.193,
+       "execat_mbps": 965.889,
+       "iter_mbps": 978.568,
+       "matches": 7167,
+       "exec_matches": 7167,
+       "short_ns": 54.53,
+       "compile_us": 10.326,
+       "bytes": 2165
+      },
+      {
+       "id": "t0_email",
+       "route": "DFA",
+       "findall_mbps": 758.288,
+       "execat_mbps": 1004.013,
+       "iter_mbps": 998.784,
+       "matches": 7167,
+       "exec_matches": 7167,
+       "short_ns": 53.81,
+       "compile_us": 10.125,
+       "bytes": 2165
+      },
+      {
+       "id": "t0_email",
+       "route": "DFA",
+       "findall_mbps": 747.897,
+       "execat_mbps": 959.973,
+       "iter_mbps": 975.446,
+       "matches": 7167,
+       "exec_matches": 7167,
+       "short_ns": 56.79,
+       "compile_us": 10.026,
+       "bytes": 2165
+      },
+      {
+       "id": "t0_email",
+       "route": "DFA",
+       "findall_mbps": 723.025,
+       "execat_mbps": 967.358,
+       "iter_mbps": 965.727,
+       "matches": 7167,
+       "exec_matches": 7167,
+       "short_ns": 55.35,
+       "compile_us": 10.047,
+       "bytes": 2165
+      },
+      {
+       "id": "t0_email",
+       "route": "DFA",
+       "findall_mbps": 719.419,
+       "execat_mbps": 993.942,
+       "iter_mbps": 994.154,
+       "matches": 7167,
+       "exec_matches": 7167,
+       "short_ns": 53.83,
+       "compile_us": 10.092,
+       "bytes": 2165
+      },
+      {
+       "id": "t0_email",
+       "route": "DFA",
+       "findall_mbps": 739.795,
+       "execat_mbps": 996.307,
+       "iter_mbps": 994.283,
+       "matches": 7167,
+       "exec_matches": 7167,
+       "short_ns": 53.94,
+       "compile_us": 10.033,
+       "bytes": 2165
+      },
+      {
+       "id": "t0_email",
+       "route": "DFA",
+       "findall_mbps": 748.9,
+       "execat_mbps": 964.62,
+       "iter_mbps": 994.553,
+       "matches": 7167,
+       "exec_matches": 7167,
+       "short_ns": 53.84,
+       "compile_us": 10.095,
+       "bytes": 2165
+      },
+      {
+       "id": "t0_email",
+       "route": "DFA",
+       "findall_mbps": 748.903,
+       "execat_mbps": 1000.056,
+       "iter_mbps": 993.855,
+       "matches": 7167,
+       "exec_matches": 7167,
+       "short_ns": 54.15,
+       "compile_us": 10.064,
+       "bytes": 2165
+      },
+      {
+       "id": "t0_email",
+       "route": "DFA",
+       "findall_mbps": 738.056,
+       "execat_mbps": 1003.249,
+       "iter_mbps": 996.006,
+       "matches": 7167,
+       "exec_matches": 7167,
+       "short_ns": 54.41,
+       "compile_us": 10.091,
+       "bytes": 2165
+      }
+     ],
+     "current": [
+      {
+       "id": "t0_email",
+       "route": "DFA",
+       "findall_mbps": 731.115,
+       "execat_mbps": 895.83,
+       "iter_mbps": 919.327,
+       "matches": 7167,
+       "exec_matches": 7167,
+       "short_ns": 65.0,
+       "compile_us": 9.368,
+       "bytes": 2165
+      },
+      {
+       "id": "t0_email",
+       "route": "DFA",
+       "findall_mbps": 704.023,
+       "execat_mbps": 928.987,
+       "iter_mbps": 924.225,
+       "matches": 7167,
+       "exec_matches": 7167,
+       "short_ns": 64.22,
+       "compile_us": 12.55,
+       "bytes": 2165
+      },
+      {
+       "id": "t0_email",
+       "route": "DFA",
+       "findall_mbps": 684.078,
+       "execat_mbps": 925.748,
+       "iter_mbps": 921.658,
+       "matches": 7167,
+       "exec_matches": 7167,
+       "short_ns": 59.68,
+       "compile_us": 9.518,
+       "bytes": 2165
+      },
+      {
+       "id": "t0_email",
+       "route": "DFA",
+       "findall_mbps": 720.306,
+       "execat_mbps": 926.872,
+       "iter_mbps": 935.2,
+       "matches": 7167,
+       "exec_matches": 7167,
+       "short_ns": 61.98,
+       "compile_us": 15.485,
+       "bytes": 2165
+      },
+      {
+       "id": "t0_email",
+       "route": "DFA",
+       "findall_mbps": 713.703,
+       "execat_mbps": 717.387,
+       "iter_mbps": 925.798,
+       "matches": 7167,
+       "exec_matches": 7167,
+       "short_ns": 61.43,
+       "compile_us": 9.123,
+       "bytes": 2165
+      },
+      {
+       "id": "t0_email",
+       "route": "DFA",
+       "findall_mbps": 723.357,
+       "execat_mbps": 936.966,
+       "iter_mbps": 931.27,
+       "matches": 7167,
+       "exec_matches": 7167,
+       "short_ns": 61.87,
+       "compile_us": 9.436,
+       "bytes": 2165
+      },
+      {
+       "id": "t0_email",
+       "route": "DFA",
+       "findall_mbps": 704.779,
+       "execat_mbps": 934.544,
+       "iter_mbps": 935.584,
+       "matches": 7167,
+       "exec_matches": 7167,
+       "short_ns": 60.23,
+       "compile_us": 10.339,
+       "bytes": 2165
+      },
+      {
+       "id": "t0_email",
+       "route": "DFA",
+       "findall_mbps": 722.322,
+       "execat_mbps": 915.318,
+       "iter_mbps": 958.244,
+       "matches": 7167,
+       "exec_matches": 7167,
+       "short_ns": 61.05,
+       "compile_us": 9.439,
+       "bytes": 2165
+      },
+      {
+       "id": "t0_email",
+       "route": "DFA",
+       "findall_mbps": 660.107,
+       "execat_mbps": 899.4,
+       "iter_mbps": 890.051,
+       "matches": 7167,
+       "exec_matches": 7167,
+       "short_ns": 61.52,
+       "compile_us": 9.468,
+       "bytes": 2165
+      },
+      {
+       "id": "t0_email",
+       "route": "DFA",
+       "findall_mbps": 691.386,
+       "execat_mbps": 891.104,
+       "iter_mbps": 902.568,
+       "matches": 7167,
+       "exec_matches": 7167,
+       "short_ns": 61.22,
+       "compile_us": 9.416,
+       "bytes": 2165
+      },
+      {
+       "id": "t0_email",
+       "route": "DFA",
+       "findall_mbps": 719.978,
+       "execat_mbps": 898.8,
+       "iter_mbps": 944.866,
+       "matches": 7167,
+       "exec_matches": 7167,
+       "short_ns": 61.16,
+       "compile_us": 9.302,
+       "bytes": 2165
+      },
+      {
+       "id": "t0_email",
+       "route": "DFA",
+       "findall_mbps": 717.76,
+       "execat_mbps": 939.49,
+       "iter_mbps": 931.925,
+       "matches": 7167,
+       "exec_matches": 7167,
+       "short_ns": 63.56,
+       "compile_us": 9.564,
+       "bytes": 2165
+      },
+      {
+       "id": "t0_email",
+       "route": "DFA",
+       "findall_mbps": 708.454,
+       "execat_mbps": 922.187,
+       "iter_mbps": 943.941,
+       "matches": 7167,
+       "exec_matches": 7167,
+       "short_ns": 57.95,
+       "compile_us": 9.119,
+       "bytes": 2165
+      },
+      {
+       "id": "t0_email",
+       "route": "DFA",
+       "findall_mbps": 726.884,
+       "execat_mbps": 956.822,
+       "iter_mbps": 955.709,
+       "matches": 7167,
+       "exec_matches": 7167,
+       "short_ns": 61.97,
+       "compile_us": 9.199,
+       "bytes": 2165
+      },
+      {
+       "id": "t0_email",
+       "route": "DFA",
+       "findall_mbps": 640.272,
+       "execat_mbps": 913.693,
+       "iter_mbps": 705.266,
+       "matches": 7167,
+       "exec_matches": 7167,
+       "short_ns": 61.94,
+       "compile_us": 9.4,
+       "bytes": 2165
+      },
+      {
+       "id": "t0_email",
+       "route": "DFA",
+       "findall_mbps": 683.407,
+       "execat_mbps": 917.47,
+       "iter_mbps": 916.516,
+       "matches": 7167,
+       "exec_matches": 7167,
+       "short_ns": 64.67,
+       "compile_us": 9.517,
+       "bytes": 2165
+      },
+      {
+       "id": "t0_email",
+       "route": "DFA",
+       "findall_mbps": 717.025,
+       "execat_mbps": 910.912,
+       "iter_mbps": 959.961,
+       "matches": 7167,
+       "exec_matches": 7167,
+       "short_ns": 62.8,
+       "compile_us": 9.4,
+       "bytes": 2165
+      },
+      {
+       "id": "t0_email",
+       "route": "DFA",
+       "findall_mbps": 592.989,
+       "execat_mbps": 931.535,
+       "iter_mbps": 743.119,
+       "matches": 7167,
+       "exec_matches": 7167,
+       "short_ns": 69.63,
+       "compile_us": 9.557,
+       "bytes": 2165
+      },
+      {
+       "id": "t0_email",
+       "route": "DFA",
+       "findall_mbps": 726.388,
+       "execat_mbps": 926.197,
+       "iter_mbps": 932.716,
+       "matches": 7167,
+       "exec_matches": 7167,
+       "short_ns": 63.86,
+       "compile_us": 12.485,
+       "bytes": 2165
+      },
+      {
+       "id": "t0_email",
+       "route": "DFA",
+       "findall_mbps": 729.629,
+       "execat_mbps": 926.991,
+       "iter_mbps": 930.616,
+       "matches": 7167,
+       "exec_matches": 7167,
+       "short_ns": 60.2,
+       "compile_us": 9.671,
+       "bytes": 2165
+      },
+      {
+       "id": "t0_email",
+       "route": "DFA",
+       "findall_mbps": 665.128,
+       "execat_mbps": 930.738,
+       "iter_mbps": 907.102,
+       "matches": 7167,
+       "exec_matches": 7167,
+       "short_ns": 66.9,
+       "compile_us": 9.219,
+       "bytes": 2165
+      },
+      {
+       "id": "t0_email",
+       "route": "DFA",
+       "findall_mbps": 687.872,
+       "execat_mbps": 922.287,
+       "iter_mbps": 915.439,
+       "matches": 7167,
+       "exec_matches": 7167,
+       "short_ns": 62.06,
+       "compile_us": 9.581,
+       "bytes": 2165
+      },
+      {
+       "id": "t0_email",
+       "route": "DFA",
+       "findall_mbps": 707.131,
+       "execat_mbps": 952.902,
+       "iter_mbps": 961.197,
+       "matches": 7167,
+       "exec_matches": 7167,
+       "short_ns": 59.42,
+       "compile_us": 9.141,
+       "bytes": 2165
+      },
+      {
+       "id": "t0_email",
+       "route": "DFA",
+       "findall_mbps": 725.393,
+       "execat_mbps": 927.48,
+       "iter_mbps": 819.401,
+       "matches": 7167,
+       "exec_matches": 7167,
+       "short_ns": 59.11,
+       "compile_us": 9.401,
+       "bytes": 2165
+      },
+      {
+       "id": "t0_email",
+       "route": "DFA",
+       "findall_mbps": 696.474,
+       "execat_mbps": 928.653,
+       "iter_mbps": 961.274,
+       "matches": 7167,
+       "exec_matches": 7167,
+       "short_ns": 59.13,
+       "compile_us": 9.231,
+       "bytes": 2165
+      },
+      {
+       "id": "t0_email",
+       "route": "DFA",
+       "findall_mbps": 714.288,
+       "execat_mbps": 959.259,
+       "iter_mbps": 886.198,
+       "matches": 7167,
+       "exec_matches": 7167,
+       "short_ns": 59.43,
+       "compile_us": 9.378,
+       "bytes": 2165
+      },
+      {
+       "id": "t0_email",
+       "route": "DFA",
+       "findall_mbps": 734.957,
+       "execat_mbps": 958.602,
+       "iter_mbps": 960.875,
+       "matches": 7167,
+       "exec_matches": 7167,
+       "short_ns": 57.57,
+       "compile_us": 9.137,
+       "bytes": 2165
+      },
+      {
+       "id": "t0_email",
+       "route": "DFA",
+       "findall_mbps": 739.777,
+       "execat_mbps": 929.653,
+       "iter_mbps": 961.112,
+       "matches": 7167,
+       "exec_matches": 7167,
+       "short_ns": 57.48,
+       "compile_us": 9.389,
+       "bytes": 2165
+      },
+      {
+       "id": "t0_email",
+       "route": "DFA",
+       "findall_mbps": 716.327,
+       "execat_mbps": 956.908,
+       "iter_mbps": 960.111,
+       "matches": 7167,
+       "exec_matches": 7167,
+       "short_ns": 57.93,
+       "compile_us": 9.231,
+       "bytes": 2165
+      },
+      {
+       "id": "t0_email",
+       "route": "DFA",
+       "findall_mbps": 714.298,
+       "execat_mbps": 917.265,
+       "iter_mbps": 903.746,
+       "matches": 7167,
+       "exec_matches": 7167,
+       "short_ns": 60.14,
+       "compile_us": 9.489,
+       "bytes": 2165
+      }
+     ]
+    },
+    "summary": {
+     "compile_us": {
+      "base": {
+       "best": 10.013,
+       "median": 10.1945,
+       "min": 10.013,
+       "max": 13.473,
+       "n": 30
+      },
+      "current": {
+       "best": 9.119,
+       "median": 9.4085,
+       "min": 9.119,
+       "max": 15.485,
+       "n": 30
+      },
+      "additional_time_percent": {
+       "best": -8.928393088984322,
+       "median": -7.71003972730393
+      }
+     },
+     "execat_mbps": {
+      "base": {
+       "best": 1004.013,
+       "median": 966.5415,
+       "min": 770.533,
+       "max": 1004.013,
+       "n": 30
+      },
+      "current": {
+       "best": 959.259,
+       "median": 926.9314999999999,
+       "min": 717.387,
+       "max": 959.259,
+       "n": 30
+      },
+      "additional_time_percent": {
+       "best": 4.665476164414417,
+       "median": 4.273239176789234
+      }
+     },
+     "iter_mbps": {
+      "base": {
+       "best": 998.784,
+       "median": 964.1035,
+       "min": 739.608,
+       "max": 998.784,
+       "n": 30
+      },
+      "current": {
+       "best": 961.274,
+       "median": 930.943,
+       "min": 705.266,
+       "max": 961.274,
+       "n": 30
+      },
+      "additional_time_percent": {
+       "best": 3.902113237224758,
+       "median": 3.5620333360903977
+      }
+     },
+     "findall_mbps": {
+      "base": {
+       "best": 758.288,
+       "median": 725.856,
+       "min": 647.87,
+       "max": 758.288,
+       "n": 30
+      },
+      "current": {
+       "best": 739.777,
+       "median": 714.293,
+       "min": 592.989,
+       "max": 739.777,
+       "n": 30
+      },
+      "additional_time_percent": {
+       "best": 2.5022405400546344,
+       "median": 1.6188034882044233
+      }
+     },
+     "short_ns": {
+      "base": {
+       "best": 53.81,
+       "median": 56.79,
+       "min": 53.81,
+       "max": 66.44,
+       "n": 30
+      },
+      "current": {
+       "best": 57.48,
+       "median": 61.325,
+       "min": 57.48,
+       "max": 69.63,
+       "n": 30
+      },
+      "additional_time_percent": {
+       "best": 6.82029362572012,
+       "median": 7.985560838175743
+      }
+     }
+    }
+   }
+  }
+ },
+ "preceding_context_probe": {
+  "generated": "2026-10-11T15:44:59.822847+00:00",
+  "cpu_affinity": "0-7 (unrestricted)",
+  "method": "10 alternating process pairs with all cases preceding t1_vset; unchanged original benchmark binaries and corpus; each compile_us sample is the original harness median of 21 compilations",
+  "binary_sha256": {
+   "base": "1a98167533aacca18bc0b83373f3edfe69a7a836d156b97761410ba84607fed5",
+   "current": "9c455d2a604f9d49f52adacdbadd560851338ba599f1b43f892e537376e0fabe"
+  },
+  "cases": {
+   "t1_vset_context": {
+    "samples": {
+     "base": [
+      {
+       "id": "t1_vset",
+       "route": "DFA",
+       "findall_mbps": 35.011,
+       "execat_mbps": 70.059,
+       "iter_mbps": 71.086,
+       "matches": 309431,
+       "exec_matches": 309431,
+       "short_ns": 47.8,
+       "compile_us": 33.233,
+       "bytes": 28250
+      },
+      {
+       "id": "t1_vset",
+       "route": "DFA",
+       "findall_mbps": 34.73,
+       "execat_mbps": 70.112,
+       "iter_mbps": 69.512,
+       "matches": 309431,
+       "exec_matches": 309431,
+       "short_ns": 47.83,
+       "compile_us": 33.351,
+       "bytes": 28250
+      },
+      {
+       "id": "t1_vset",
+       "route": "DFA",
+       "findall_mbps": 35.048,
+       "execat_mbps": 70.997,
+       "iter_mbps": 69.346,
+       "matches": 309431,
+       "exec_matches": 309431,
+       "short_ns": 49.98,
+       "compile_us": 33.235,
+       "bytes": 28250
+      },
+      {
+       "id": "t1_vset",
+       "route": "DFA",
+       "findall_mbps": 32.349,
+       "execat_mbps": 67.44,
+       "iter_mbps": 67.635,
+       "matches": 309431,
+       "exec_matches": 309431,
+       "short_ns": 51.38,
+       "compile_us": 34.558,
+       "bytes": 28250
+      },
+      {
+       "id": "t1_vset",
+       "route": "DFA",
+       "findall_mbps": 31.585,
+       "execat_mbps": 66.007,
+       "iter_mbps": 66.846,
+       "matches": 309431,
+       "exec_matches": 309431,
+       "short_ns": 53.11,
+       "compile_us": 34.423,
+       "bytes": 28250
+      },
+      {
+       "id": "t1_vset",
+       "route": "DFA",
+       "findall_mbps": 33.547,
+       "execat_mbps": 70.762,
+       "iter_mbps": 69.223,
+       "matches": 309431,
+       "exec_matches": 309431,
+       "short_ns": 48.78,
+       "compile_us": 34.046,
+       "bytes": 28250
+      },
+      {
+       "id": "t1_vset",
+       "route": "DFA",
+       "findall_mbps": 33.404,
+       "execat_mbps": 67.502,
+       "iter_mbps": 59.191,
+       "matches": 309431,
+       "exec_matches": 309431,
+       "short_ns": 54.15,
+       "compile_us": 35.202,
+       "bytes": 28250
+      },
+      {
+       "id": "t1_vset",
+       "route": "DFA",
+       "findall_mbps": 33.248,
+       "execat_mbps": 66.916,
+       "iter_mbps": 67.692,
+       "matches": 309431,
+       "exec_matches": 309431,
+       "short_ns": 51.41,
+       "compile_us": 34.071,
+       "bytes": 28250
+      },
+      {
+       "id": "t1_vset",
+       "route": "DFA",
+       "findall_mbps": 33.748,
+       "execat_mbps": 68.018,
+       "iter_mbps": 68.876,
+       "matches": 309431,
+       "exec_matches": 309431,
+       "short_ns": 56.62,
+       "compile_us": 33.919,
+       "bytes": 28250
+      },
+      {
+       "id": "t1_vset",
+       "route": "DFA",
+       "findall_mbps": 34.485,
+       "execat_mbps": 71.061,
+       "iter_mbps": 67.419,
+       "matches": 309431,
+       "exec_matches": 309431,
+       "short_ns": 48.68,
+       "compile_us": 33.37,
+       "bytes": 28250
+      }
+     ],
+     "current": [
+      {
+       "id": "t1_vset",
+       "route": "DFA",
+       "findall_mbps": 34.295,
+       "execat_mbps": 70.579,
+       "iter_mbps": 70.516,
+       "matches": 309431,
+       "exec_matches": 309431,
+       "short_ns": 47.36,
+       "compile_us": 32.173,
+       "bytes": 28250
+      },
+      {
+       "id": "t1_vset",
+       "route": "DFA",
+       "findall_mbps": 34.639,
+       "execat_mbps": 71.228,
+       "iter_mbps": 69.559,
+       "matches": 309431,
+       "exec_matches": 309431,
+       "short_ns": 49.39,
+       "compile_us": 32.455,
+       "bytes": 28250
+      },
+      {
+       "id": "t1_vset",
+       "route": "DFA",
+       "findall_mbps": 35.151,
+       "execat_mbps": 71.038,
+       "iter_mbps": 70.524,
+       "matches": 309431,
+       "exec_matches": 309431,
+       "short_ns": 47.5,
+       "compile_us": 32.848,
+       "bytes": 28250
+      },
+      {
+       "id": "t1_vset",
+       "route": "DFA",
+       "findall_mbps": 33.959,
+       "execat_mbps": 61.31,
+       "iter_mbps": 61.696,
+       "matches": 309431,
+       "exec_matches": 309431,
+       "short_ns": 54.59,
+       "compile_us": 32.384,
+       "bytes": 28250
+      },
+      {
+       "id": "t1_vset",
+       "route": "DFA",
+       "findall_mbps": 30.187,
+       "execat_mbps": 66.257,
+       "iter_mbps": 67.001,
+       "matches": 309431,
+       "exec_matches": 309431,
+       "short_ns": 51.58,
+       "compile_us": 33.154,
+       "bytes": 28250
+      },
+      {
+       "id": "t1_vset",
+       "route": "DFA",
+       "findall_mbps": 35.127,
+       "execat_mbps": 71.166,
+       "iter_mbps": 71.325,
+       "matches": 309431,
+       "exec_matches": 309431,
+       "short_ns": 47.04,
+       "compile_us": 31.46,
+       "bytes": 28250
+      },
+      {
+       "id": "t1_vset",
+       "route": "DFA",
+       "findall_mbps": 32.115,
+       "execat_mbps": 62.293,
+       "iter_mbps": 62.35,
+       "matches": 309431,
+       "exec_matches": 309431,
+       "short_ns": 51.62,
+       "compile_us": 32.415,
+       "bytes": 28250
+      },
+      {
+       "id": "t1_vset",
+       "route": "DFA",
+       "findall_mbps": 36.114,
+       "execat_mbps": 71.708,
+       "iter_mbps": 66.789,
+       "matches": 309431,
+       "exec_matches": 309431,
+       "short_ns": 52.16,
+       "compile_us": 33.203,
+       "bytes": 28250
+      },
+      {
+       "id": "t1_vset",
+       "route": "DFA",
+       "findall_mbps": 32.038,
+       "execat_mbps": 68.833,
+       "iter_mbps": 69.486,
+       "matches": 309431,
+       "exec_matches": 309431,
+       "short_ns": 49.09,
+       "compile_us": 54.321,
+       "bytes": 28250
+      },
+      {
+       "id": "t1_vset",
+       "route": "DFA",
+       "findall_mbps": 33.291,
+       "execat_mbps": 67.427,
+       "iter_mbps": 67.077,
+       "matches": 309431,
+       "exec_matches": 309431,
+       "short_ns": 50.39,
+       "compile_us": 32.315,
+       "bytes": 28250
+      }
+     ]
+    },
+    "summary": {
+     "compile_us": {
+      "base": {
+       "best": 33.233,
+       "median": 33.9825,
+       "min": 33.233,
+       "max": 35.202,
+       "n": 10
+      },
+      "current": {
+       "best": 31.46,
+       "median": 32.435,
+       "min": 31.46,
+       "max": 54.321,
+       "n": 10
+      },
+      "additional_time_percent": {
+       "best": -5.335058526163738,
+       "median": -4.553814463326711
+      }
+     },
+     "execat_mbps": {
+      "base": {
+       "best": 71.061,
+       "median": 69.0385,
+       "min": 66.007,
+       "max": 71.061,
+       "n": 10
+      },
+      "current": {
+       "best": 71.708,
+       "median": 69.70599999999999,
+       "min": 61.31,
+       "max": 71.708,
+       "n": 10
+      },
+      "additional_time_percent": {
+       "best": -0.9022703185139647,
+       "median": -0.9575933205175913
+      }
+     },
+     "iter_mbps": {
+      "base": {
+       "best": 71.086,
+       "median": 68.28399999999999,
+       "min": 59.191,
+       "max": 71.086,
+       "n": 10
+      },
+      "current": {
+       "best": 71.325,
+       "median": 68.2815,
+       "min": 61.696,
+       "max": 71.325,
+       "n": 10
+      },
+      "additional_time_percent": {
+       "best": -0.3350858745180596,
+       "median": 0.0036613138258534406
+      }
+     },
+     "findall_mbps": {
+      "base": {
+       "best": 35.048,
+       "median": 33.647499999999994,
+       "min": 31.585,
+       "max": 35.048,
+       "n": 10
+      },
+      "current": {
+       "best": 36.114,
+       "median": 34.127,
+       "min": 30.187,
+       "max": 36.114,
+       "n": 10
+      },
+      "additional_time_percent": {
+       "best": -2.9517638588912765,
+       "median": -1.4050458581182257
+      }
+     },
+     "short_ns": {
+      "base": {
+       "best": 47.8,
+       "median": 50.68,
+       "min": 47.8,
+       "max": 56.62,
+       "n": 10
+      },
+      "current": {
+       "best": 47.04,
+       "median": 49.89,
+       "min": 47.04,
+       "max": 54.59,
+       "n": 10
+      },
+      "additional_time_percent": {
+       "best": -1.5899581589958078,
+       "median": -1.5588003157063879
+      }
+     }
+    }
+   }
+  }
+ },
+ "limitations": "The full-run compile signal remains context-sensitive and unexplained. Filtered probes change the parsed cases document. Failure to reproduce is not proof of universal performance parity."
+}

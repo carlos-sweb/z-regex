@@ -667,7 +667,7 @@ pub const Lexer = struct {
     /// shapes (`(?-:`, `(?ii:`, `(?x:`, `(?i)`) are left to the parser's
     /// SyntaxError.
     fn isModifiersGroup(self: *const Self, at: usize) bool {
-        var seen = [_]bool{false} ** 3;
+        var seen: [3]bool = @splat(false);
         var flags: usize = 0;
         var dash = false;
         var i = at;

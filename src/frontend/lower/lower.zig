@@ -483,7 +483,7 @@ const Lowerer = struct {
             .class_set_op => {
                 const operands = n.children.items;
                 if (operands.len < 2) return error.InvalidPattern;
-                const op: ast.ClassSetOp = @enumFromInt(n.char_value);
+                const op: ast.ClassSetOp = @fromBackingInt(@intCast(n.char_value));
                 var acc = try self.classStringsOperand(operands[0]);
                 for (operands[1..]) |operand| {
                     const right = try self.classStringsOperand(operand);
@@ -507,7 +507,7 @@ const Lowerer = struct {
                 return acc;
             },
             .string_property => {
-                const prop: properties.StringProperty = @enumFromInt(n.char_value);
+                const prop: properties.StringProperty = @fromBackingInt(@intCast(n.char_value));
                 // Without `-Dproperties_of_strings` only Emoji_Keycap_Sequence
                 // parses, and only its table is referenced (so linked).
                 const segments = if (build_options.properties_of_strings) properties.stringPropertySegments(prop) else blk: {
@@ -815,7 +815,7 @@ const Lowerer = struct {
     /// What the `u` closure adds to a `\p{...}` node's property (F5b).
     fn propertyDelta(n: *const AstNode) []const properties.CodepointRange {
         return switch (n.type) {
-            .unicode_property => properties.propertyFoldDelta(@enumFromInt(n.char_value)),
+            .unicode_property => properties.propertyFoldDelta(@fromBackingInt(@intCast(n.char_value))),
             .unicode_script => properties.scriptFoldDelta(@intCast(n.char_value)),
             .unicode_script_extensions => properties.scriptExtensionsFoldDelta(@intCast(n.char_value)),
             else => &.{},
@@ -878,7 +878,7 @@ const Lowerer = struct {
     /// its negation.
     fn propertyTable(self: *Lowerer, n: *const AstNode) LowerError!CharSet {
         const table = switch (n.type) {
-            .unicode_property => properties.propertyRanges(@enumFromInt(n.char_value)),
+            .unicode_property => properties.propertyRanges(@fromBackingInt(@intCast(n.char_value))),
             .unicode_script => properties.scriptRanges(@intCast(n.char_value)),
             .unicode_script_extensions => properties.scriptExtensionsRanges(@intCast(n.char_value)),
             else => return error.InvalidPattern,
@@ -923,7 +923,7 @@ const Lowerer = struct {
     fn classSetOpMembers(self: *Lowerer, n: *const AstNode) LowerError!CharSet {
         const operands = n.children.items;
         if (operands.len < 2) return error.InvalidPattern;
-        const op: ast.ClassSetOp = @enumFromInt(n.char_value);
+        const op: ast.ClassSetOp = @fromBackingInt(@intCast(n.char_value));
         var acc = try self.classSetOperand(operands[0]);
         for (operands[1..]) |operand| {
             const right = try self.classSetOperand(operand);

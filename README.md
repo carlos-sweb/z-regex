@@ -2,9 +2,9 @@
 
 An ECMA-262 regular expression engine in Zig, independent of the JavaScript engine that uses it.
 
-[![Zig 0.16+](https://img.shields.io/badge/zig-0.16%2B-orange)](https://ziglang.org/)
+[![Zig 0.17+](https://img.shields.io/badge/zig-0.17%2B-orange)](https://ziglang.org/)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
-[![test262](https://img.shields.io/badge/test262-3305%2F3328%20run%2C%20510%20skipped-blue)](#compatibility)
+[![test262](https://img.shields.io/badge/test262-3383%2F3406%20run%2C%20432%20skipped-blue)](#compatibility)
 [![T0](https://img.shields.io/badge/T0-complete-green)](docs/REGEX_TIERS_PLAN.md)
 
 ## What it is
@@ -36,8 +36,8 @@ An ECMA-262 regular expression engine in Zig, independent of the JavaScript engi
   Lookbehind: fixed length without captures (F6b step 1), and outside `u`/`v` any other
   without a lookaround inside, captures and backreferences included (F6b(1)-(3)); the rest
   is `error.UnsupportedFeature`.
-- **test262: 3305 of the 3328 entries that run (99.3%); 510 are skipped**, most of them
-  features zregex doesn't implement (`v`, RegExp modifiers): see Compatibility.
+- **test262: 3383 of the 3406 entries that run (99.3%); 432 are skipped**, most of them
+  RegExp modifiers and host-only cases: see Compatibility.
 - **Divergences from V8** in the differential: 0 different results; 2 patterns hit the step
   limit (T2).
 
@@ -65,10 +65,10 @@ same whichever runs it.
 
 ## Quick start
 
-With Zig 0.16. Add the dependency (this writes the hash into `build.zig.zon`):
+With Zig 0.17. Add the dependency (this writes the hash into `build.zig.zon`):
 
 ```sh
-zig fetch --save https://github.com/carlos-sweb/z-regex/archive/refs/tags/v0.9.0.tar.gz
+zig fetch --save https://github.com/carlos-sweb/z-regex/archive/refs/tags/v0.9.1.tar.gz
 ```
 
 In `build.zig`:
@@ -85,7 +85,7 @@ const std = @import("std");
 const zregex = @import("zregex");
 
 pub fn main() !void {
-    var gpa = std.heap.DebugAllocator(.{}){};
+    var gpa = std.heap.DebugAllocator(.{}).init;
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
 
@@ -109,7 +109,7 @@ const std = @import("std");
 const zregex = @import("zregex");
 
 pub fn main() !void {
-    var gpa = std.heap.DebugAllocator(.{}){};
+    var gpa = std.heap.DebugAllocator(.{}).init;
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
 
@@ -151,7 +151,7 @@ const std = @import("std");
 const zregex = @import("zregex");
 
 pub fn main() !void {
-    var gpa = std.heap.DebugAllocator(.{}){};
+    var gpa = std.heap.DebugAllocator(.{}).init;
     defer _ = gpa.deinit();
     const allocator = gpa.allocator();
 
@@ -185,7 +185,7 @@ const limits: zregex.ExecLimits = .{ .max_steps = 100_000, .max_backtrack_stack_
 const found = try re.execAt(.{ .wtf8 = "say\nHELLO" }, 0, &scratch, &out, limits);
 ```
 
-These examples are compiled and run against the library (`zig build`, Zig 0.16).
+These examples are compiled and run against the library (`zig build`, Zig 0.17).
 
 ## API stability
 
@@ -208,21 +208,24 @@ against V8, Rust regex, PCRE2, zig-regex and zoptia0regex.
 
 ## Compatibility
 
-- **test262: 3305 of the 3328 entries that run (99.3%)**, the same status with UTF-16 and
+- **test262: 3383 of the 3406 entries that run (99.3%)**, the same status with UTF-16 and
   WTF-8 subjects. Baseline: `scripts/test262/baseline.json`. The 23 that run and don't pass:
   4 lookbehind entries that are `UnsupportedFeature` (2 with a lookaround inside a backward
   lookbehind, `nested-lookaround`, a 1.x decision; 2 under `u`, `named-groups/lookbehind`),
   4 host (JS lexer) and 15 not extractable.
-- **510 test262 entries are skipped** and are not in 3305/3328:
+- **432 test262 entries are skipped** and are not in 3383/3406:
 
   | Skipped | Entries | Why |
   |---|---|---|
   | `v` flag | 1 | The 311 entries that pass run (`scripts/test262/v-subset.json`); the other is the host's |
-  | RegExp modifiers (ES2025) | 377 | Not implemented, pending until further notice; the harness's Node (22) lacks them too |
-  | Duplicate named groups | 24 | Implemented; the harness's Node lacks them. With Node 24 every `named-groups` entry passes except the variable-length lookbehind one |
-  | `RegExp.escape` | 40 | A built-in function of ECMA-262 (ES2025), not pattern syntax: its tests exercise the host's `RegExp.escape`, not matching. zregex has no `escape` helper (1.x) |
+  | RegExp modifiers (ES2025) | 377 | Not implemented, pending until further notice; the harness excludes this unsupported engine feature |
   | Legacy RegExp (Annex B statics) | 52 | Host |
-  | Fail in V8 itself / host flag validation | 16 | Host |
+  | Fail in V8 itself / host flag validation | 2 | Host |
+
+  Node 26 enables 78 additional passing entries compared with the Node 22 baseline
+  (including duplicate named groups and host `RegExp.escape` tests). Both v0.9.0
+  built with Zig 0.16 and v0.9.1 built with Zig 0.17 produce the same statuses;
+  this is a harness coverage change, not a matching capability change.
 - **`differential-v8`** against `tests/differential/reference/diff-F7a.json`: 0 new, 0 gone,
   0 changed. It has no different result; 2 T2 patterns hit the step limit.
 - **Internal differential** (every capture slot, V8 as the arbiter where the executors
@@ -249,6 +252,11 @@ zig build test             # unit and integration tests (also -Doptimize=Release
 zig build check-layers     # module layering: lint, forced analysis, canaries
 zig build bench            # performance baseline (ReleaseFast)
 ```
+
+The Zig 0.16 → 0.17 migration has three documented performance gaps;
+no experimental performance workaround is retained. See
+[Zig 0.17 upgrade gaps](docs/ZIG_0.17_UPGRADE_GAPS.md) for the investigations
+and the remaining performance gaps. The v0.9.1 benchmark includes the Zig 0.16 baseline.
 
 test262 needs Node and the harness's dependencies:
 
@@ -316,6 +324,10 @@ measurements: [docs/HISTORY.md](docs/HISTORY.md). How the engine works:
   invalid class set syntax rejected, bare operands, chained operators, nested unions,
   `\q{…}` strings and the seven properties of strings; `v` patterns run on T0's VMs and DFA;
   test262 3305/3328; API unchanged ([release notes](docs/RELEASE_NOTES_v0.9.0.md)).
+- **v0.9.1: migrate Zig 0.16 to 0.17.** Zig 0.17 is the minimum compiler;
+  the public API and C ABI remain unchanged. Three performance gaps are documented,
+  with no experimental workaround retained. Benchmarks were rerun against v0.9.0
+  and all competitors ([release notes](docs/RELEASE_NOTES_v0.9.1.md)).
 - **To 1.0** ([docs/plans/ROADMAP_1.0.md](docs/plans/ROADMAP_1.0.md)): E0 (v0.5.1) → E1, full
   F6b (v0.6.0) → F7c: API freeze and documentation (v0.7.0, done) → T0 throughput
   (v0.7.1, done) → a DFA for T0 ([docs/plans/T0-A.md](docs/plans/T0-A.md)) and the full
@@ -332,6 +344,7 @@ measurements: [docs/HISTORY.md](docs/HISTORY.md). How the engine works:
   backward lookbehind under `u`/`v`.
 
 No dates. Phases and exit criteria: [docs/REGEX_TIERS_PLAN.md](docs/REGEX_TIERS_PLAN.md).
+
 
 ## Contributing
 

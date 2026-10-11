@@ -224,7 +224,7 @@ pub const Node = struct {
         node.* = .{
             .type = .class_set_op,
             .allocator = allocator,
-            .char_value = @intFromEnum(op),
+            .char_value = @backingInt(op),
             .inverted = negated,
         };
         return node;

@@ -128,7 +128,7 @@ const subjects_utf8 = [_][]const u8{ "", "a", "ab", "ba", "aab", "abab", "bb a",
 const subjects_units = [_][]const u16{ &.{ 0xD83D, 'a' }, &.{ 'a', 0xDE00 }, &.{ 0xDE00, 0xD83D } };
 
 const Counts = struct {
-    pairs: [3][@typeInfo(Out).@"enum".fields.len]u64 = .{.{0} ** @typeInfo(Out).@"enum".fields.len} ** 3,
+    pairs: [3][@typeInfo(Out).@"enum".field_values.len]u64 = @splat(@splat(0)),
     runs: u64 = 0,
     step_limit: u64 = 0,
     /// How often the oracle said the lookbehind holds / doesn't.
@@ -175,14 +175,14 @@ pub fn main(init: std.process.Init) !void {
     for (flag_sets, 0..) |f, i| try w.print("{s}{s}", .{ if (i > 0) " " else "", if (f.text.len == 0) "\"\"" else f.text });
     try w.print("); counts are (body, flags) pairs\n", .{});
     try w.print("| Source | pairs | invalid | anchor | word_boundary | backreference | lookahead | lookbehind | B' (variable length or captures) | compared |\n|---|---|---|---|---|---|---|---|---|---|\n", .{});
-    var total = [_]u64{0} ** @typeInfo(Out).@"enum".fields.len;
+    var total: [@typeInfo(Out).@"enum".field_values.len]u64 = @splat(0);
     for (counts.pairs, 0..) |row, s| {
         var sum: u64 = 0;
         for (row, 0..) |n, i| {
             sum += n;
             total[i] += n;
         }
-        try w.print("| {s} | {d}", .{ @tagName(@as(Source, @enumFromInt(s))), sum });
+        try w.print("| {s} | {d}", .{ @tagName(@as(Source, @fromBackingInt(@intCast(s)))), sum });
         for (row) |n| try w.print(" | {d}", .{n});
         try w.print(" |\n", .{});
     }
@@ -223,7 +223,7 @@ fn genAlt(gpa: std.mem.Allocator, rnd: std.Random, b: *std.ArrayListUnmanaged(u8
 fn checkBody(gpa: std.mem.Allocator, scratch: *zregex.Scratch, body: []const u8, source: Source, counts: *Counts, w: *std.Io.Writer) !void {
     for (flag_sets) |f| {
         const out = try classify(gpa, scratch, body, f, counts, w);
-        counts.pairs[@intFromEnum(source)][@intFromEnum(out)] += 1;
+        counts.pairs[@backingInt(source)][@backingInt(out)] += 1;
     }
 }
 

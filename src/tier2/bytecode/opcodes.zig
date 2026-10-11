@@ -323,12 +323,12 @@ pub const Opcode = enum(u8) {
 
     /// Whether this is a backward atom (`*_B`).
     pub inline fn isBackward(self: Opcode) bool {
-        return @intFromEnum(self) >= 0x80;
+        return @backingInt(self) >= 0x80;
     }
 
     /// The forward atom of a backward one.
     pub inline fn forward(self: Opcode) Opcode {
-        return @enumFromInt(@intFromEnum(self) & 0x7F);
+        return @fromBackingInt(@intCast(@backingInt(self) & 0x7F));
     }
 
     /// Get the category of this opcode
@@ -490,14 +490,14 @@ pub fn getOpcodeInfo(opcode: Opcode) OpcodeInfo {
 // =============================================================================
 
 test "Opcode: values match expected" {
-    try std.testing.expectEqual(@as(u8, 0x00), @intFromEnum(Opcode.CHAR));
-    try std.testing.expectEqual(@as(u8, 0x10), @intFromEnum(Opcode.MATCH));
-    try std.testing.expectEqual(@as(u8, 0x20), @intFromEnum(Opcode.SAVE_START));
-    try std.testing.expectEqual(@as(u8, 0x30), @intFromEnum(Opcode.BACK_REF));
-    try std.testing.expectEqual(@as(u8, 0x40), @intFromEnum(Opcode.LINE_START));
-    try std.testing.expectEqual(@as(u8, 0x50), @intFromEnum(Opcode.LOOKAHEAD));
-    try std.testing.expectEqual(@as(u8, 0x08), @intFromEnum(Opcode.CHAR_SET));
-    try std.testing.expectEqual(@as(u8, 0x09), @intFromEnum(Opcode.CHAR_SET_INV));
+    try std.testing.expectEqual(@as(u8, 0x00), @backingInt(Opcode.CHAR));
+    try std.testing.expectEqual(@as(u8, 0x10), @backingInt(Opcode.MATCH));
+    try std.testing.expectEqual(@as(u8, 0x20), @backingInt(Opcode.SAVE_START));
+    try std.testing.expectEqual(@as(u8, 0x30), @backingInt(Opcode.BACK_REF));
+    try std.testing.expectEqual(@as(u8, 0x40), @backingInt(Opcode.LINE_START));
+    try std.testing.expectEqual(@as(u8, 0x50), @backingInt(Opcode.LOOKAHEAD));
+    try std.testing.expectEqual(@as(u8, 0x08), @backingInt(Opcode.CHAR_SET));
+    try std.testing.expectEqual(@as(u8, 0x09), @backingInt(Opcode.CHAR_SET_INV));
 }
 
 test "Opcode: CHAR_SET is opcode + u32 index" {

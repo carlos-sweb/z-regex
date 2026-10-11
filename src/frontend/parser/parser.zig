@@ -747,12 +747,12 @@ pub const Parser = struct {
             if (self.lexer.v_mode and !negated) {
                 if (properties.resolveStringProperty(name)) |prop| {
                     if (!build_options.properties_of_strings and prop != .Emoji_Keycap_Sequence) return error.UnsupportedFeature;
-                    return Node.createStringProperty(self.allocator, @intFromEnum(prop));
+                    return Node.createStringProperty(self.allocator, @backingInt(prop));
                 }
             }
             return error.UnknownUnicodeProperty;
         };
-        return Node.createUnicodeProperty(self.allocator, @intFromEnum(category), negated);
+        return Node.createUnicodeProperty(self.allocator, @backingInt(category), negated);
     }
 
     /// Parse character class: '[' '^'? charclass_item+ ']'
@@ -802,7 +802,7 @@ pub const Parser = struct {
             .char_class => for (n.children.items) |child| {
                 if (mayContainStrings(child)) break true;
             } else false,
-            .class_set_op => switch (@as(ast_mod.ClassSetOp, @enumFromInt(n.char_value))) {
+            .class_set_op => switch (@as(ast_mod.ClassSetOp, @fromBackingInt(@intCast(n.char_value)))) {
                 .difference => mayContainStrings(n.children.items[0]),
                 .intersection => for (n.children.items) |child| {
                     if (!mayContainStrings(child)) break false;

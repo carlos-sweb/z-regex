@@ -211,7 +211,7 @@ test "force_tier .regular: the three reasons it can't be honored" {
     // program over the slot bound (1,200 groups: ~3,600 instructions x
     // 2,402 slots > 2^20).
     try expectUnavailable("\xE9", .{}, .{ .not_eligible = .raw_byte });
-    const many = try std.mem.concat(testing.allocator, u8, &(.{"(a)"} ** 1200));
+    const many = try std.mem.concat(testing.allocator, u8, &@as([1200][]const u8, @splat("(a)")));
     defer testing.allocator.free(many);
     try expectUnavailable(many, .{}, .{ .not_eligible = .too_large });
     // Groups and nullable loops compile onto the VM since F4b.

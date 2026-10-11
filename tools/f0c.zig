@@ -23,11 +23,11 @@ pub fn main(init: std.process.Init) !void {
     const data = try std.Io.Dir.cwd().readFileAlloc(init.io, path, gpa, .limited(256 << 20));
     defer gpa.free(data);
 
-    var unique = [_]u64{0} ** 5;
-    var by_occ = [_]u64{0} ** 5;
-    var by_pkg = [_]u64{0} ** 5;
+    var unique: [5]u64 = @splat(0);
+    var by_occ: [5]u64 = @splat(0);
+    var by_pkg: [5]u64 = @splat(0);
     var moved = [_]u64{ 0, 0 }; // tier differs with budget 500 / 5000
-    var reasons = [_]u64{0} ** @typeInfo(analysis.Feature).@"enum".fields.len; // features at the top tier, T1/T2 patterns
+    var reasons: [@typeInfo(analysis.Feature).@"enum".field_values.len]u64 = @splat(0); // features at the top tier, T1/T2 patterns
     // T1 only because of `i` over non-ASCII content, while the pattern text is
     // ASCII without \u, \x80-\xff or \p: the content came from a class
     // like \s, \S, \W or [^...] (members up to U+10FFFF).
@@ -50,7 +50,7 @@ pub fn main(init: std.process.Init) !void {
             const tier = a.min_tier orelse break :blk .unclassifiable;
             if (tier != .regular) {
                 var it = a.reasons().iterator();
-                while (it.next()) |f| reasons[@intFromEnum(f)] += 1;
+                while (it.next()) |f| reasons[@backingInt(f)] += 1;
                 const r = a.reasons();
                 if (tier == .unicode and r.count() == 1 and r.contains(.ignore_case_unicode) and asciiText(pattern)) {
                     i_via_classes[0] += 1;
@@ -68,7 +68,7 @@ pub fn main(init: std.process.Init) !void {
                 .expert => .expert,
             };
         };
-        const i = @intFromEnum(class);
+        const i = @backingInt(class);
         unique[i] += 1;
         by_occ[i] += occ;
         by_pkg[i] += pkgs;
@@ -96,7 +96,7 @@ pub fn main(init: std.process.Init) !void {
     try w.print("UNROLL_BUDGET sensitivity (unique regexes whose tier changes): 500 -> {d}, 5000 -> {d}\n", .{ moved[0], moved[1] });
     try w.print("T1 only by `i` over class content, ASCII pattern text: unique {d}, occurrences {d}, packages {d}\n", .{ i_via_classes[0], i_via_classes[1], i_via_classes[2] });
     try w.print("\nFeatures behind T1/T2 (unique regexes):\n", .{});
-    for (reasons, 0..) |n, i| if (n > 0) try w.print("  {s}: {d}\n", .{ @tagName(@as(analysis.Feature, @enumFromInt(i))), n });
+    for (reasons, 0..) |n, i| if (n > 0) try w.print("  {s}: {d}\n", .{ @tagName(@as(analysis.Feature, @fromBackingInt(@intCast(i)))), n });
     try std.Io.File.stdout().writeStreamingAll(init.io, out.written());
 }
 

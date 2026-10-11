@@ -6,7 +6,7 @@
 #
 #   scripts/gate.sh [OUTDIR]
 #
-# Needs Zig 0.16, Node (scripts/test262: `npm ci`, and the test262 checkout
+# Needs Zig 0.17, Node (scripts/test262: `npm ci`, and the test262 checkout
 # of scripts/test262/fetch.sh in .test262/), python3 and GNU coreutils.
 # Zig's cache is emptied after each group of steps: it grows by gigabytes
 # over a gate.

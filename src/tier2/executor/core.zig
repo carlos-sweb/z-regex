@@ -270,7 +270,7 @@ pub fn CoreFor(comptime Unit: type) type {
                 .bytecode = bytecode,
                 .input = input,
                 .capture_slots = capture_slots,
-                .inline_captures = [_]CaptureGroup{.{}} ** INLINE_CAPTURES,
+                .inline_captures = @splat(CaptureGroup{}),
                 .heap_captures = &.{},
                 .loop_guard = scratch.loop_guard,
                 .positions = scratch.positions,
@@ -421,7 +421,7 @@ pub fn CoreFor(comptime Unit: type) type {
             if (pos >= self.input.len) return .{ .matched = false, .end_pos = pos };
             if (pc + 2 > self.bytecode.len) return error.UnexpectedEndOfBytecode;
 
-            const category: properties.UnicodeProperty = @enumFromInt(self.bytecode[pc + 1]);
+            const category: properties.UnicodeProperty = @fromBackingInt(@intCast(self.bytecode[pc + 1]));
             const decoded = self.decodeAt(pos) orelse return .{ .matched = false, .end_pos = pos };
             const in_category = properties.isInCategory(decoded.value, category);
 
@@ -623,7 +623,7 @@ pub fn CoreFor(comptime Unit: type) type {
                 },
                 .UNICODE_PROPERTY, .UNICODE_PROPERTY_INV => blk: {
                     if (pc + 2 > self.bytecode.len) return error.UnexpectedEndOfBytecode;
-                    const in_category = properties.isInCategory(d.value, @enumFromInt(self.bytecode[pc + 1]));
+                    const in_category = properties.isInCategory(d.value, @fromBackingInt(@intCast(self.bytecode[pc + 1])));
                     break :blk if (f.opcode == .UNICODE_PROPERTY_INV) !in_category else in_category;
                 },
                 .UNICODE_SCRIPT, .UNICODE_SCRIPT_INV => blk: {

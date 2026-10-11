@@ -124,9 +124,11 @@ test "regression: a non-ASCII literal doesn't match a lone byte of its value (F3
 // (found by checkAllAllocationFailures on analyze). Same check on the full
 // compile path, over the constructors that append a child.
 test "regression: compile doesn't leak on any allocation failure (F0a)" {
+    // Disable backing-allocator resizing so failure indices remain deterministic.
+    var backing = testing.FailingAllocator.init(testing.allocator, .{ .resize_fail_index = 0 });
     const patterns = [_][]const u8{ "(a)b", "(?:ab)*c", "a{2,3}?", "a|b|c", "(?=a)b", "(?<!x)y", "(?<n>a)\\k<n>" };
     for (patterns) |p| {
-        try testing.checkAllAllocationFailures(testing.allocator, struct {
+        try testing.checkAllAllocationFailures(backing.allocator(), struct {
             fn run(gpa: std.mem.Allocator, pattern: []const u8) !void {
                 var re = try zregex.Regex.compile(gpa, pattern);
                 re.deinit();
@@ -259,18 +261,18 @@ test "regression: Phase 6 bugs on the backtracker (F6a)" {
 // crashed on a small stack). V8's answers.
 test "regression: long non-simple loops on the backtracker (F6a)" {
     const a = testing.allocator;
-    const xs = try std.mem.concat(a, u8, &.{ "x", "ab" ** 5000, "x" });
+    const xs = try std.mem.concat(a, u8, &.{ "x", &@as([10000]u8, @bitCast(@as([5000][2]u8, @splat("ab".*)))), "x" });
     defer a.free(xs);
     try expectExpert("(x)(?:ab)*\\1", false, xs, &.{ 0, 10002, 0, 1 });
-    try expectExpert("(?:(a)|b)*\\1", false, "b" ** 2000, &.{ 0, 2000, null, null });
+    try expectExpert("(?:(a)|b)*\\1", false, &@as([2000]u8, @splat('b')), &.{ 0, 2000, null, null });
 }
 
 test "regression: the backtracker's limits are errors, not crashes (F6a)" {
     // One choicepoint (and one loop guard) per iteration of `(?:ab)*`.
-    try testing.expectError(error.BacktrackStackExhausted, expectExpertLimits("(x)(?:ab)*\\1", false, "x" ++ "ab" ** 100 ++ "x", null, .{ .max_backtrack_stack_bytes = 1024 }));
-    try expectExpertLimits("(x)(?:ab)*\\1", false, "x" ++ "ab" ** 100 ++ "x", &.{ 0, 202, 0, 1 }, .{ .max_backtrack_stack_bytes = 64 << 10 });
-    try testing.expectError(error.StepLimitExceeded, expectExpertLimits("(a+)+b", false, "a" ** 41, null, .{}));
-    try testing.expectError(error.StepLimitExceeded, expectExpertLimits("(a|aa)*c", false, "a" ** 41, null, .{}));
+    try testing.expectError(error.BacktrackStackExhausted, expectExpertLimits("(x)(?:ab)*\\1", false, "x" ++ @as([200]u8, @bitCast(@as([100][2]u8, @splat("ab".*)))) ++ "x", null, .{ .max_backtrack_stack_bytes = 1024 }));
+    try expectExpertLimits("(x)(?:ab)*\\1", false, "x" ++ @as([200]u8, @bitCast(@as([100][2]u8, @splat("ab".*)))) ++ "x", &.{ 0, 202, 0, 1 }, .{ .max_backtrack_stack_bytes = 64 << 10 });
+    try testing.expectError(error.StepLimitExceeded, expectExpertLimits("(a+)+b", false, &@as([41]u8, @splat('a')), null, .{}));
+    try testing.expectError(error.StepLimitExceeded, expectExpertLimits("(a|aa)*c", false, &@as([41]u8, @splat('a')), null, .{}));
     // 0 lifts each limit.
     try expectExpertLimits("()\\1{1000}", false, "", &.{ 0, 0, 0, 0 }, .{ .max_backtrack_stack_bytes = 0 });
 }
@@ -357,10 +359,10 @@ fn expectNames(comptime names: []const []const u8, comptime actual: anytype) !vo
     try testing.expectEqual(names.len, actual.len);
     inline for (actual) |a| {
         const found = inline for (names) |n| {
-            if (comptime std.mem.eql(u8, n, a.name)) break true;
+            if (comptime std.mem.eql(u8, n, a)) break true;
         } else false;
         if (!found) {
-            std.debug.print("not in the contract: {s}\n", .{a.name});
+            std.debug.print("not in the contract: {s}\n", .{a});
             return error.TestUnexpectedResult;
         }
     }
@@ -371,7 +373,7 @@ test "F7c-4: the stable root is exactly the 19 declarations of docs/API.md" {
         "version", "Regex",      "CompileOptions", "RegexError", "MatchResult", "CaptureIndices", "Subject",
         "Scratch", "MatchSlots", "MatchIterator",  "ExecLimits", "ExecError",   "test_",          "find",
         "findAll", "replace",    "replaceAll",     "unicode",    "internal",
-    }, @typeInfo(zregex).@"struct".decls);
+    }, @typeInfo(zregex).@"struct".decl_names);
 }
 
 test "F7c-4b: mixed operators and non-atom operands in a v class are a SyntaxError" {
@@ -532,11 +534,11 @@ test "F7c-4: RegexError and ExecError are the error sets of docs/API.md" {
         "UnsupportedNode",         "TooManyGroups",     "UnknownOpcode",          "PatternTooLarge",
         "UnexpectedEndOfBytecode", "UnresolvedLabels",  "RecursionLimitExceeded", "StepLimitExceeded",
         "BacktrackStackExhausted", "InvalidCharSet",    "IncompatibleFlags",
-    }, @typeInfo(zregex.RegexError).error_set.?);
+    }, @typeInfo(zregex.RegexError).error_set.error_names.?);
     try expectNames(&.{
         "OutOfMemory",             "UnknownOpcode",  "UnexpectedEndOfBytecode", "StepLimitExceeded",
         "BacktrackStackExhausted", "InvalidCharSet", "InvalidIndex",            "SlotsTooSmall",
-    }, @typeInfo(zregex.ExecError).error_set.?);
+    }, @typeInfo(zregex.ExecError).error_set.error_names.?);
 }
 
 // F7c-3: the root of the module is the stable API; the engine's pieces are
@@ -820,7 +822,7 @@ test "LookLinear: the memo answers repeated positions, and off gives the same" {
 }
 
 test "LookLinear: the step budget covers the VM too" {
-    const long = "a" ** 2000;
+    const long = &@as([2000]u8, @splat('a'));
     try testing.expectError(error.StepLimitExceeded, lookRun("(?=a+b)", long, true, .{ .max_steps = 500 }));
     try testing.expectError(error.StepLimitExceeded, lookRun("(?=a+b)", long, false, .{ .max_steps = 500 }));
     const r = try lookRun("(?=a+b)", long, true, .{});
@@ -1428,9 +1430,9 @@ test "F5c 2a/2b: \\q{...} strings and Emoji_Keycap_Sequence under v" {
         try buf.appendSlice(testing.allocator, "}]$");
         var re = try zregex.Regex.compileWithOptions(testing.allocator, buf.items, v);
         defer re.deinit();
-        try testing.expect(try re.matchFull("a" ** 300));
-        try testing.expect(try re.matchFull("a" ** 150));
-        try testing.expect(!try re.matchFull("a" ** 301));
+        try testing.expect(try re.matchFull(&@as([300]u8, @splat('a'))));
+        try testing.expect(try re.matchFull(&@as([150]u8, @splat('a'))));
+        try testing.expect(!try re.matchFull(&@as([301]u8, @splat('a'))));
     }
 }
 

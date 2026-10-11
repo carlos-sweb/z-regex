@@ -23,7 +23,7 @@ pub const Instruction = struct {
     opcode: Opcode,
 
     /// Instruction operands (max 2 for current opcodes)
-    operands: [2]u32 = [_]u32{0} ** 2,
+    operands: [2]u32 = @splat(0),
 
     /// Number of valid operands
     operand_count: u8 = 0,
@@ -65,7 +65,7 @@ pub fn decodeInstruction(bytecode: []const u8, offset: usize) !Instruction {
     if (offset >= bytecode.len) return error.UnexpectedEndOfBytecode;
 
     const opcode_byte = bytecode[offset];
-    const opcode = @as(Opcode, @enumFromInt(opcode_byte));
+    const opcode = @as(Opcode, @fromBackingInt(@intCast(opcode_byte)));
     const inst_size = opcode.size();
 
     if (offset + inst_size > bytecode.len) return error.UnexpectedEndOfBytecode;
@@ -142,7 +142,7 @@ pub fn decodeInstruction(bytecode: []const u8, offset: usize) !Instruction {
 pub fn encodeInstruction(inst: Instruction, buffer: []u8) !usize {
     if (buffer.len < inst.size) return error.BufferTooSmall;
 
-    buffer[0] = @intFromEnum(inst.opcode);
+    buffer[0] = @backingInt(inst.opcode);
     var pos: usize = 1;
 
     // Encode operands based on opcode
@@ -332,7 +332,7 @@ test "encode: buffer too small" {
 }
 
 test "decode: unexpected end of bytecode" {
-    var buffer: [1]u8 = .{@intFromEnum(Opcode.CHAR32)};
+    var buffer: [1]u8 = .{@backingInt(Opcode.CHAR32)};
 
     try std.testing.expectError(error.UnexpectedEndOfBytecode, decodeInstruction(&buffer, 0));
 }

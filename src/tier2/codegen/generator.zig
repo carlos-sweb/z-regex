@@ -64,7 +64,7 @@ const CharSetKey = struct {
 
 const CharSetKeyContext = struct {
     pub fn hash(_: CharSetKeyContext, key: CharSetKey) u64 {
-        var h = std.hash.Wyhash.init(@intFromEnum(key.hint));
+        var h = std.hash.Wyhash.init(@backingInt(key.hint));
         h.update(std.mem.sliceAsBytes(key.ranges));
         return h.final();
     }

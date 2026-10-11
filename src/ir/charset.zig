@@ -330,7 +330,7 @@ fn randomSet(rng: std.Random, ranges: *[8]Range) []Range {
 }
 
 fn toBits(ranges: []const Range) Bits {
-    var b = Bits.initEmpty();
+    var b = Bits.empty;
     for (ranges) |r| {
         var c = r.lo;
         while (c <= r.hi) : (c += 1) b.set(c);
